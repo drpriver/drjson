@@ -6,17 +6,17 @@
 #include "Allocators/arena_allocator.h"
 
 static void
-print_value(CJsonValue v, int indent, int pretty){
+print_value(DRJsonValue v, int indent, int pretty){
     switch(v.kind){
-        case CJSON_NUMBER:
+        case DRJSON_NUMBER:
             printf("%.12g", v.number); break;
-        case CJSON_INTEGER:
+        case DRJSON_INTEGER:
             printf("%lld", v.integer); break;
-        case CJSON_UINTEGER:
+        case DRJSON_UINTEGER:
             printf("%llu", v.uinteger); break;
-        case CJSON_STRING:
+        case DRJSON_STRING:
             printf("\"%.*s\"", (int)v.count, v.string); break;
-        case CJSON_ARRAY:{
+        case DRJSON_ARRAY:{
             putchar('[');
             if(pretty)
             if(v.count)
@@ -40,11 +40,11 @@ print_value(CJsonValue v, int indent, int pretty){
             }
             putchar(']');
         }break;
-        case CJSON_OBJECT:{
+        case DRJSON_OBJECT:{
             putchar('{');
             int newlined = 0;
             for(size_t i = 0; i < v.capacity; i++){
-                CJsonObjectPair* o = &v.object_items[i];
+                DRJsonObjectPair* o = &v.object_items[i];
                 if(!o->key) continue;
                 if(newlined)
                 putchar(',');
@@ -65,15 +65,15 @@ print_value(CJsonValue v, int indent, int pretty){
                 putchar(' ');
             putchar('}');
         }break;
-        case CJSON_NULL:
+        case DRJSON_NULL:
             printf("null"); break;
-        case CJSON_BOOL:
+        case DRJSON_BOOL:
             if(v.boolean)
                 printf("true");
             else
                 printf("false"); 
             break;
-        case CJSON_ERROR:
+        case DRJSON_ERROR:
             printf("Error"); break;
     }
 
@@ -104,7 +104,7 @@ int main(int argc, char** argv){
     ArenaAllocator aa = {0};
 
     for(int i = 0; i < 1; i++){
-    CJsonParseContext ctx = {
+    DRJsonParseContext ctx = {
         .begin = data,
         .cursor = data,
         .end = data + nbytes, 
@@ -115,32 +115,32 @@ int main(int argc, char** argv){
             .free = (void(*)(void*, const void*, size_t))ArenaAllocator_free,
             .free_all = (void(*)(void*))ArenaAllocator_free_all,
         },
-        // .allocator = cjson_stdc_allocator(),
+        // .allocator = drjson_stdc_allocator(),
     };
     long t0 = get_t();
-    CJsonValue v = cjson_parse(&ctx);
+    DRJsonValue v = drjson_parse(&ctx);
     long t1 = get_t();
     printf("%.3f us\n", (double)(t1-t0));
-    printf("Kind: %s\n", CJsonKindNames[v.kind]);
+    printf("Kind: %s\n", DRJsonKindNames[v.kind]);
     if(0)
     switch(v.kind){
-        case CJSON_ERROR:
+        case DRJSON_ERROR:
             printf("Error code: %d\n", v.error_code);
             printf("Error mess: %s\n", ctx.error_message);
             printf("Cursor is at: %c\n", *ctx.cursor);
             printf("Off: %ld\n", ctx.cursor - ctx.begin);
             break;
-        case CJSON_OBJECT:{
-            CJsonValue* it_ = cjson_object_get_item(v, "foo", 3, 0);
+        case DRJSON_OBJECT:{
+            DRJsonValue* it_ = drjson_object_get_item(v, "foo", 3, 0);
             if(!it_) break;
-            CJsonValue it = *it_;
+            DRJsonValue it = *it_;
 
-            printf("it.Kind: %s\n", CJsonKindNames[it.kind]);
+            printf("it.Kind: %s\n", DRJsonKindNames[it.kind]);
             switch(it.kind){
-                case CJSON_ERROR:
+                case DRJSON_ERROR:
                     printf("Error code: %d\n", it.error_code);
                     break;
-                case CJSON_NUMBER:
+                case DRJSON_NUMBER:
                     printf("v.foo = %f\n", it.number);
                     break;
                 default:
@@ -148,11 +148,11 @@ int main(int argc, char** argv){
                     break;
             }
         }break;
-        case CJSON_ARRAY:
-            cjson_array_push_item(&ctx.allocator, &v, cjson_make_int(42));
-            cjson_array_push_item(&ctx.allocator, &v, cjson_make_int(12));
-            cjson_array_push_item(&ctx.allocator, &v, cjson_make_int(8));
-            cjson_array_push_item(&ctx.allocator, &v, cjson_make_int(27));
+        case DRJSON_ARRAY:
+            drjson_array_push_item(&ctx.allocator, &v, drjson_make_int(42));
+            drjson_array_push_item(&ctx.allocator, &v, drjson_make_int(12));
+            drjson_array_push_item(&ctx.allocator, &v, drjson_make_int(8));
+            drjson_array_push_item(&ctx.allocator, &v, drjson_make_int(27));
             break;
         default:
             printf("Uh what the fuck\n");
@@ -164,7 +164,7 @@ int main(int argc, char** argv){
     if(argc > 2)
         query = argv[2];
     size_t qlen = strlen(query);
-    CJsonValue* it = cjson_query(v, query, qlen);
+    DRJsonValue* it = drjson_query(v, query, qlen);
     if(it){
         // printf("v%s: ", query);
         print_value(*it, 0, 1);
@@ -176,7 +176,7 @@ int main(int argc, char** argv){
     if(ctx.allocator.free_all)
         ctx.allocator.free_all(ctx.allocator.user_pointer);
     else
-        cjson_slow_recursive_free_all(&ctx.allocator, v);
+        drjson_slow_recursive_free_all(&ctx.allocator, v);
     }
 
     return 0;

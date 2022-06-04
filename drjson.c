@@ -87,10 +87,10 @@ wrapped_free(void*_Null_unspecified _unused, const void*_Nullable data, size_t s
     return;
 }
 
-CJSON_API
-CJsonAllocator
-cjson_stdc_allocator(void){
-    return (CJsonAllocator){
+DRJSON_API
+DRJsonAllocator
+drjson_stdc_allocator(void){
+    return (DRJsonAllocator){
         .alloc = wrapped_malloc,
         .realloc = wrapped_realloc,
         .free = wrapped_free,
@@ -102,7 +102,7 @@ force_inline
 static inline
 // __attribute__((__noinline__))
 void
-skip_whitespace(CJsonParseContext* ctx){
+skip_whitespace(DRJsonParseContext* ctx){
     const char* cursor = ctx->cursor;
     const char* end = ctx->end;
     for(;cursor != end; cursor++){
@@ -122,42 +122,42 @@ skip_whitespace(CJsonParseContext* ctx){
 force_inline
 static inline
 _Bool
-match(CJsonParseContext* ctx, char c){
+match(DRJsonParseContext* ctx, char c){
     if(*ctx->cursor != c)
         return 0;
     ctx->cursor++;
     return 1;
 }
 
-CJSON_API
+DRJSON_API
 void
-cjson_slow_recursive_free_all(const CJsonAllocator* allocator, CJsonValue value){
+drjson_slow_recursive_free_all(const DRJsonAllocator* allocator, DRJsonValue value){
     if(!value.allocated) return;
     switch(value.kind){
-    case CJSON_NUMBER:
-    case CJSON_INTEGER:
-    case CJSON_UINTEGER:
-    case CJSON_NULL:
-    case CJSON_BOOL:
-    case CJSON_ERROR:
+    case DRJSON_NUMBER:
+    case DRJSON_INTEGER:
+    case DRJSON_UINTEGER:
+    case DRJSON_NULL:
+    case DRJSON_BOOL:
+    case DRJSON_ERROR:
         // actually unreachable but whatever
         return;
-    case CJSON_STRING:
+    case DRJSON_STRING:
         allocator->free(allocator->user_pointer, value.string, value.count);
         return;
-    case CJSON_ARRAY:
+    case DRJSON_ARRAY:
         for(size_t i = 0; i < value.count; i++)
-            cjson_slow_recursive_free_all(allocator, value.array_items[i]);
+            drjson_slow_recursive_free_all(allocator, value.array_items[i]);
         if(value.array_items)
             allocator->free(allocator->user_pointer, value.array_items, value.capacity*sizeof(value.array_items[0]));
         return;
-    case CJSON_OBJECT:
+    case DRJSON_OBJECT:
         for(size_t i = 0; i < value.capacity; i++){
-            CJsonObjectPair* it = &value.object_items[i];
+            DRJsonObjectPair* it = &value.object_items[i];
             if(!it->key) continue;
             if(it->key_allocated)
                 allocator->free(allocator->user_pointer, it->key, it->key_length);
-            cjson_slow_recursive_free_all(allocator, it->value);
+            drjson_slow_recursive_free_all(allocator, it->value);
         }
         if(value.object_items)
             allocator->free(allocator->user_pointer, value.object_items, value.capacity*sizeof(value.object_items[0]));
@@ -166,11 +166,11 @@ cjson_slow_recursive_free_all(const CJsonAllocator* allocator, CJsonValue value)
 }
 
 static inline
-CJsonValue
-parse_string(CJsonParseContext* ctx){
+DRJsonValue
+parse_string(DRJsonParseContext* ctx){
     skip_whitespace(ctx);
     if(ctx->cursor == ctx->end)
-        return cjson_make_error(9000);
+        return drjson_make_error(9000);
     const char* string_start;
     const char* string_end;
     const char* cursor = ctx->cursor;
@@ -180,7 +180,7 @@ parse_string(CJsonParseContext* ctx){
         string_start = cursor;
         for(;;){
             const char* close = memchr(cursor, '"', end-cursor);
-            if(unlikely(!close)) return cjson_make_error(9999);
+            if(unlikely(!close)) return drjson_make_error(9999);
             cursor = close+1;
             int nbackslashes = 0;
             int negidx = -1;
@@ -191,7 +191,7 @@ parse_string(CJsonParseContext* ctx){
             break;
         }
         ctx->cursor = cursor;
-        return cjson_make_string_no_copy(string_start, string_end-string_start);
+        return drjson_make_string_no_copy(string_start, string_end-string_start);
     }
     else {
         string_start = cursor;
@@ -199,7 +199,7 @@ parse_string(CJsonParseContext* ctx){
         for(;cursor != end; cursor++){
             switch(*cursor){
                 default:
-                    if(cursor == string_start) return cjson_make_error(899);
+                    if(cursor == string_start) return drjson_make_error(899);
                     else goto after2;
                 case CASE_a_z:
                 case CASE_A_Z:
@@ -211,44 +211,44 @@ parse_string(CJsonParseContext* ctx){
         after2:
         ctx->cursor = cursor;
         string_end = cursor;
-        return cjson_make_string_no_copy(string_start, string_end-string_start);
+        return drjson_make_string_no_copy(string_start, string_end-string_start);
     }
 }
 
 
 static inline
-CJsonValue
-parse_object(CJsonParseContext* ctx){
+DRJsonValue
+parse_object(DRJsonParseContext* ctx){
     if(unlikely(!match(ctx, '{'))) {
         ctx->error_message = "Expected a '{' to begin an object";
-        return cjson_make_error(CJSON_ERROR_INVALID_START_CHAR);
+        return drjson_make_error(DRJSON_ERROR_INVALID_START_CHAR);
     }
-    CJsonValue result = {.kind=CJSON_OBJECT};
-    CJsonValue error = {0};
+    DRJsonValue result = {.kind=DRJSON_OBJECT};
+    DRJsonValue error = {0};
     ctx->depth++;
     skip_whitespace(ctx);
     while(!match(ctx, '}')){
         if(unlikely(ctx->cursor == ctx->end)){
-            error = cjson_make_error(9000);
+            error = drjson_make_error(9000);
             goto cleanup;
         }
         skip_whitespace(ctx);
-        CJsonValue key = parse_string(ctx);
-        if(unlikely(key.kind == CJSON_ERROR)){
+        DRJsonValue key = parse_string(ctx);
+        if(unlikely(key.kind == DRJSON_ERROR)){
             error = key;
             goto cleanup;
         }
-        CJsonValue item = cjson_parse(ctx);
-        if(unlikely(item.kind == CJSON_ERROR)){
+        DRJsonValue item = drjson_parse(ctx);
+        if(unlikely(item.kind == DRJSON_ERROR)){
             error = item;
             goto cleanup;
         }
-        int err = cjson_object_set_item_no_copy_key(&ctx->allocator, &result, key.string, key.count, 0, item);
+        int err = drjson_object_set_item_no_copy_key(&ctx->allocator, &result, key.string, key.count, 0, item);
         if(unlikely(err)){
             if(!ctx->allocator.free_all)
-                cjson_slow_recursive_free_all(&ctx->allocator, item);
+                drjson_slow_recursive_free_all(&ctx->allocator, item);
             ctx->error_message = "Failed to allocate space for an item while setting member of an object";
-            error = cjson_make_error(CJSON_ERROR_ALLOC_FAILURE);
+            error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE);
             goto cleanup;
         }
         skip_whitespace(ctx);
@@ -257,33 +257,33 @@ parse_object(CJsonParseContext* ctx){
     return result;
     cleanup:
     if(!ctx->allocator.free_all)
-        cjson_slow_recursive_free_all(&ctx->allocator, result);
+        drjson_slow_recursive_free_all(&ctx->allocator, result);
     return error;
 }
 
 static inline
-CJsonValue
-parse_array(CJsonParseContext* ctx){
-    if(!match(ctx, '[')) return cjson_make_error(CJSON_ERROR_INVALID_START_CHAR);
-    CJsonValue result = {.kind=CJSON_ARRAY};
-    CJsonValue error = {0};
+DRJsonValue
+parse_array(DRJsonParseContext* ctx){
+    if(!match(ctx, '[')) return drjson_make_error(DRJSON_ERROR_INVALID_START_CHAR);
+    DRJsonValue result = {.kind=DRJSON_ARRAY};
+    DRJsonValue error = {0};
     ctx->depth++;
     skip_whitespace(ctx);
     while(!match(ctx, ']')){
         if(unlikely(ctx->cursor == ctx->end)){
-            error = cjson_make_error(9000);
+            error = drjson_make_error(9000);
             goto cleanup;
         }
-        CJsonValue item = cjson_parse(ctx);
-        if(unlikely(item.kind == CJSON_ERROR)){
+        DRJsonValue item = drjson_parse(ctx);
+        if(unlikely(item.kind == DRJSON_ERROR)){
             error = item;
             goto cleanup;
         }
-        int err = cjson_array_push_item(&ctx->allocator, &result, item);
+        int err = drjson_array_push_item(&ctx->allocator, &result, item);
         if(unlikely(err)){
             if(!ctx->allocator.free_all)
-                cjson_slow_recursive_free_all(&ctx->allocator, item);
-            error = cjson_make_error(CJSON_ERROR_ALLOC_FAILURE);
+                drjson_slow_recursive_free_all(&ctx->allocator, item);
+            error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE);
             goto cleanup;
         }
         skip_whitespace(ctx);
@@ -292,40 +292,40 @@ parse_array(CJsonParseContext* ctx){
     return result;
     cleanup:
     if(!ctx->allocator.free_all)
-        cjson_slow_recursive_free_all(&ctx->allocator, result);
+        drjson_slow_recursive_free_all(&ctx->allocator, result);
     return error;
 }
 
 static inline
-CJsonValue
-parse_bool_null(CJsonParseContext* ctx){
+DRJsonValue
+parse_bool_null(DRJsonParseContext* ctx){
     skip_whitespace(ctx);
     ptrdiff_t length = ctx->end - ctx->cursor;
     if(length >= 4 && memcmp(ctx->cursor, "true", 4) == 0){
         ctx->cursor += 4;
-        return cjson_make_bool(1);
+        return drjson_make_bool(1);
     }
     if(length >= 5 && memcmp(ctx->cursor, "false", 5) == 0){
         ctx->cursor += 5;
-        return cjson_make_bool(0);
+        return drjson_make_bool(0);
     }
     if(length >= 3 && memcmp(ctx->cursor, "yes", 3) == 0){
         ctx->cursor += 3;
-        return cjson_make_bool(1);
+        return drjson_make_bool(1);
     }
     if(length >= 2 && memcmp(ctx->cursor, "no", 2) == 0){
         ctx->cursor += 2;
-        return cjson_make_bool(0);
+        return drjson_make_bool(0);
     }
     if(length >= 4 && memcmp(ctx->cursor, "null", 4) == 0){
         ctx->cursor += 4;
-        return cjson_make_null();
+        return drjson_make_null();
     }
-    return cjson_make_error(CJSON_ERROR_INVALID_START_CHAR);
+    return drjson_make_error(DRJSON_ERROR_INVALID_START_CHAR);
 }
 static inline
-CJsonValue
-parse_number(CJsonParseContext* ctx){
+DRJsonValue
+parse_number(DRJsonParseContext* ctx){
     const char* num_begin = ctx->cursor;
     const char* cursor = ctx->cursor;
     const char* end = ctx->end;
@@ -352,22 +352,22 @@ parse_number(CJsonParseContext* ctx){
     }
     after:;
     ptrdiff_t length = cursor - num_begin;
-    if(!length) return cjson_make_error(876);
+    if(!length) return drjson_make_error(876);
     ctx->cursor = cursor;
     if(has_exponent || has_decimal)
-        return cjson_make_number(strtod(num_begin, NULL));
+        return drjson_make_number(strtod(num_begin, NULL));
     else if(has_minus)
-        return cjson_make_int(strtoll(num_begin, NULL, 10));
+        return drjson_make_int(strtoll(num_begin, NULL, 10));
     else
-        return cjson_make_uint(strtoull(num_begin, NULL, 10));
+        return drjson_make_uint(strtoull(num_begin, NULL, 10));
 }
 
-CJSON_API
-CJsonValue
-cjson_parse(CJsonParseContext* ctx){
+DRJSON_API
+DRJsonValue
+drjson_parse(DRJsonParseContext* ctx){
     ctx->depth++;
     skip_whitespace(ctx);
-    CJsonValue result;
+    DRJsonValue result;
     switch(ctx->cursor[0]){
         case '{':
             result = parse_object(ctx);
@@ -391,17 +391,17 @@ cjson_parse(CJsonParseContext* ctx){
             break;
         default:
             ctx->error_message = "Character is not a valid starting character for json.";
-            result = cjson_make_error(CJSON_ERROR_INVALID_START_CHAR);
+            result = drjson_make_error(DRJSON_ERROR_INVALID_START_CHAR);
             break;
     }
     ctx->depth--;
     return result;
 }
 
-CJSON_API 
+DRJSON_API 
 int // 0 on success
-cjson_array_push_item(const CJsonAllocator* allocator, CJsonValue* array, CJsonValue item){
-    if(array->kind != CJSON_ARRAY) return 1;
+drjson_array_push_item(const DRJsonAllocator* allocator, DRJsonValue* array, DRJsonValue item){
+    if(array->kind != DRJSON_ARRAY) return 1;
     if(array->capacity < array->count+1){
         if(array->capacity && !array->allocated){ // We don't own this buffer
             return 1;
@@ -410,7 +410,7 @@ cjson_array_push_item(const CJsonAllocator* allocator, CJsonValue* array, CJsonV
         enum {ARRAY_MAX = 0x1fffffff};
         size_t new_cap = old_cap?old_cap*2:4;
         if(new_cap > ARRAY_MAX) return 1;
-        CJsonValue* new_items = array->array_items?
+        DRJsonValue* new_items = array->array_items?
             allocator->realloc(allocator->user_pointer, array->array_items, old_cap*sizeof(*new_items), new_cap*sizeof(*new_items))
             : allocator->alloc(allocator->user_pointer, new_cap*sizeof(*new_items));
         if(!new_items) return 1;
@@ -422,10 +422,10 @@ cjson_array_push_item(const CJsonAllocator* allocator, CJsonValue* array, CJsonV
     return 0;
 }
 
-CJSON_API
+DRJSON_API
 force_inline
 uint32_t
-cjson_object_key_hash(const char* key, size_t keylen){
+drjson_object_key_hash(const char* key, size_t keylen){
     return hash_align1(key, keylen);
 }
 
@@ -433,16 +433,16 @@ cjson_object_key_hash(const char* key, size_t keylen){
 static inline
 force_inline
 int 
-cjson_object_set_item(const CJsonAllocator* allocator, CJsonValue* object, const char* key, size_t keylen, uint32_t hash, CJsonValue item, _Bool copy){
-    if(object->kind != CJSON_OBJECT) return 1;
+drjson_object_set_item(const DRJsonAllocator* allocator, DRJsonValue* object, const char* key, size_t keylen, uint32_t hash, DRJsonValue item, _Bool copy){
+    if(object->kind != DRJSON_OBJECT) return 1;
     enum {KEY_MAX = 0x7fffffff};
     enum {OBJECT_MAX = 0x1fffffff};
     if(keylen > KEY_MAX) return 1;
-    if(!hash) hash = cjson_object_key_hash(key, keylen);
+    if(!hash) hash = drjson_object_key_hash(key, keylen);
     if(unlikely(object->count *2 >= object->capacity)){
         if(!object->capacity){
             size_t new_cap = 4;
-            CJsonObjectPair* p = allocator->alloc(allocator->user_pointer, new_cap*sizeof(*p));
+            DRJsonObjectPair* p = allocator->alloc(allocator->user_pointer, new_cap*sizeof(*p));
             if(!p) return 1;
             memset(p, 0, new_cap*sizeof(*p));
             object->object_items = p;
@@ -454,10 +454,10 @@ cjson_object_set_item(const CJsonAllocator* allocator, CJsonValue* object, const
             size_t old_cap = object->capacity;
             size_t new_cap = old_cap * 2;
             if(new_cap > OBJECT_MAX) return 1;
-            CJsonObjectPair* p = allocator->alloc(allocator->user_pointer, new_cap*sizeof(*p));
+            DRJsonObjectPair* p = allocator->alloc(allocator->user_pointer, new_cap*sizeof(*p));
             memset(p, 0, new_cap*sizeof(*p));
             for(size_t i = 0; i < old_cap; i++){
-                CJsonObjectPair o = object->object_items[i];
+                DRJsonObjectPair o = object->object_items[i];
                 if(!o.key) continue;
                 size_t idx = o.key_hash % new_cap;
                 while(p[idx].key){
@@ -474,7 +474,7 @@ cjson_object_set_item(const CJsonAllocator* allocator, CJsonValue* object, const
     size_t cap = object->capacity;
     size_t idx = hash % cap;
     for(;;){
-        CJsonObjectPair* o = &object->object_items[idx];
+        DRJsonObjectPair* o = &object->object_items[idx];
         if(!o->key){
             if(copy){
                 char* newkey = allocator->alloc(allocator->user_pointer, keylen);
@@ -482,7 +482,7 @@ cjson_object_set_item(const CJsonAllocator* allocator, CJsonValue* object, const
                 memcpy(newkey, key, keylen);
                 key = newkey;
             }
-            *o = (CJsonObjectPair){.key=key, .key_length=keylen, .key_hash=hash, .value=item, .key_allocated=copy};
+            *o = (DRJsonObjectPair){.key=key, .key_length=keylen, .key_hash=hash, .value=item, .key_allocated=copy};
             object->count++;
             return 0;
         }
@@ -495,26 +495,26 @@ cjson_object_set_item(const CJsonAllocator* allocator, CJsonValue* object, const
             idx = 0;
     }
 }
-CJSON_API 
+DRJSON_API 
 int // 0 on success
-cjson_object_set_item_no_copy_key(const CJsonAllocator* allocator, CJsonValue* object, const char* key, size_t keylen, uint32_t hash, CJsonValue item){
-    return cjson_object_set_item(allocator, object, key, keylen, hash, item, 0);
+drjson_object_set_item_no_copy_key(const DRJsonAllocator* allocator, DRJsonValue* object, const char* key, size_t keylen, uint32_t hash, DRJsonValue item){
+    return drjson_object_set_item(allocator, object, key, keylen, hash, item, 0);
 }
-CJSON_API 
+DRJSON_API 
 int // 0 on success
-cjson_object_set_item_copy_key(const CJsonAllocator* allocator, CJsonValue* object, const char* key, size_t keylen, uint32_t hash, CJsonValue item){
-    return cjson_object_set_item(allocator, object, key, keylen, hash, item, 1);
+drjson_object_set_item_copy_key(const DRJsonAllocator* allocator, DRJsonValue* object, const char* key, size_t keylen, uint32_t hash, DRJsonValue item){
+    return drjson_object_set_item(allocator, object, key, keylen, hash, item, 1);
 }
-CJSON_API 
-CJsonValue*_Nullable
-cjson_object_get_item(CJsonValue object, const char* key, size_t keylen, uint32_t hash){
-    if(!hash) hash = cjson_object_key_hash(key, keylen);
-    if(object.kind != CJSON_OBJECT) return NULL;
+DRJSON_API 
+DRJsonValue*_Nullable
+drjson_object_get_item(DRJsonValue object, const char* key, size_t keylen, uint32_t hash){
+    if(!hash) hash = drjson_object_key_hash(key, keylen);
+    if(object.kind != DRJSON_OBJECT) return NULL;
     if(!object.capacity)
         return NULL;
     size_t idx = hash % object.capacity;
     for(;;){
-        CJsonObjectPair* o = &object.object_items[idx];
+        DRJsonObjectPair* o = &object.object_items[idx];
         if(!o->key){
             return NULL;
         }
@@ -527,9 +527,9 @@ cjson_object_get_item(CJsonValue object, const char* key, size_t keylen, uint32_
     }
 }
 
-CJSON_API
-CJsonValue*_Nullable
-cjson_query(CJsonValue v, const char* query, size_t length){
+DRJSON_API
+DRJsonValue*_Nullable
+drjson_query(DRJsonValue v, const char* query, size_t length){
     enum {
         GETITEM,
         SUBSCRIPT,
@@ -538,7 +538,7 @@ cjson_query(CJsonValue v, const char* query, size_t length){
     int mode = GETITEM;
     size_t begin = 0;
     size_t i = 0;
-    CJsonValue* o = &v;
+    DRJsonValue* o = &v;
     for(;i != length; i++){
         char c = query[i];
         switch(c){
@@ -546,7 +546,7 @@ cjson_query(CJsonValue v, const char* query, size_t length){
                 if(mode == QUOTED_GETITEM) continue;
                 if(i != begin){
                     if(mode != GETITEM) return NULL;
-                    o = cjson_object_get_item(*o, query+begin, i-begin, 0);
+                    o = drjson_object_get_item(*o, query+begin, i-begin, 0);
                     if(!o) {
                         return NULL;
                     }
@@ -571,7 +571,7 @@ cjson_query(CJsonValue v, const char* query, size_t length){
                     nbackslash++;
                 }
                 if(nbackslash & 1) continue;
-                o = cjson_object_get_item(*o, query+begin, i-begin, 0);
+                o = drjson_object_get_item(*o, query+begin, i-begin, 0);
                 if(!o) {
                     fprintf(stderr, "%d\n", __LINE__);
                     return NULL;
@@ -587,7 +587,7 @@ cjson_query(CJsonValue v, const char* query, size_t length){
                 }
                 // lazy
                 int index = atoi(query+begin);
-                if(o->kind != CJSON_ARRAY) {
+                if(o->kind != DRJSON_ARRAY) {
                     fprintf(stderr, "%d\n", __LINE__);
                     return NULL;
                 }
@@ -605,7 +605,7 @@ cjson_query(CJsonValue v, const char* query, size_t length){
                         fprintf(stderr, "%d\n", __LINE__);
                         return NULL;
                     }
-                    o = cjson_object_get_item(*o, query+begin, i-begin, 0);
+                    o = drjson_object_get_item(*o, query+begin, i-begin, 0);
                     if(!o) {
                         fprintf(stderr, "%d\n", __LINE__);
                         return NULL;
@@ -623,7 +623,7 @@ cjson_query(CJsonValue v, const char* query, size_t length){
             fprintf(stderr, "%d\n", __LINE__);
             return NULL;
         }
-        o = cjson_object_get_item(*o, query+begin, i-begin, 0);
+        o = drjson_object_get_item(*o, query+begin, i-begin, 0);
         if(!o) {
             fprintf(stderr, "%d\n", __LINE__);
             return NULL;
