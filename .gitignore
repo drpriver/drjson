@@ -1,3 +1,6 @@
 Bin
 Deps
 *.json
+builddir
+cbuild
+*.html

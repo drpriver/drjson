@@ -1,83 +1,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
 #include "measure_time.h"
 #include "drjson.h"
 #include "Allocators/arena_allocator.h"
 
-static void
-print_value(DRJsonValue v, int indent, int pretty){
-    switch(v.kind){
-        case DRJSON_NUMBER:
-            printf("%.12g", v.number); break;
-        case DRJSON_INTEGER:
-            printf("%lld", v.integer); break;
-        case DRJSON_UINTEGER:
-            printf("%llu", v.uinteger); break;
-        case DRJSON_STRING:
-            printf("\"%.*s\"", (int)v.count, v.string); break;
-        case DRJSON_ARRAY:{
-            putchar('[');
-            if(pretty)
-            if(v.count)
-                putchar('\n');
-            int newlined = 0;
-            for(size_t i = 0; i < v.count; i++){
-                if(pretty)
-                for(int i = 0; i < indent+2; i++)
-                    putchar(' ');
-                print_value(v.array_items[i], indent+2, pretty);
-                if(i != v.count-1)
-                    putchar(',');
-                if(pretty)
-                    putchar('\n');
-                newlined = 1;
-            }
-            if(pretty)
-            if(v.count){
-                for(int i = 0; i < indent; i++)
-                    putchar(' ');
-            }
-            putchar(']');
-        }break;
-        case DRJSON_OBJECT:{
-            putchar('{');
-            int newlined = 0;
-            for(size_t i = 0; i < v.capacity; i++){
-                DRJsonObjectPair* o = &v.object_items[i];
-                if(!o->key) continue;
-                if(newlined)
-                putchar(',');
-                if(pretty)
-                putchar('\n');
-                newlined = 1;
-                if(pretty)
-                for(int ind = 0; ind < indent+2; ind++)
-                    putchar(' ');
-                printf("\"%.*s\":", (int)o->key_length, o->key);
-                print_value(o->value, indent+2, pretty);
-
-            }
-            if(pretty)
-            if(newlined) putchar('\n');
-            if(pretty)
-            for(int i = 0; i < indent; i++)
-                putchar(' ');
-            putchar('}');
-        }break;
-        case DRJSON_NULL:
-            printf("null"); break;
-        case DRJSON_BOOL:
-            if(v.boolean)
-                printf("true");
-            else
-                printf("false"); 
-            break;
-        case DRJSON_ERROR:
-            printf("Error"); break;
-    }
-
-}
 int main(int argc, char** argv){
     const char* data = "{\n"
         "foo: 123.4e12\n"
@@ -103,8 +31,7 @@ int main(int argc, char** argv){
 
     ArenaAllocator aa = {0};
 
-    for(int i = 0; i < 1; i++){
-    DRJsonParseContext ctx = {
+    DrJsonParseContext ctx = {
         .begin = data,
         .cursor = data,
         .end = data + nbytes, 
@@ -118,69 +45,77 @@ int main(int argc, char** argv){
         // .allocator = drjson_stdc_allocator(),
     };
     long t0 = get_t();
-    DRJsonValue v = drjson_parse(&ctx);
-    long t1 = get_t();
-    printf("%.3f us\n", (double)(t1-t0));
-    printf("Kind: %s\n", DRJsonKindNames[v.kind]);
-    if(0)
-    switch(v.kind){
-        case DRJSON_ERROR:
-            printf("Error code: %d\n", v.error_code);
-            printf("Error mess: %s\n", ctx.error_message);
-            printf("Cursor is at: %c\n", *ctx.cursor);
-            printf("Off: %ld\n", ctx.cursor - ctx.begin);
-            break;
-        case DRJSON_OBJECT:{
-            DRJsonValue* it_ = drjson_object_get_item(v, "foo", 3, 0);
-            if(!it_) break;
-            DRJsonValue it = *it_;
-
-            printf("it.Kind: %s\n", DRJsonKindNames[it.kind]);
-            switch(it.kind){
-                case DRJSON_ERROR:
-                    printf("Error code: %d\n", it.error_code);
-                    break;
-                case DRJSON_NUMBER:
-                    printf("v.foo = %f\n", it.number);
-                    break;
-                default:
-                    printf("wtf\n");
-                    break;
-            }
-        }break;
-        case DRJSON_ARRAY:
-            drjson_array_push_item(&ctx.allocator, &v, drjson_make_int(42));
-            drjson_array_push_item(&ctx.allocator, &v, drjson_make_int(12));
-            drjson_array_push_item(&ctx.allocator, &v, drjson_make_int(8));
-            drjson_array_push_item(&ctx.allocator, &v, drjson_make_int(27));
-            break;
-        default:
-            printf("Uh what the fuck\n");
-            break;
+    DrJsonValue v = drjson_parse(&ctx);
+    if(v.kind == DRJSON_ERROR){
+        fprintf(stderr, "%s (%d): %s\n", drjson_get_error_name(v), drjson_get_error_code(v), v.err_mess);
+        return 1;
     }
-    // print_value(v, 0, 0);
-    // putchar('\n');
-    const char* query = "[3]";
+    long t1 = get_t();
+    // fprintf(stderr, "%.3f us\n", (double)(t1-t0));
+    if(argc <= 2){
+        drjson_print_value(stdout, v, 0, DRJSON_PRETTY_PRINT);
+        putchar('\n');
+        return 0;
+    }
+    const char* query = "";
     if(argc > 2)
         query = argv[2];
     size_t qlen = strlen(query);
-    DRJsonValue* it = drjson_query(v, query, qlen);
-    if(it){
-        // printf("v%s: ", query);
-        print_value(*it, 0, 1);
-        putchar('\n');
-    }
-    else {
-        printf("query went wrong...\n");
+    if(qlen){
+        if(argc > 3){
+            DrJsonValue it = drjson_checked_query(&v, atoi(argv[3]), query, qlen);
+            drjson_print_value(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            putchar('\n');
+            return 0;
+        }
+        DrJsonValue it = drjson_query(&v, query, qlen);
+        if(it.kind != DRJSON_ERROR){
+            // printf("v%s: ", query);
+            drjson_print_value(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            putchar('\n');
+        }
+        else {
+            it = drjson_multi_query(&ctx.allocator, &v, query, qlen);
+            drjson_print_value(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            putchar('\n');
+        }
     }
     if(ctx.allocator.free_all)
         ctx.allocator.free_all(ctx.allocator.user_pointer);
     else
         drjson_slow_recursive_free_all(&ctx.allocator, v);
-    }
 
     return 0;
 }
 
-#include "drjson.c"
+// this is unused, it's just to see if the README compiles
+int 
+write_foo_bar_baz_to_fp(const char* json, size_t length, FILE* fp){
+  DrJsonParseContext ctx = {
+    .begin=json, 
+    .cursor=json, 
+    .end=json+length, 
+    .allocator=drjson_stdc_allocator(),
+  };
+  DrJsonValue v = drjson_parse(&ctx);
+  if(v.kind == DRJSON_ERROR){
+    // handle error
+    return 1;
+  }
+  DrJsonValue o = drjson_query(&v, "foo.bar.baz", sizeof("foo.bar.baz")-1);
+  if(o.kind != DRJSON_BOXED){
+    // handle error
+    drjson_slow_recursive_free_all(&ctx.allocator, v);
+    return 2;
+  }
+  int err = drjson_print_value(fp, *o.boxed, 0, DRJSON_PRETTY_PRINT);
+  if(err){
+    // handle error
+     drjson_slow_recursive_free_all(&ctx.allocator, v);
+     return 3;
+  }
+  drjson_slow_recursive_free_all(&ctx.allocator, v);
+  return 0;
+}
+
 #include "Allocators/allocator.c"
