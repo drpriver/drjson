@@ -965,6 +965,7 @@ drjson_print_value(FILE* fp, DrJsonValue v, int indent, unsigned flags){
     int pretty = flags & DRJSON_PRETTY_PRINT;
     switch(v.kind){
         case DRJSON_NUMBER:
+            // This sucks. We need a better float formatting lib
             result = fprintf(fp, "%.12g", v.number); break;
         case DRJSON_INTEGER:
             result = fprintf(fp, "%lld", v.integer); break;

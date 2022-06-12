@@ -4,7 +4,7 @@
 #include <assert.h>
 #include "measure_time.h"
 #include "drjson.h"
-#include "Allocators/arena_allocator.h"
+#include "arena_allocator.h"
 
 int main(int argc, char** argv){
     const char* data = "{\n"
@@ -117,5 +117,3 @@ write_foo_bar_baz_to_fp(const char* json, size_t length, FILE* fp){
   drjson_slow_recursive_free_all(&ctx.allocator, v);
   return 0;
 }
-
-#include "Allocators/allocator.c"

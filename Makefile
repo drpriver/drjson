@@ -1,7 +1,7 @@
 Bin: ; mkdir -p $@
 Deps: ; mkdir -p $@
 
-DRJSONVERSION=0.1.0
+DRJSONVERSION=1.0.0
 
 DEPFILES:= $(wildcard Deps/*.dep)
 include $(DEPFILES)
@@ -14,7 +14,7 @@ Bin/libdrjson.$(DRJSONVERSION).dylib: drjson.c | Bin Deps
 
 Bin/drjson.o: drjson.c | Bin Deps
 	$(CC) -c $< -o $@ -MT $@ -MD -MP -MF Deps/drjson.dep  -O3
-Bin/demo: demo.c Bin/libdrjson.$(DRJSONVERSION).dylib
-	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep -O1 -g Bin/libdrjson.$(DRJSONVERSION).dylib -fvisibility=hidden
+Bin/demo: Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).dylib
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep -O1 -g Bin/libdrjson.$(DRJSONVERSION).dylib -fvisibility=hidden -I.
 
 .DEFAULT_GOAL:=Bin/demo

@@ -10,7 +10,6 @@
 // memcpy, memset
 #include <string.h>
 #include <assert.h>
-#include "allocator.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -43,13 +42,6 @@ struct ArenaAllocator {
     struct Arena*_Nullable arena;
     struct BigAllocation*_Nullable big_allocations;
 };
-
-static inline
-force_inline
-Allocator
-allocator_from_arena(ArenaAllocator* aa){
-    return (Allocator){.type=ALLOCATOR_ARENA, ._data=aa};
-}
 
 //
 // TODO: Currently we back the arena allocator with malloc, but we could just
