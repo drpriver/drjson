@@ -9,7 +9,7 @@ include $(DEPFILES)
 Bin/libdrjson.a: Bin/drjson.o | Bin
 	ar crs $@ $^
 
-Bin/libdrjson.$(DRJSONVERSION).dylib: drjson.c | Bin Deps
+Bin/libdrjson.$(DRJSONVERSION).dylib: DrJson/drjson.c | Bin Deps
 	$(CC) $< -O1 -o $@ -MT $@ -MD -MP -MF Deps/drjson.dylib.dep  -Wl,-headerpad_max_install_names -Wl,-undefined,error -shared -install_name @executable_path/libdrjson.$(DRJSONVERSION).dylib -compatibility_version $(DRJSONVERSION) -current_version $(DRJSONVERSION) -g
 
 Bin/drjson.o: drjson.c | Bin Deps

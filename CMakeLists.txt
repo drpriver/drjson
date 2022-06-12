@@ -13,17 +13,17 @@ endif()
 
 add_library(drjson-dylib
     SHARED
-	drjson.c
+	DrJson/drjson.c
 )
 set_target_properties(drjson-dylib
     PROPERTIES OUTPUT_NAME drjson
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION}
-	PUBLIC_HEADER "drjson.h"
+	PUBLIC_HEADER "DrJson/drjson.h"
 )
 add_library(drjson-lib
     STATIC
-	drjson.c
+	DrJson/drjson.c
 )
 if(WIN32)
 set_target_properties(drjson-lib
