@@ -10,11 +10,11 @@ endif
 cc = meson.get_compiler('c')
 m_dep = cc.find_library('m', required: false)
 
-install_headers('drjson.h', subdir:'DrJson')
+install_headers('DrJson/drjson.h', subdir:'DrJson')
 
 drjson_dylib = both_libraries(
   'drjson',
-  'drjson.c',
+  'DrJson/drjson.c',
   install:true,
   dependencies:[m_dep],
   version: meson.project_version(),
