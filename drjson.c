@@ -79,7 +79,7 @@
 
 MALLOC_FUNC
 ALLOCATOR_SIZE(2)
-static 
+static
 void*
 wrapped_malloc(void*_Null_unspecified _unused, size_t size){
     (void)_unused;
@@ -129,8 +129,8 @@ skip_whitespace(DrJsonParseContext* ctx){
     strip:
     for(;cursor != end; cursor++){
         switch(*cursor){
-            case ' ': case '\r': 
-            case '\t': case '\n': 
+            case ' ': case '\r':
+            case '\t': case '\n':
             case ',': case ':':
                 continue;
             case '/':
@@ -438,7 +438,7 @@ parse_number(DrJsonParseContext* ctx){
 }
 
 static inline force_inline
-unsigned 
+unsigned
 hexchar_to_value(char c){
     unsigned value = (uint8_t)c;
     value |= 0x20u;
@@ -565,14 +565,14 @@ drjson_parse(DrJsonParseContext* ctx){
             result = parse_color(ctx);
             break;
         case '+':
-        case '.': case '-': 
-        case '1': case '2': case '3': 
+        case '.': case '-':
+        case '1': case '2': case '3':
         case '4': case '5': case '6': case '7': case '8': case '9':
             result = parse_number(ctx);
             if(result.kind == DRJSON_ERROR)
                 result = parse_string(ctx);
             break;
-        case '0': 
+        case '0':
             if(ctx->cursor + 1 != ctx->end){
                 if((ctx->cursor[1] | 0x20) == 'x'){
                     ctx->cursor += 2;
@@ -630,7 +630,7 @@ drjson_parse_braceless_object(DrJsonParseContext* ctx){
     return error;
 }
 
-DRJSON_API 
+DRJSON_API
 int // 0 on success
 drjson_array_push_item(const DrJsonAllocator* allocator, DrJsonValue* array, DrJsonValue item){
     if(array->kind != DRJSON_ARRAY) return 1;
@@ -664,7 +664,7 @@ drjson_object_key_hash(const char* key, size_t keylen){
 
 static inline
 force_inline
-int 
+int
 drjson_object_set_item(const DrJsonAllocator* allocator, DrJsonValue* object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item, _Bool copy){
     if(object->kind != DRJSON_OBJECT) return 1;
     enum {KEY_MAX = 0x7fffffff};
@@ -727,17 +727,17 @@ drjson_object_set_item(const DrJsonAllocator* allocator, DrJsonValue* object, co
             idx = 0;
     }
 }
-DRJSON_API 
+DRJSON_API
 int // 0 on success
 drjson_object_set_item_no_copy_key(const DrJsonAllocator* allocator, DrJsonValue* object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item){
     return drjson_object_set_item(allocator, object, key, keylen, hash, item, 0);
 }
-DRJSON_API 
+DRJSON_API
 int // 0 on success
 drjson_object_set_item_copy_key(const DrJsonAllocator* allocator, DrJsonValue* object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item){
     return drjson_object_set_item(allocator, object, key, keylen, hash, item, 1);
 }
-DRJSON_API 
+DRJSON_API
 DrJsonValue*_Nullable
 drjson_object_get_item(DrJsonValue object, const char* key, size_t keylen, uint32_t hash){
     if(!hash) hash = drjson_object_key_hash(key, keylen);
@@ -1024,7 +1024,7 @@ drjson_print_value(FILE* fp, DrJsonValue v, int indent, unsigned flags){
             if(v.boolean)
                 result = fprintf(fp, "true");
             else
-                result = fprintf(fp, "false"); 
+                result = fprintf(fp, "false");
             break;
         case DRJSON_CAPSULE:
             result = fprintf(fp, "(capsule) %p", v.capsule);
