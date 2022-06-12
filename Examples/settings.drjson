@@ -1,0 +1,35 @@
+{
+font          Sans
+text-size     18
+console-color #d2d2a0
+misc-color    #d2d2a0
+bg-color      #272823
+text-color    #d2d2a0
+button-color  #474843
+graphic-color #d2d2a0
+colors {
+  scratched    #52412a
+  wounded      #c16b03
+  badly-hurt   #ff0000
+  unhurt       #6400ff
+  asleep       #008080
+  cash         #af73f9
+  damage       #ff0000
+  danger       #ff0000
+  dead         #ff0000
+  dice         #aaaaaa
+  direction    #8bff00
+  failure      #ff0000
+  fixture      #00008b
+  hidden       #e09678
+  leaver       #ffa500
+  monster      #ff0000
+  numeric      #9400d3
+  party-member #800090
+  status       #aaaaaa
+  unstyled     #aaaaaa
+  underline    #aaaaaa
+  text         #d2d2a0
+}
+damage [d6 fire]
+}
