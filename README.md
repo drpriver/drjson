@@ -43,5 +43,8 @@ write_foo_bar_baz_to_fp(const char* json, size_t length, FILE* fp){
 }
 ```
 
-It is recommended instead to provide your own allocator that provides an efficient `free_all` function instead of having to deal with the `drjson_slow_rescurive_free_all`.
+It is recommended instead to provide your own allocator that provides an
+efficient `free_all` function instead of having to deal with the
+`drjson_slow_rescurive_free_all`.
+See [`Demo/arena_allocator.h`](Demo/arena_allocator.h) for an example.
 
