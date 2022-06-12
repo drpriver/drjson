@@ -13,9 +13,9 @@ m_dep = cc.find_library('m', required: false)
 install_headers('drjson.h', subdir:'DrJson')
 
 drjson_dylib = both_libraries(
-  'drjson', 
-  'drjson.c', 
-  install:true, 
+  'drjson',
+  'drjson.c',
+  install:true,
   dependencies:[m_dep],
   version: meson.project_version(),
   soversion: meson.project_version(),

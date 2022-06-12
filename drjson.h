@@ -55,13 +55,13 @@ enum DrJsonKind {
 
 static const char*_Nonnull const DrJsonKindNames[] = {
     [DRJSON_NUMBER] = "number",
-    [DRJSON_INTEGER] = "integer", 
-    [DRJSON_UINTEGER] = "uinteger", 
+    [DRJSON_INTEGER] = "integer",
+    [DRJSON_UINTEGER] = "uinteger",
     [DRJSON_STRING] = "string",
     [DRJSON_ARRAY] = "array",
     [DRJSON_OBJECT] = "object",
-    [DRJSON_NULL] = "null", 
-    [DRJSON_BOOL] = "bool", 
+    [DRJSON_NULL] = "null",
+    [DRJSON_BOOL] = "bool",
     [DRJSON_CAPSULE] = "capsule",
     [DRJSON_BOXED] = "boxed",
     [DRJSON_ERROR] = "error",
@@ -123,12 +123,11 @@ drjson_get_error_code(DrJsonValue v){
     return v.capacity;
 }
 static inline
-const char* 
+const char*
 drjson_get_error_name(DrJsonValue v){
     return DrJsonErrorNames[drjson_get_error_code(v)];
 }
 
-typedef struct DrJsonObjectPair DrJsonObjectPair;
 struct DrJsonObjectPair {
     uint32_t key_length: 31;
     uint32_t key_allocated: 1;
@@ -148,7 +147,7 @@ struct DrJsonAllocator {
     // This function can be missing. If it is implemented and an error occurs
     // during parsing, it will be called to quickly free what has been
     // allocated.
-    void (*_Nullable free_all)(void*_Null_unspecified user_pointer); 
+    void (*_Nullable free_all)(void*_Null_unspecified user_pointer);
 };
 
 
@@ -215,7 +214,7 @@ static inline
 DrJsonValue
 drjson_make_object(const DrJsonAllocator* allocator, size_t initial_length){
     DrJsonObjectPair* items = allocator->alloc(allocator->user_pointer, initial_length*sizeof(*items));
-    if(!items) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, 
+    if(!items) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE,
         "Failed to allocate memory for object");
     return (DrJsonValue){.kind=DRJSON_OBJECT, .count=0, .capacity=initial_length, .object_items=items, .allocated=1};
 }
@@ -258,25 +257,25 @@ DRJSON_API
 DrJsonValue
 drjson_parse_braceless_object(DrJsonParseContext* ctx);
 
-DRJSON_API 
+DRJSON_API
 uint32_t
 drjson_object_key_hash( const char* key, size_t keylen);
 
-DRJSON_API 
+DRJSON_API
 DrJsonValue* _Nullable
 drjson_object_get_item(DrJsonValue object, const char* key, size_t keylen, uint32_t hash); // hash can be 0, which means "calculate for me"
 
-DRJSON_API 
+DRJSON_API
 int // 0 on success
 drjson_object_set_item_copy_key(const DrJsonAllocator* allocator, DrJsonValue* object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item);
 //
 // hash can be 0 - means calculate it for me
 //
-DRJSON_API 
+DRJSON_API
 int // 0 on success
 drjson_object_set_item_no_copy_key(const DrJsonAllocator* allocator, DrJsonValue* object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item);
 
-DRJSON_API 
+DRJSON_API
 int // 0 on success
 drjson_array_push_item(const DrJsonAllocator* allocator, DrJsonValue* array, DrJsonValue item);
 
