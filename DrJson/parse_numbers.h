@@ -1,17 +1,18 @@
-//
-// Copyright © 2021-2022, David Priver
-//
 #ifndef PARSE_NUMBERS_H
 #define PARSE_NUMBERS_H
 // size_t
 #include <stddef.h>
-// bool
-#include <stdbool.h>
-// integer types
+// integer types, INT64_MAX, etc.
 #include <stdint.h>
-// INT64_MAX, etc.
-#include <limits.h>
-#include <string.h>
+
+// Allow suppression of float parsing.
+#ifndef PARSE_NUMBER_PARSE_FLOATS
+#define PARSE_NUMBER_PARSE_FLOATS 1
+#endif
+
+#if PARSE_NUMBER_PARSE_FLOATS
+#include "fast_float.h"
+#endif
 
 //
 // Functions for parsing strings into integers.
@@ -25,48 +26,9 @@
 // Defects:
 //    * Currently only builds with gnuc (gcc, clang) due to use of overflow
 //      intrinsics.
-//
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
-#endif
-
-#if defined(_MSC_VER) && !defined(__clang__)
-// Shim the overflow intrinsics for MSVC
-// These are slow as they use division.
-static inline
-int
-__builtin_mul_overflow_32(uint32_t a, uint32_t b, uint32_t* dst){
-    uint64_t res = (uint64_t)a * (uint64_t)b;
-    if(res > (uint64_t)UINT32_MAX) return 1;
-    *dst = res;
-    return 0;
-}
-static inline
-int
-__builtin_mul_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
-    if(a && b > UINT64_MAX / a) return 1;
-    *dst = a * b;
-    return 0;
-}
-#define __builtin_mul_overflow(a, b, dst) _Generic(a, \
-    uint32_t: __builtin_mul_overflow_32, \
-    uint64_t: __builtin_mul_overflow_64)(a, b, dst)
-
-static inline
-int
-__builtin_add_overflow_32(uint32_t a, uint32_t b, uint32_t* dst){
-    return _addcarry_u32(0, a, b, dst);
-}
-static inline
-int
-__builtin_add_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
-    return _addcarry_u64(0, a, b, dst);
-}
-#define __builtin_add_overflow(a, b, dst) _Generic(a, \
-    uint32_t: __builtin_add_overflow_32, \
-    uint64_t: __builtin_add_overflow_64)(a, b, dst)
-
 #endif
 
 #ifndef warn_unused
@@ -74,25 +36,11 @@ __builtin_add_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
 #if defined(__GNUC__) || defined(__clang__)
 #define warn_unused __attribute__((warn_unused_result))
 #elif defined(_MSC_VER)
-#define warn_unused
+#define warn_unused _Check_return
 #else
 #define warn_unused
 #endif
 
-#endif
-
-// gnu_case_ranges are so much nicer but are non-standard
-// leave off a colon and don't have a leading case
-#ifndef CASE_a_f
-#define CASE_a_f 'a': case 'b': case 'c': case 'd': case 'e': case 'f'
-#endif
-
-#ifndef CASE_A_F
-#define CASE_A_F 'A': case 'B': case 'C': case 'D': case 'E': case 'F'
-#endif
-
-#ifndef CASE_0_9
-#define CASE_0_9 '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9'
 #endif
 
 // NOTE: The first error that is happened to be detected will be reported.
@@ -122,35 +70,42 @@ enum ParseNumberError {
 // If it is zero, then the result field is valid and is the parsed number.
 //
 
-typedef struct Uint64Result Uint64Result;
-struct Uint64Result {
+typedef struct Uint64Result {
     uint64_t result;
     enum ParseNumberError errored;
-};
+} Uint64Result;
 
-typedef struct Int64Result Int64Result;
-struct Int64Result {
+typedef struct Int64Result {
     int64_t result;
     enum ParseNumberError errored;
-};
+} Int64Result;
 
-typedef struct Uint32Result Uint32Result;
-struct Uint32Result {
+typedef struct Uint32Result {
     uint32_t result;
     enum ParseNumberError errored;
-};
+} Uint32Result;
 
-typedef struct Int32Result Int32Result;
-struct Int32Result {
+typedef struct Int32Result {
     int32_t result;
     enum ParseNumberError errored;
-};
+} Int32Result;
 
-typedef struct IntResult IntResult;
-struct IntResult {
+typedef struct IntResult {
     int result;
     enum ParseNumberError errored;
-};
+} IntResult;
+
+#if PARSE_NUMBER_PARSE_FLOATS
+typedef struct FloatResult {
+    float result;
+    enum ParseNumberError errored;
+} FloatResult;
+
+typedef struct DoubleResult {
+    double result;
+    enum ParseNumberError errored;
+} DoubleResult;
+#endif
 
 //
 // Forward declarations of the public API.
@@ -164,8 +119,7 @@ struct IntResult {
 
 //
 // Parses a decimal uint64.
-static
-inline
+static inline
 warn_unused
 struct Uint64Result
 parse_uint64(const char* str, size_t length);
@@ -228,13 +182,28 @@ warn_unused
 struct Uint64Result
 parse_unsigned_human(const char* str, size_t length);
 
+//
+// Parses a float, in regular or scientific form.
+static inline
+warn_unused
+struct FloatResult
+parse_float(const char* str, size_t length);
+
+//
+// Parses a double, in regular or scientific form.
+static inline
+warn_unused
+struct DoubleResult
+parse_double(const char* str, size_t length);
+
+
 // Implementations after this point.
 
 static inline
 warn_unused
 struct Uint64Result
 parse_uint64(const char* str, size_t length){
-    struct Uint64Result result = {0};
+    struct Uint64Result result = {};
     if(!length){
         result.errored = PARSENUMBER_UNEXPECTED_END;
         return result;
@@ -289,12 +258,12 @@ static inline
 warn_unused
 struct Int64Result
 parse_int64(const char* str, size_t length){
-    struct Int64Result result = {0};
+    struct Int64Result result = {};
     if(!length){
         result.errored = PARSENUMBER_UNEXPECTED_END;
         return result;
     }
-    bool negative = (*str == '-');
+    _Bool negative = (*str == '-');
     if(negative){
         str++;
         length--;
@@ -361,7 +330,7 @@ static inline
 warn_unused
 struct Uint32Result
 parse_uint32(const char*str, size_t length){
-    struct Uint32Result result = {0};
+    struct Uint32Result result = {};
     if(!length){
         result.errored = PARSENUMBER_UNEXPECTED_END;
         return result;
@@ -415,12 +384,12 @@ static inline
 warn_unused
 struct Int32Result
 parse_int32(const char*str, size_t length){
-    struct Int32Result result = {0};
+    struct Int32Result result = {};
     if(!length){
         result.errored = PARSENUMBER_UNEXPECTED_END;
         return result;
     }
-    bool negative = (*str == '-');
+    _Bool negative = (*str == '-');
     if(negative){
         str++;
         length--;
@@ -498,7 +467,7 @@ static inline
 warn_unused
 struct Uint64Result
 parse_hex_inner(const char* str, size_t length){
-    struct Uint64Result result = {0};
+    struct Uint64Result result = {};
     if(length > sizeof(result.result)*2){
         result.errored = PARSENUMBER_OVERFLOWED_VALUE;
         return result;
@@ -508,13 +477,13 @@ parse_hex_inner(const char* str, size_t length){
         char c = str[i];
         uint64_t char_value;
         switch(c){
-            case CASE_0_9:
+            case '0'...'9':
                 char_value = (uint64_t)(c - '0');
                 break;
-            case CASE_a_f:
+            case 'a'...'f':
                 char_value = (uint64_t)(c - 'a' + 10);
                 break;
-            case CASE_A_F:
+            case 'A'...'F':
                 char_value = (uint64_t)(c - 'A' + 10);
                 break;
             default:
@@ -532,7 +501,7 @@ static inline
 warn_unused
 struct Uint64Result
 parse_pound_hex(const char* str, size_t length){
-    struct Uint64Result result = {0};
+    struct Uint64Result result = {};
     if(length < 2){
         result.errored = PARSENUMBER_UNEXPECTED_END;
         return result;
@@ -548,7 +517,7 @@ static inline
 warn_unused
 struct Uint64Result
 parse_hex(const char* str, size_t length){
-    struct Uint64Result result = {0};
+    struct Uint64Result result = {};
     if(length<3){
         result.errored = PARSENUMBER_UNEXPECTED_END;
         return result;
@@ -570,7 +539,7 @@ static inline
 warn_unused
 struct Uint64Result
 parse_binary(const char* str, size_t length){
-    struct Uint64Result result = {0};
+    struct Uint64Result result = {};
     if(length<3){
         result.errored = PARSENUMBER_UNEXPECTED_END;
         return result;
@@ -590,7 +559,7 @@ static inline
 warn_unused
 struct Uint64Result
 parse_binary_inner(const char* str, size_t length){
-    struct Uint64Result result = {0};
+    struct Uint64Result result = {};
     unsigned long long mask = 1llu << 63;
     mask >>= (64 - length);
     // @speed
@@ -618,13 +587,13 @@ static inline
 warn_unused
 struct Uint64Result
 parse_string_integer_inner(const char* str, size_t length){
-    struct Uint64Result result = {0};
+    struct Uint64Result result = {};
     if(length > sizeof(uint64_t)){
         result.errored = PARSENUMBER_OVERFLOWED_VALUE;
         return result;
     }
     if(length)
-        memcpy(&result.result, str, length);
+        __builtin_memcpy(&result.result, str, length);
     return result;
 }
 
@@ -632,7 +601,7 @@ static inline
 warn_unused
 struct Uint64Result
 parse_unsigned_human(const char* str, size_t length){
-    struct Uint64Result result = {0};
+    struct Uint64Result result = {};
     if(!length){
         result.errored = PARSENUMBER_UNEXPECTED_END;
         return result;
@@ -657,6 +626,65 @@ parse_unsigned_human(const char* str, size_t length){
     return parse_uint64(str, length);
 }
 
+#if PARSE_NUMBER_PARSE_FLOATS
+static inline
+warn_unused
+struct FloatResult
+parse_float(const char* str, size_t length){
+    struct FloatResult result = {};
+    const char* end = str + length;
+    // fast_float doesn't accept leading '+', but we want to.
+    while(str != end && *str == '+')
+        str++;
+    if(str == end){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
+    }
+    fast_float_from_chars_result fr = fast_float_from_chars_float(str, end, &result.result, FASTFLOAT_FORMAT_GENERAL);
+    switch(fr.error){
+        case FASTFLOAT_NO_ERROR:
+            return result;
+        case FASTFLOAT_INVALID_VALUE:
+            result.errored = PARSENUMBER_INVALID_CHARACTER;
+            return result;
+        default:
+        case FASTFLOAT_BAD_FORMAT:
+            // This should never happen, but meh.
+            result.errored = PARSENUMBER_INVALID_CHARACTER;
+            return result;
+    }
+}
+
+//
+// Parses a double, in regular or scientific form.
+static inline
+warn_unused
+struct DoubleResult
+parse_double(const char* str, size_t length){
+    struct DoubleResult result = {};
+    const char* end = str + length;
+    // fast_float doesn't accept leading '+', but we want to.
+    while(str != end && *str == '+')
+        str++;
+    if(str == end){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
+    }
+    fast_float_from_chars_result fr = fast_float_from_chars_double(str, end, &result.result, FASTFLOAT_FORMAT_GENERAL);
+    switch(fr.error){
+        case FASTFLOAT_NO_ERROR:
+            return result;
+        case FASTFLOAT_INVALID_VALUE:
+            result.errored = PARSENUMBER_INVALID_CHARACTER;
+            return result;
+        default:
+        case FASTFLOAT_BAD_FORMAT:
+            // This should never happen, but meh.
+            result.errored = PARSENUMBER_INVALID_CHARACTER;
+            return result;
+    }
+}
+#endif
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
