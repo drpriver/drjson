@@ -1,6 +1,3 @@
-//
-// Copyright © 2021-2022, David Priver
-//
 #ifndef TERM_UTIL_H
 #define TERM_UTIL_H
 #ifdef _WIN32
@@ -10,10 +7,9 @@
 #endif
 #include <stdlib.h>
 
-typedef struct TermSize TermSize;
-struct TermSize {
+typedef struct TermSize {
     int columns, rows;
-};
+} TermSize;
 //
 // Returns the size of the terminal.
 // On error, we return 80 columns and 24 rows.
@@ -28,18 +24,15 @@ static inline TermSize get_terminal_size(void);
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 static inline
-int
-fileno(FILE* stream){
+int fileno(FILE* stream){
     return _fileno(stream);
 }
-
 static inline
-int
-isatty(int fd){
+int isatty(int fd){
     return _isatty(fd);
 }
 
-#include "Platform/Windows/windowsheader.h"
+#include "windowsheader.h"
 static inline
 TermSize
 get_terminal_size(void){

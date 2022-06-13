@@ -9,8 +9,6 @@
 #include <stdbool.h>
 // integer types
 #include <stdint.h>
-// strtod, strtof
-#include <stdlib.h>
 // fprintf
 #include <stdio.h>
 #include <assert.h>
@@ -997,24 +995,16 @@ parse_arg(ArgToParse* arg, StringView s){
             APPEND_ARG(int, value);
         }break;
         case ARG_FLOAT32:{
-            char* endptr;
-            // I'd rather roll my own strtof, but that's too much work right now.
-            float value = strtof(s.text, &endptr);
-            if(endptr == s.text)
+            FloatResult pr = parse_float(s.text, s.length);
+            if(pr.errored)
                 return ARGPARSE_CONVERSION_ERROR;
-            if(*endptr != '\0')
-                return ARGPARSE_CONVERSION_ERROR;
-            APPEND_ARG(float, value);
+            APPEND_ARG(float, pr.result);
         }break;
         case ARG_FLOAT64:{
-            char* endptr;
-            // Ditto on rolling my own.
-            double value = strtod(s.text, &endptr);
-            if(endptr == s.text)
+            DoubleResult pr = parse_double(s.text, s.length);
+            if(pr.errored)
                 return ARGPARSE_CONVERSION_ERROR;
-            if(*endptr != '\0')
-                return ARGPARSE_CONVERSION_ERROR;
-            APPEND_ARG(double, value);
+            APPEND_ARG(double, pr.result);
         }break;
         // for flags, using the append_proc doesn't make sense.
         case ARG_BITFLAG:

@@ -21,6 +21,8 @@
 #include "drjson.h"
 #include "hash_func.h"
 #include "bit_util.h"
+#define PARSE_NUMBER_PARSE_FLOATS 1
+#include "parse_numbers.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -416,26 +418,28 @@ parse_number(DrJsonParseContext* ctx){
     after:;
     ptrdiff_t length = cursor - num_begin;
     if(!length) return drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "Zero length number");
-    // It'd be faster to implement our own parser here instead of copying to a buffer.
-    // Copying to a buffer avoids problems with out of bounds reads of strtod and friends
-    // as they expect a c string.
-    char buffer[64];
-    if(length >= 64) return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Length of number longer than 64 (get real)");
-    __builtin_memcpy(buffer, num_begin, length);
-    buffer[length] = 0;
-    char* endbuffer;
     DrJsonValue result;
-    errno = 0;
-    if(has_exponent || has_decimal)
-        result =  drjson_make_number(strtod(buffer, &endbuffer));
-    else if(has_minus)
-        result =  drjson_make_int(strtoll(buffer, &endbuffer, 10));
-    else
-        result =  drjson_make_uint(strtoull(buffer, &endbuffer, 10));
-    if(endbuffer != buffer + length){
-        return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
+    if(has_exponent || has_decimal){
+        DoubleResult pr = parse_double(num_begin, length);
+        if(pr.errored){
+            return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
+        }
+        result = drjson_make_number(pr.result);
     }
-    if(errno) return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "errno was set");
+    else if(has_minus){
+        Int64Result pr = parse_int64(num_begin, length);
+        if(pr.errored){
+            return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
+        }
+        result =  drjson_make_int(pr.result);
+    }
+    else {
+        Uint64Result pr = parse_uint64(num_begin, length);
+        if(pr.errored){
+            return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
+        }
+        result =  drjson_make_uint(pr.result);
+    }
     ctx->cursor = cursor;
     return result;
 }
@@ -908,8 +912,12 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
     Ldo_subscript:
         {
             // lazy
-            int index = atoi(query+begin);
-            if(o->kind != DRJSON_ARRAY) {fprintf(stderr, "%s\n", DrJsonKindNames[o->kind]);ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript applied to non-array");}
+            Uint64Result pr = parse_unsigned_human(query+begin, i-begin);
+            if(pr.errored){
+                ERROR(DRJSON_ERROR_INVALID_VALUE, "Unable to parse number for subscript");
+            }
+            uint64_t index = pr.result;
+            if(o->kind != DRJSON_ARRAY) ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript applied to non-array");
             if(index < 0 || index >= o->count) ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript out of bounds of array");
             o = &o->array_items[index];
         }
