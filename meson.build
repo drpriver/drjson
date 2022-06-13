@@ -22,3 +22,4 @@ drjson_dylib = both_libraries(
   darwin_versions:[COMPAT_VERSION, meson.project_version()],
   c_args: ignore_bogus_deprecations,
 )
+executable('drjson', 'DrJson/drjson_cli.c', install:true, c_args:ignore_bogus_deprecations)

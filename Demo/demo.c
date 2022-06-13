@@ -2,8 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
-#include "measure_time.h"
-#include "drjson.h"
+#include "DrJson/drjson.h"
 #include "arena_allocator.h"
 
 int main(int argc, char** argv){
@@ -44,14 +43,11 @@ int main(int argc, char** argv){
         },
         // .allocator = drjson_stdc_allocator(),
     };
-    long t0 = get_t();
     DrJsonValue v = drjson_parse(&ctx);
     if(v.kind == DRJSON_ERROR){
         fprintf(stderr, "%s (%d): %s\n", drjson_get_error_name(v), drjson_get_error_code(v), v.err_mess);
         return 1;
     }
-    long t1 = get_t();
-    // fprintf(stderr, "%.3f us\n", (double)(t1-t0));
     if(argc <= 2){
         drjson_print_value(stdout, v, 0, DRJSON_PRETTY_PRINT);
         putchar('\n');

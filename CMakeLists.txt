@@ -40,6 +40,8 @@ set_target_properties(drjson-lib
 	PROPERTIES
     VERSION ${PROJECT_VERSION}
 )
+
+add_executable(drjson DrJson/drjson_cli.c)
 target_link_libraries(drjson-lib ${LIBM_LIBRARIES})
 target_link_libraries(drjson-dylib ${LIBM_LIBRARIES})
 
@@ -47,3 +49,5 @@ install(TARGETS drjson-lib LIBRARY DESTINATION lib)
 install(TARGETS drjson-dylib
 		LIBRARY DESTINATION lib
 		PUBLIC_HEADER DESTINATION include/DrJson)
+install(TARGETS drjson DESTINATION bin)
+

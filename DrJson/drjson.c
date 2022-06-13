@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 
 #ifndef DRJSON_API
 
@@ -415,7 +416,6 @@ parse_number(DrJsonParseContext* ctx){
     after:;
     ptrdiff_t length = cursor - num_begin;
     if(!length) return drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "Zero length number");
-    ctx->cursor = cursor;
     // It'd be faster to implement our own parser here instead of copying to a buffer.
     // Copying to a buffer avoids problems with out of bounds reads of strtod and friends
     // as they expect a c string.
@@ -425,6 +425,7 @@ parse_number(DrJsonParseContext* ctx){
     buffer[length] = 0;
     char* endbuffer;
     DrJsonValue result;
+    errno = 0;
     if(has_exponent || has_decimal)
         result =  drjson_make_number(strtod(buffer, &endbuffer));
     else if(has_minus)
@@ -434,6 +435,8 @@ parse_number(DrJsonParseContext* ctx){
     if(endbuffer != buffer + length){
         return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
     }
+    if(errno) return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "errno was set");
+    ctx->cursor = cursor;
     return result;
 }
 
@@ -508,7 +511,7 @@ parse_color(DrJsonParseContext* ctx){
 }
 static inline
 DrJsonValue
-parse_hex(DrJsonParseContext* ctx){
+drj_parse_hex(DrJsonParseContext* ctx){
     const char* num_begin = ctx->cursor;
     const char* cursor = ctx->cursor;
     const char* end = ctx->end;
@@ -576,7 +579,7 @@ drjson_parse(DrJsonParseContext* ctx){
             if(ctx->cursor + 1 != ctx->end){
                 if((ctx->cursor[1] | 0x20) == 'x'){
                     ctx->cursor += 2;
-                    result = parse_hex(ctx);
+                    result = drj_parse_hex(ctx);
                     break;
                 }
             }
@@ -779,10 +782,19 @@ drjson_checked_query(DrJsonValue* v, int type, const char* query, size_t length)
     return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Wrong type");
 }
 
+static inline
+DrJsonValue*
+debox(DrJsonValue* v){
+    while(v->kind == DRJSON_BOXED)
+        v = v->boxed;
+    return v;
+}
+
 
 DRJSON_API
 DrJsonValue
 drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, const char* query, size_t length){
+    v = debox(v);
     enum {
         GETITEM,
         SUBSCRIPT,
@@ -804,6 +816,7 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
     }while(0)
     if(i == length) ERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Query is 0 length");
     Ldispatch:
+    o = debox(o);
     for(;i != length; i++){
         char c = query[i];
         switch(c){
@@ -838,6 +851,7 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
                             goto Llength;
                         }
                         ERROR(DRJSON_ERROR_INVALID_CHAR, "Unknown special key");
+                    case CASE_0_9:
                     case CASE_a_z:
                     case CASE_A_Z:
                     case '_':
@@ -895,7 +909,7 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
         {
             // lazy
             int index = atoi(query+begin);
-            if(o->kind != DRJSON_ARRAY) ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript applied to non-array");
+            if(o->kind != DRJSON_ARRAY) {fprintf(stderr, "%s\n", DrJsonKindNames[o->kind]);ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript applied to non-array");}
             if(index < 0 || index >= o->count) ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript out of bounds of array");
             o = &o->array_items[index];
         }
