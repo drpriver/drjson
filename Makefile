@@ -21,8 +21,8 @@ Bin/demo: Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).dylib
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).dylib -fvisibility=hidden -I.
 
 
-README.html: README.md
-	pandoc $< -o $@ -s --toc
+README.html: README.md README.css
+	pandoc README.md README.css -f markdown -o $@ -s --toc
 
 Bin/drjson: DrJson/drjson_cli.c Bin/libdrjson.$(DRJSONVERSION).dylib
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).dylib -fvisibility=hidden -I.
