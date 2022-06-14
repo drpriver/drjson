@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #define DRJSON_API static inline
 #include "drjson.h"
+// "drjson.c" is #included at the bottom
 #include "argument_parsing.h"
 #include "term_util.h"
 
@@ -33,18 +34,32 @@ read_file_streamed(FILE* fp){
     size_t nalloced = 1024;
     size_t used = 0;
     char* buff = malloc(nalloced);
-    while(fgets(buff+used, nalloced-used, fp)){
-        size_t len = strlen(buff+used);
-        assert(len + 1 <= nalloced-used);
-        if(len + 1 == nalloced - used){
+    for(;;){
+        size_t remainder = nalloced - used;
+        size_t nread = fread(buff+used, 1, remainder, fp);
+        if(nread == remainder){
             nalloced *= 2;
-            buff = realloc(buff, nalloced);
+            char* newbuff = realloc(buff, nalloced);
+            if(!newbuff){
+                free(buff);
+                return (LongString){0};
+            }
+            buff = newbuff;
         }
-        used += len;
+        used += nread;
+        if(nread != remainder){
+            if(feof(fp)) break;
+            else{
+                free(buff);
+                return (LongString){0};
+            }
+        }
     }
-    buff = realloc(buff, used);
+    buff = realloc(buff, used+1);
+    buff[used] = 0;
     return (LongString){used, buff};
 }
+
 static inline
 LongString 
 read_file(const char* filepath){
@@ -52,8 +67,7 @@ read_file(const char* filepath){
     FILE* fp = fopen(filepath, "rb");
     if(!fp) return result;
     long long size = file_size_from_fp(fp);
-    if(size < 0) goto finally;
-    if(size == 0){
+    if(size <= 0){
         result = read_file_streamed(fp);
         goto finally;
     }

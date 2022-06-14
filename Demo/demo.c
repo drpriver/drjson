@@ -5,6 +5,38 @@
 #include "DrJson/drjson.h"
 #include "arena_allocator.h"
 
+static inline
+char*
+read_file_streamed(FILE* fp){
+    size_t nalloced = 1024;
+    size_t used = 0;
+    char* buff = malloc(nalloced);
+    for(;;){
+        size_t remainder = nalloced - used;
+        size_t nread = fread(buff+used, 1, remainder, fp);
+        if(nread == remainder){
+            nalloced *= 2;
+            char* newbuff = realloc(buff, nalloced);
+            if(!newbuff){
+                free(buff);
+                return NULL;
+            }
+            buff = newbuff;
+        }
+        used += nread;
+        if(nread != remainder){
+            if(feof(fp)) break;
+            else{
+                free(buff);
+                return NULL;
+            }
+        }
+    }
+    buff = realloc(buff, used+1);
+    buff[used] = 0;
+    return buff;
+}
+
 int main(int argc, char** argv){
     const char* data = "{\n"
         "foo: 123.4e12\n"
@@ -18,13 +50,10 @@ int main(int argc, char** argv){
             nbytes = strlen(data);
         }
         else {
-            fseek(fp, 0, SEEK_END);
-            nbytes = ftell(fp);
-            fseek(fp, 0, SEEK_SET);
-            char* d = malloc(nbytes);
-            fread(d, nbytes, 1, fp);
+            data = read_file_streamed(fp);
+            if(!data) return 1;
+            nbytes = strlen(data);
             fclose(fp);
-            data = d;
         }
     }
 
