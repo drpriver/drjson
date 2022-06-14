@@ -664,9 +664,15 @@ drjson_array_push_item(const DrJsonAllocator* allocator, DrJsonValue* array, DrJ
 }
 
 DRJSON_API
-force_inline
 uint32_t
 drjson_object_key_hash(const char* key, size_t keylen){
+    return hash_align1(key, keylen);
+}
+
+static inline
+force_inline
+uint32_t
+object_key_hash(const char* key, size_t keylen){
     return hash_align1(key, keylen);
 }
 
@@ -679,7 +685,7 @@ drjson_object_set_item(const DrJsonAllocator* allocator, DrJsonValue* object, co
     enum {KEY_MAX = 0x7fffffff};
     enum {OBJECT_MAX = 0x1fffffff};
     if(keylen > KEY_MAX) return 1;
-    if(!hash) hash = drjson_object_key_hash(key, keylen);
+    if(!hash) hash = object_key_hash(key, keylen);
     if(unlikely(object->count *2 >= object->capacity)){
         if(!object->capacity){
             size_t new_cap = 4;
@@ -749,7 +755,7 @@ drjson_object_set_item_copy_key(const DrJsonAllocator* allocator, DrJsonValue* o
 DRJSON_API
 DrJsonValue*_Nullable
 drjson_object_get_item(DrJsonValue object, const char* key, size_t keylen, uint32_t hash){
-    if(!hash) hash = drjson_object_key_hash(key, keylen);
+    if(!hash) hash = object_key_hash(key, keylen);
     if(object.kind != DRJSON_OBJECT) return NULL;
     if(!object.capacity)
         return NULL;
