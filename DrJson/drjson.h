@@ -75,18 +75,20 @@ enum DrJsonErrorCode {
     DRJSON_ERROR_INDEX_ERROR = 4,
     DRJSON_ERROR_INVALID_CHAR = 5,
     DRJSON_ERROR_INVALID_VALUE = 6,
-    DRJSON_ERROR_INVALID_ERROR = 7,
+    DRJSON_ERROR_TOO_DEEP = 7,
+    DRJSON_ERROR_INVALID_ERROR = 8,
 };
 
 static const char*_Nonnull const DrJsonErrorNames[] = {
-    [DRJSON_ERROR_NONE] = "No error",
+    [DRJSON_ERROR_NONE]           = "No error",
     [DRJSON_ERROR_UNEXPECTED_EOF] = "Unexpected End of Input",
-    [DRJSON_ERROR_ALLOC_FAILURE] = "Allocation Failure",
-    [DRJSON_ERROR_MISSING_KEY] = "Missing Key",
-    [DRJSON_ERROR_INDEX_ERROR] = "Index Error",
-    [DRJSON_ERROR_INVALID_CHAR] = "Invalid Char",
-    [DRJSON_ERROR_INVALID_VALUE] = "Invalid Value",
-    [DRJSON_ERROR_INVALID_ERROR] = "Error is Invalid",
+    [DRJSON_ERROR_ALLOC_FAILURE]  = "Allocation Failure",
+    [DRJSON_ERROR_MISSING_KEY]    = "Missing Key",
+    [DRJSON_ERROR_INDEX_ERROR]    = "Index Error",
+    [DRJSON_ERROR_INVALID_CHAR]   = "Invalid Char",
+    [DRJSON_ERROR_INVALID_VALUE]  = "Invalid Value",
+    [DRJSON_ERROR_TOO_DEEP]       = "Too Many Levels of Nesting",
+    [DRJSON_ERROR_INVALID_ERROR]  = "Error is Invalid",
 };
 
 typedef struct DrJsonValue DrJsonValue;
@@ -157,8 +159,6 @@ struct DrJsonParseContext {
     const char* end;
     const char* begin;
     int depth;
-    const char* error_message; // static string
-    const char* err_loc; // for reporting where the error occurred.
     DrJsonAllocator allocator;
 };
 
