@@ -42,6 +42,11 @@ Keyword Arguments:
 --pretty
     Pretty print the output 
 
+```
+<hr>
+
+Query a specific field from a large file:
+```
 $ drjson some_big_file.json -q some_metadata.classes --pretty
 [
   "cat",
@@ -49,6 +54,42 @@ $ drjson some_big_file.json -q some_metadata.classes --pretty
   "ferret",
   "cow",
 ]
+```
+<hr>
+
+Convert a djrson file to regular json:
+```
+$ drjson Examples/settings.drjson --braceless --pretty
+{
+  "font": "Sans",
+  "graphic-color": 4288729810,
+  "text-size": 18,
+  "bg-color": 4280494119,
+  "damage": [
+    "d6",
+    "fire"
+  ],
+  "misc-color": 4288729810,
+  "console-color": 4288729810,
+  "colors": {
+    "unhurt": 4294901860,
+    "numeric": 4292018324,
+    "dice": 4289374890,
+    "direction": 4278255499,
+    "fixture": 4287299584,
+    "badly-hurt": 4278190335,
+    "danger": 4278190335,
+    "failure": 4278190335,
+    "asleep": 4286611456,
+    "wounded": 4278414273,
+    "cash": 4294538159,
+    "monster": 4278190335,
+    "hidden": 4286093024,
+    "scratched": 4280959314
+  },
+  "button-color": 4282599495,
+  "text-color": 4288729810
+}
 
 ```
 
