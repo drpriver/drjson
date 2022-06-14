@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.14) # This is a guess
 project(DrJson VERSION 1.0.0)
 
 set(CMAKE_C_STANDARD 99)
