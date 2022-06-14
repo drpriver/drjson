@@ -11,6 +11,48 @@ the Makefile, but that is primarily for development.
 
 ## Usage
 
+### CLI
+```
+$ drjson -h
+drjson: CLI interface to drjson.
+
+usage: drjson filepath [-o | --output <string>]
+              [-q | --query <string> ...] [--braceless] [--pretty]
+
+Early Out Arguments:
+--------------------
+-h, --help:
+    Print this help and exit. 
+-v, --version:
+    Print the version and exit. 
+
+Positional Arguments:
+---------------------
+filepath <string>
+    Json file to parse 
+
+Keyword Arguments:
+------------------
+-o, --output <string>
+    Where to write the result 
+-q, --query <string> ... 
+    A query to filter the data. Queries can be stacked 
+--braceless
+    Don't require opening and closing braces around the document 
+--pretty
+    Pretty print the output 
+
+$ drjson some_big_file.json -q some_metadata.classes --pretty
+[
+  "cat",
+  "dog",
+  "ferret",
+  "cow",
+]
+
+```
+
+### Library
 ```c
 #include <stdio.h>
 #include <stddef.h>
