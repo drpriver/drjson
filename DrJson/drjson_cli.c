@@ -26,6 +26,25 @@ file_size_from_fp(FILE* fp){
     errored:
     return -1;
 }
+
+static inline
+LongString
+read_file_streamed(FILE* fp){
+    size_t nalloced = 1024;
+    size_t used = 0;
+    char* buff = malloc(nalloced);
+    while(fgets(buff+used, nalloced-used, fp)){
+        size_t len = strlen(buff+used);
+        assert(len + 1 <= nalloced-used);
+        if(len + 1 == nalloced - used){
+            nalloced *= 2;
+            buff = realloc(buff, nalloced);
+        }
+        used += len;
+    }
+    buff = realloc(buff, used);
+    return (LongString){used, buff};
+}
 static inline
 LongString 
 read_file(const char* filepath){
@@ -34,6 +53,10 @@ read_file(const char* filepath){
     if(!fp) return result;
     long long size = file_size_from_fp(fp);
     if(size < 0) goto finally;
+    if(size == 0){
+        result = read_file_streamed(fp);
+        goto finally;
+    }
     size_t nbytes = size;
     char* text = malloc(nbytes+1);
     if(!text) goto finally;
@@ -146,27 +169,13 @@ main(int argc, const char* const* argv){
     LongString jsonstr = {0};
     if(jsonpath.length){
         jsonstr = read_file(jsonpath.text);
-        if(!jsonstr.length){
+        if(!jsonstr.text){
             fprintf(stderr, "Unable to read data from '%s': %s\n", jsonpath.text, strerror(errno));
             return 1;
         }
     }
     else {
-        size_t nalloced = 1024;
-        size_t used = 0;
-        char* buff = malloc(nalloced);
-        while(fgets(buff+used, nalloced-used, stdin)){
-            size_t len = strlen(buff+used);
-            assert(len + 1 <= nalloced-used);
-            if(len + 1 == nalloced - used){
-                nalloced *= 2;
-                buff = realloc(buff, nalloced);
-            }
-            used += len;
-        }
-        buff = realloc(buff, used);
-        jsonstr.text = buff;
-        jsonstr.length = used;
+        jsonstr = read_file_streamed(stdin);
     }
     DrJsonParseContext ctx = {
         .begin = jsonstr.text,

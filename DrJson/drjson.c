@@ -23,6 +23,7 @@
 #include "bit_util.h"
 #define PARSE_NUMBER_PARSE_FLOATS 1
 #include "parse_numbers.h"
+#include "fpconv/src/fpconv.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -135,6 +136,7 @@ skip_whitespace(DrJsonParseContext* ctx){
             case ' ': case '\r':
             case '\t': case '\n':
             case ',': case ':':
+            case '=':
                 continue;
             case '/':
                 cursor++;
@@ -985,10 +987,12 @@ int
 drjson_print_value(FILE* fp, DrJsonValue v, int indent, unsigned flags){
     int result = 0;
     int pretty = flags & DRJSON_PRETTY_PRINT;
+    char tmp[64];
     switch(v.kind){
-        case DRJSON_NUMBER:
-            // This sucks. We need a better float formatting lib
-            result = fprintf(fp, "%.12g", v.number); break;
+        case DRJSON_NUMBER:{
+            int len = fpconv_dtoa(v.number, tmp);
+            fprintf(fp, "%.*s", len, tmp); 
+        }break;
         case DRJSON_INTEGER:
             result = fprintf(fp, "%lld", v.integer); break;
         case DRJSON_UINTEGER:
@@ -1069,5 +1073,6 @@ drjson_print_value(FILE* fp, DrJsonValue v, int indent, unsigned flags){
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
+#include "fpconv/src/fpconv.c"
 
 #endif
