@@ -286,12 +286,10 @@ static inline
 DrJsonValue
 parse_object(DrJsonParseContext* ctx){
     if(unlikely(!match(ctx, '{'))) {
-        ctx->error_message = "Expected a '{' to begin an object";
         return drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "Expected a '{' to begin an object");
     }
     DrJsonValue result = {.kind=DRJSON_OBJECT};
     DrJsonValue error = {0};
-    ctx->depth++;
     skip_whitespace(ctx);
     while(!match(ctx, '}')){
         if(unlikely(ctx->cursor == ctx->end)){
@@ -313,13 +311,11 @@ parse_object(DrJsonParseContext* ctx){
         if(unlikely(err)){
             if(!ctx->allocator.free_all)
                 drjson_slow_recursive_free_all(&ctx->allocator, item);
-            ctx->error_message = "Failed to allocate space for an item while setting member of an object";
             error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocte space for an item while setting member of an object");
             goto cleanup;
         }
         skip_whitespace(ctx);
     }
-    ctx->depth--;
     return result;
     cleanup:
     if(!ctx->allocator.free_all)
@@ -333,7 +329,6 @@ parse_array(DrJsonParseContext* ctx){
     if(!match(ctx, '[')) return drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "Expected a '[' to begin an array");
     DrJsonValue result = {.kind=DRJSON_ARRAY};
     DrJsonValue error = {0};
-    ctx->depth++;
     skip_whitespace(ctx);
     while(!match(ctx, ']')){
         if(unlikely(ctx->cursor == ctx->end)){
@@ -354,7 +349,6 @@ parse_array(DrJsonParseContext* ctx){
         }
         skip_whitespace(ctx);
     }
-    ctx->depth--;
     return result;
     cleanup:
     if(!ctx->allocator.free_all)
@@ -548,6 +542,8 @@ DRJSON_API
 DrJsonValue
 drjson_parse(DrJsonParseContext* ctx){
     ctx->depth++;
+    if(unlikely(ctx->depth > 100))
+        return drjson_make_error(DRJSON_ERROR_TOO_DEEP, "Too many levels of nesting.");
     skip_whitespace(ctx);
     DrJsonValue result;
     if(ctx->cursor == ctx->end)
@@ -597,7 +593,6 @@ drjson_parse(DrJsonParseContext* ctx){
         default:
             result = parse_string(ctx);
             if(result.kind != DRJSON_ERROR) break;
-            ctx->error_message = "Character is not a valid starting character for json.";
             result = drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "Character is not a valid starting character for json");
             break;
     }
@@ -626,7 +621,6 @@ drjson_parse_braceless_object(DrJsonParseContext* ctx){
         if(unlikely(err)){
             if(!ctx->allocator.free_all)
                 drjson_slow_recursive_free_all(&ctx->allocator, item);
-            ctx->error_message = "Failed to allocate space for an item while setting member of an object";
             error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocte space for an item while setting member of an object");
             goto cleanup;
         }
