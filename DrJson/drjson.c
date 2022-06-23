@@ -1074,6 +1074,107 @@ drjson_print_value(FILE* fp, DrJsonValue v, int indent, unsigned flags){
 }
 #endif
 
+DRJSON_API
+int
+drjson_escape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char *_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength){
+    if(!length) return 1;
+    // reserve 2 characters of output for every 2 characters of input.
+    // This is enough space for all common json strings (the bytes that must
+    // be escaped are rare).
+    // We fix that up if we actually hit them.
+    size_t allocated_size = length * 2;
+    char* s = allocator->alloc(allocator->user_pointer, allocated_size);
+    if(!s) return 1;
+    const char* const hex = "0123456789abcdef";
+    size_t cursor = 0;
+    for(size_t i = 0; i < length; i++){
+        switch(unescaped[i]){
+            // 0x0 through 0x1f (0 through 31) have to all be
+            // escaped with the 6 character sequence of \u00xx
+            // Why on god's green earth did they force utf16 escapes?
+
+            // gnu case ranges are nicer, but nonstandard
+            // just spell them all out.
+            case  0: case  1: case  2: case  3: case  4:
+            // 8 is '\b', 9 is '\t'
+            case  5: case  6: case  7:
+            // 10 is '\n', 12 is '\f', 13 is '\r'
+                     case 11:                   case 14:
+            case 15: case 16: case 17: case 18: case 19:
+            case 20: case 21: case 22: case 23: case 24:
+            case 25: case 26: case 27: case 28: case 29:
+            case 30: case 31:
+                // These are rare, so only reserve more space when we actually hit them.
+                {
+                    size_t realloc_size = allocated_size+4;
+                    char* news = allocator->realloc(allocator->user_pointer, s, allocated_size, realloc_size);
+                    if(!news){
+                        allocator->free(allocator->user_pointer, s, allocated_size);
+                        return 1;
+                    }
+                    allocated_size = realloc_size;
+                    s = news;
+                }
+                s[cursor++] = '\\';
+                s[cursor++] = 'u';
+                s[cursor++] = '0';
+                s[cursor++] = '0';
+                s[cursor++] = hex[(unescaped[i] & 0xf0)>>4];
+                s[cursor++] = hex[(unescaped[i] & 0xf)];
+                break;
+            case '"':
+                s[cursor++] = '\\';
+                s[cursor++] = '"';
+                break;
+            case '\\':
+                s[cursor++] = '\\';
+                s[cursor++] = '\\';
+                break;
+            case '\b':
+                s[cursor++] = '\\';
+                s[cursor++] = 'b';
+                break;
+            case '\f':
+                s[cursor++] = '\\';
+                s[cursor++] = 'f';
+                break;
+            case '\n':
+                s[cursor++] = '\\';
+                s[cursor++] = 'n';
+                break;
+            case '\r':
+                s[cursor++] = '\\';
+                s[cursor++] = 'r';
+                break;
+            case '\t':
+                s[cursor++] = '\\';
+                s[cursor++] = 't';
+                break;
+            // Other characters are allowed through as is
+            // (presumably utf-8).
+            default:
+                s[cursor++] = unescaped[i];
+                break;
+        }
+    }
+    // shrink to the size we actually used
+    char* news = allocator->realloc(allocator->user_pointer, s, allocated_size, cursor);
+    if(!news){
+        allocator->free(allocator->user_pointer, s, allocated_size);
+        return 1;
+    }
+    *outstring = news;
+    *outlength = cursor;
+    return 0;
+}
+
+DRJSON_API
+int
+drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength){
+    if(!length) return 1;
+    return 1;
+}
+
 
 
 #ifdef __clang__
