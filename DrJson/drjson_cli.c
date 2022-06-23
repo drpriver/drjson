@@ -201,7 +201,7 @@ main(int argc, const char* const* argv){
         drjson_parse_braceless_object(&ctx):
         drjson_parse(&ctx);
     if(document.kind == DRJSON_ERROR){
-        drjson_print_value(stderr, document, 0, DRJSON_PRETTY_PRINT);
+        drjson_print_value_fp(stderr, document, 0, DRJSON_PRETTY_PRINT);
         fputc('\n', stderr);
         return 1;
     }
@@ -213,7 +213,7 @@ main(int argc, const char* const* argv){
             DrJsonValue qresult = drjson_multi_query(&ctx.allocator, result, queries[i].text, queries[i].length);
             if(qresult.kind == DRJSON_ERROR){
                 fprintf(stderr, "Error when evaluating the %dth query ('%s'):", i, queries[i].text);
-                drjson_print_value(stderr, qresult, 0, DRJSON_PRETTY_PRINT);
+                drjson_print_value_fp(stderr, qresult, 0, DRJSON_PRETTY_PRINT);
                 fputc('\n', stderr);
                 return 1;
             }
@@ -229,7 +229,7 @@ main(int argc, const char* const* argv){
             return 1;
         }
     }
-    int err = drjson_print_value(outfp, *result, 0, pretty?DRJSON_PRETTY_PRINT:0);
+    int err = drjson_print_value_fp(outfp, *result, 0, pretty?DRJSON_PRETTY_PRINT:0);
     if(!err)
         fputc('\n', outfp);
     if(outfp != stdout)
