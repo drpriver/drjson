@@ -901,6 +901,7 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
     Lsubscript:
         for(;i!=length;i++){
             switch(query[i]){
+                case '-':
                 case CASE_0_9:
                     continue;
                 case ']':
@@ -914,12 +915,13 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
     Ldo_subscript:
         {
             // lazy
-            Uint64Result pr = parse_unsigned_human(query+begin, i-begin);
+            Int64Result pr = parse_int64(query+begin, i-begin);
             if(pr.errored){
                 ERROR(DRJSON_ERROR_INVALID_VALUE, "Unable to parse number for subscript");
             }
-            uint64_t index = pr.result;
             if(o->kind != DRJSON_ARRAY) ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript applied to non-array");
+            int64_t index = pr.result;
+            if(index < 0) index += o->count;
             if(index < 0 || index >= o->count) ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript out of bounds of array");
             o = &o->array_items[index];
         }
