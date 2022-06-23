@@ -130,6 +130,12 @@ drjson_get_error_name(DrJsonValue v){
     return DrJsonErrorNames[drjson_get_error_code(v)];
 }
 
+static inline
+int
+drjson_is_numeric(DrJsonValue v){
+    return v.kind == DRJSON_NUMBER || v.kind == DRJSON_INTEGER || v.kind == DRJSON_UINTEGER;
+}
+
 struct DrJsonObjectPair {
     uint32_t key_length: 31;
     uint32_t key_allocated: 1;

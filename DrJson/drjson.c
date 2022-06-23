@@ -1003,19 +1003,23 @@ drjson_print_value(FILE* fp, DrJsonValue v, int indent, unsigned flags){
             result = fprintf(fp, "\"%.*s\"", (int)v.count, v.string); break;
         case DRJSON_ARRAY:{
             result = fputc('[', fp);
-            if(pretty && v.count)
+            int newlined = 0;
+            if(pretty && v.count && !drjson_is_numeric(v.array_items[0])){
                 result = fputc('\n', fp);
+                newlined = 1;
+            }
             for(size_t i = 0; i < v.count; i++){
-                if(pretty)
+                if(pretty && newlined)
                     for(int i = 0; i < indent+2; i++)
                         result = fputc(' ', fp);
                 result = drjson_print_value(fp, v.array_items[i], indent+2, flags);
                 if(i != v.count-1)
                     result = fputc(',', fp);
-                if(pretty)
+                if(pretty && newlined){
                     result = fputc('\n', fp);
+                }
             }
-            if(pretty && v.count){
+            if(pretty && newlined){
                 for(int i = 0; i < indent; i++)
                     result = fputc(' ', fp);
             }
