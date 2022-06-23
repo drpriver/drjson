@@ -78,7 +78,7 @@ int main(int argc, char** argv){
         return 1;
     }
     if(argc <= 2){
-        drjson_print_value(stdout, v, 0, DRJSON_PRETTY_PRINT);
+        drjson_print_value_fp(stdout, v, 0, DRJSON_PRETTY_PRINT);
         putchar('\n');
         return 0;
     }
@@ -89,19 +89,19 @@ int main(int argc, char** argv){
     if(qlen){
         if(argc > 3){
             DrJsonValue it = drjson_checked_query(&v, atoi(argv[3]), query, qlen);
-            drjson_print_value(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            drjson_print_value_fp(stdout, it, 0, DRJSON_PRETTY_PRINT);
             putchar('\n');
             return 0;
         }
         DrJsonValue it = drjson_query(&v, query, qlen);
         if(it.kind != DRJSON_ERROR){
             // printf("v%s: ", query);
-            drjson_print_value(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            drjson_print_value_fp(stdout, it, 0, DRJSON_PRETTY_PRINT);
             putchar('\n');
         }
         else {
             it = drjson_multi_query(&ctx.allocator, &v, query, qlen);
-            drjson_print_value(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            drjson_print_value_fp(stdout, it, 0, DRJSON_PRETTY_PRINT);
             putchar('\n');
         }
     }
@@ -133,7 +133,7 @@ write_foo_bar_baz_to_fp(const char* json, size_t length, FILE* fp){
     drjson_slow_recursive_free_all(&ctx.allocator, v);
     return 2;
   }
-  int err = drjson_print_value(fp, *o.boxed, 0, DRJSON_PRETTY_PRINT);
+  int err = drjson_print_value_fp(fp, *o.boxed, 0, DRJSON_PRETTY_PRINT);
   if(err){
     // handle error
      drjson_slow_recursive_free_all(&ctx.allocator, v);

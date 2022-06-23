@@ -314,14 +314,35 @@ DRJSON_API
 int
 drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
 
-#ifndef DRJSON_NO_STDIO
-// returns negative value if an error was printed. (like fprintf, etc.)
 enum {
     DRJSON_PRETTY_PRINT = 0x1,
 };
+typedef struct DrJsonTextWriter DrJsonTextWriter;
+struct DrJsonTextWriter {
+    void*_Null_unspecified up; //user pointer
+    int (*write)(void*_Null_unspecified user_data, const void*, size_t);
+};
+
+// Returns 0 on success, 1 on error.
 DRJSON_API
 int
-drjson_print_value(FILE* fp, DrJsonValue v, int indent, unsigned flags );
+drjson_print_value(const DrJsonTextWriter* writer, DrJsonValue v, int indent, unsigned flags);
+
+#ifndef DRJSON_NO_STDIO
+// Like above, but for FILE*
+DRJSON_API
+int
+drjson_print_value_fp(FILE* fp, DrJsonValue v, int indent, unsigned flags);
+#endif
+
+#ifndef _WIN32
+DRJSON_API
+int
+drjson_print_value_fd(int fd, DrJsonValue v, int indent, unsigned flags);
+#else
+DRJSON_API
+int
+drjson_print_value_handle(HANDLE hnd, DrJsonValue v, int indent, unsigned flags);
 #endif
 
 #ifdef __clang__
