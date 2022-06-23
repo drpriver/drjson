@@ -306,6 +306,14 @@ DRJSON_API
 DrJsonValue // returns an array or an error
 drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, const char* query, size_t length);
 
+DRJSON_API
+int
+drjson_escape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char *_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
+
+DRJSON_API
+int
+drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
+
 #ifndef DRJSON_NO_STDIO
 // returns negative value if an error was printed. (like fprintf, etc.)
 enum {
