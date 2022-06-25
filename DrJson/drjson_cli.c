@@ -232,8 +232,7 @@ main(int argc, const char* const* argv){
     int err = drjson_print_value_fp(outfp, *result, 0, pretty?DRJSON_PRETTY_PRINT:0);
     if(!err)
         fputc('\n', outfp);
-    if(outfp != stdout)
-        fclose(outfp);
+    fclose(outfp);
     return err;
 }
 

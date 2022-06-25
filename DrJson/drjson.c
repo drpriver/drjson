@@ -1049,59 +1049,51 @@ typedef struct DrJsonBuffered DrJsonBuffered;
 struct DrJsonBuffered {
     const DrJsonTextWriter* writer;
     size_t cursor;
+    int errored;
     char buff[DRJSON_BUFF_SIZE];
 };
 
 static inline
-int
+void
 drjson_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v);
 
 static inline
-int
+void
 drjson_pretty_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v, int indent);
 
 static inline
-int
+void
 drjson_buff_flush(DrJsonBuffered* restrict buffer){
-    int result = buffer->writer->write(buffer->writer->up, buffer->buff, buffer->cursor);
+    if(!buffer->errored)
+        buffer->errored = buffer->writer->write(buffer->writer->up, buffer->buff, buffer->cursor);
     buffer->cursor = 0;
-    return result;
 }
 
 static inline
-int
+void
 drjson_buff_ensure_n(DrJsonBuffered* restrict buffer, size_t length){
     if(buffer->cursor + length > DRJSON_BUFF_SIZE){
-        int result = drjson_buff_flush(buffer);
-        if(result) return result;
+        drjson_buff_flush(buffer);
     }
-    return 0;
 }
 
 static inline
-int
+void
 drjson_buff_write(DrJsonBuffered* restrict buffer, const char* restrict data, size_t length){
-    {
-        int result = drjson_buff_ensure_n(buffer, length);
-        if(result) return result;
-    }
+    drjson_buff_ensure_n(buffer, length);
     if(length >= DRJSON_BUFF_SIZE){
-        int result = buffer->writer->write(buffer->writer->up, data, length);
-        return result;
+        if(!buffer->errored)
+            buffer->errored = buffer->writer->write(buffer->writer->up, data, length);
+        return;
     }
     __builtin_memcpy(buffer->buff+buffer->cursor, data, length);
     buffer->cursor += length;
-    return 0;
 }
 static inline
-int
+void
 drjson_buff_putc(DrJsonBuffered* restrict buffer, char c){
-    {
-        int result = drjson_buff_ensure_n(buffer, 1);
-        if(result) return result;
-    }
+    drjson_buff_ensure_n(buffer, 1);
     buffer->buff[buffer->cursor++] = c;
-    return 0;
 }
 
 DRJSON_API
@@ -1110,191 +1102,181 @@ drjson_print_value(const DrJsonTextWriter* restrict writer, DrJsonValue v, int i
     DrJsonBuffered buffer;
     buffer.cursor = 0;
     buffer.writer = writer;
-    int result = flags & DRJSON_PRETTY_PRINT?drjson_pretty_print_value_inner(&buffer, v, indent):drjson_print_value_inner(&buffer, v);
-    if(!result && buffer.cursor)
+    buffer.errored = 0;
+    if(flags & DRJSON_PRETTY_PRINT)
+        drjson_pretty_print_value_inner(&buffer, v, indent);
+    else
+        drjson_print_value_inner(&buffer, v);
+    if(buffer.cursor)
         drjson_buff_flush(&buffer);
-    return result;
+    return buffer.errored;
 }
 
 static inline
-int
+void
 drjson_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v){
-    int result = 0;
+    if(buffer->errored) return;
     switch(v.kind){
         case DRJSON_NUMBER:{
-            result = drjson_buff_ensure_n(buffer, 64);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 64);
             int len = fpconv_dtoa(v.number, buffer->buff+buffer->cursor);
             buffer->cursor += len;
         }break;
         case DRJSON_INTEGER:
-            result = drjson_buff_ensure_n(buffer, 64);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 64);
             buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%lld", v.integer);
             break;
         case DRJSON_UINTEGER:
-            result = drjson_buff_ensure_n(buffer, 64);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 64);
             buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%llu", v.uinteger);
             break;
         case DRJSON_STRING:
-            result = drjson_buff_putc(buffer, '"');
-            result = drjson_buff_write(buffer, v.string, v.count);
-            result = drjson_buff_putc(buffer, '"');
+            drjson_buff_putc(buffer, '"');
+            drjson_buff_write(buffer, v.string, v.count);
+            drjson_buff_putc(buffer, '"');
             break;
         case DRJSON_ARRAY:{
-            result = drjson_buff_putc(buffer, '[');
+            drjson_buff_putc(buffer, '[');
             for(size_t i = 0; i < v.count; i++){
-                result = drjson_print_value_inner(buffer, v.array_items[i]);
+                drjson_print_value_inner(buffer, v.array_items[i]);
                 if(i != v.count-1)
-                    result = drjson_buff_putc(buffer, ',');
+                    drjson_buff_putc(buffer, ',');
             }
-            result = drjson_buff_putc(buffer, ']');
+            drjson_buff_putc(buffer, ']');
         }break;
         case DRJSON_OBJECT:{
-            result = drjson_buff_putc(buffer, '{');
+            drjson_buff_putc(buffer, '{');
             int newlined = 0;
             for(size_t i = 0; i < v.capacity; i++){
                 DrJsonObjectPair* o = &v.object_items[i];
                 if(!o->key) continue;
                 if(newlined)
-                    result = drjson_buff_putc(buffer, ',');
+                    drjson_buff_putc(buffer, ',');
                 newlined = 1;
-                result = drjson_buff_putc(buffer, '"');
-                result = drjson_buff_write(buffer, o->key, o->key_length);
-                result = drjson_buff_putc(buffer, '"');
-                result = drjson_buff_putc(buffer, ':');
-                result = drjson_print_value_inner(buffer, o->value);
+                drjson_buff_putc(buffer, '"');
+                drjson_buff_write(buffer, o->key, o->key_length);
+                drjson_buff_putc(buffer, '"');
+                drjson_buff_putc(buffer, ':');
+                drjson_print_value_inner(buffer, o->value);
 
             }
-            result = drjson_buff_putc(buffer, '}');
+            drjson_buff_putc(buffer, '}');
         }break;
         case DRJSON_NULL:
-            result = drjson_buff_write(buffer, "null", 4); break;
+            drjson_buff_write(buffer, "null", 4); break;
         case DRJSON_BOOL:
             if(v.boolean)
-                result = drjson_buff_write(buffer, "true", 4);
+                drjson_buff_write(buffer, "true", 4);
             else
-                result = drjson_buff_write(buffer, "false", 5);
+                drjson_buff_write(buffer, "false", 5);
             break;
         case DRJSON_CAPSULE:
-            result = drjson_buff_ensure_n(buffer, 1024);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 1024);
             buffer->cursor += snprintf(buffer->buff+buffer->cursor, 1024, "(capsule) %p", v.capsule);
             break;
         case DRJSON_BOXED:
-            result = drjson_print_value_inner(buffer, *v.boxed);
+            drjson_print_value_inner(buffer, *v.boxed);
             break;
         case DRJSON_ERROR:
-            result = drjson_buff_ensure_n(buffer, 1024);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 1024);
             buffer->cursor += snprintf(buffer->buff+buffer->cursor, 1024, "Error: %s (Code %d): %s", drjson_get_error_name(v), drjson_get_error_code(v), v.err_mess);
             break;
     }
-    return result < 0 ? result: 0;
 }
 
 static inline
-int
+void
 drjson_pretty_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v, int indent){
-    int result = 0;
+    if(buffer->errored) return;
     switch(v.kind){
         case DRJSON_NUMBER:{
-            result = drjson_buff_ensure_n(buffer, 64);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 64);
             int len = fpconv_dtoa(v.number, buffer->buff+buffer->cursor);
             buffer->cursor += len;
         }break;
         case DRJSON_INTEGER:
-            result = drjson_buff_ensure_n(buffer, 64);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 64);
             buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%lld", v.integer);
             break;
         case DRJSON_UINTEGER:
-            result = drjson_buff_ensure_n(buffer, 64);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 64);
             buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%llu", v.uinteger);
             break;
         case DRJSON_STRING:
-            result = drjson_buff_putc(buffer, '"');
-            result = drjson_buff_write(buffer, v.string, v.count);
-            result = drjson_buff_putc(buffer, '"');
+            drjson_buff_putc(buffer, '"');
+            drjson_buff_write(buffer, v.string, v.count);
+            drjson_buff_putc(buffer, '"');
             break;
         case DRJSON_ARRAY:{
-            result = drjson_buff_putc(buffer, '[');
+            drjson_buff_putc(buffer, '[');
             int newlined = 0;
             if(v.count && !drjson_is_numeric(v.array_items[0])){
-                result = drjson_buff_putc(buffer, '\n');
+                drjson_buff_putc(buffer, '\n');
                 newlined = 1;
             }
             for(size_t i = 0; i < v.count; i++){
                 if(newlined)
                     for(int i = 0; i < indent+2; i++)
-                        result = drjson_buff_putc(buffer, ' ');
-                result = drjson_pretty_print_value_inner(buffer, v.array_items[i], indent+2);
+                        drjson_buff_putc(buffer, ' ');
+                drjson_pretty_print_value_inner(buffer, v.array_items[i], indent+2);
                 if(i != v.count-1)
-                    result = drjson_buff_putc(buffer, ',');
-                if(newlined){
-                    result = drjson_buff_putc(buffer, '\n');
-                }
+                    drjson_buff_putc(buffer, ',');
+                if(newlined)
+                    drjson_buff_putc(buffer, '\n');
             }
             if(newlined){
                 for(int i = 0; i < indent; i++)
-                    result = drjson_buff_putc(buffer, ' ');
+                    drjson_buff_putc(buffer, ' ');
             }
-            result = drjson_buff_putc(buffer, ']');
+            drjson_buff_putc(buffer, ']');
         }break;
         case DRJSON_OBJECT:{
-            result = drjson_buff_putc(buffer, '{');
+            drjson_buff_putc(buffer, '{');
             int newlined = 0;
             for(size_t i = 0; i < v.capacity; i++){
                 DrJsonObjectPair* o = &v.object_items[i];
                 if(!o->key) continue;
                 if(newlined)
-                    result = drjson_buff_putc(buffer, ',');
-                result = drjson_buff_putc(buffer, '\n');
+                    drjson_buff_putc(buffer, ',');
+                drjson_buff_putc(buffer, '\n');
                 newlined = 1;
                 for(int ind = 0; ind < indent+2; ind++)
-                    result = drjson_buff_putc(buffer, ' ');
+                    drjson_buff_putc(buffer, ' ');
 
-                result = drjson_buff_putc(buffer, '"');
-                result = drjson_buff_write(buffer, o->key, o->key_length);
-                result = drjson_buff_putc(buffer, '"');
-                result = drjson_buff_putc(buffer, ':');
-                result = drjson_buff_putc(buffer, ' ');
-                result = drjson_pretty_print_value_inner(buffer, o->value, indent+2);
-
+                drjson_buff_putc(buffer, '"');
+                drjson_buff_write(buffer, o->key, o->key_length);
+                drjson_buff_putc(buffer, '"');
+                drjson_buff_putc(buffer, ':');
+                drjson_buff_putc(buffer, ' ');
+                drjson_pretty_print_value_inner(buffer, o->value, indent+2);
             }
             if(newlined) {
-                result = drjson_buff_putc(buffer, '\n');
+                drjson_buff_putc(buffer, '\n');
                 for(int i = 0; i < indent; i++)
-                    result = drjson_buff_putc(buffer, ' ');
+                    drjson_buff_putc(buffer, ' ');
             }
-            result = drjson_buff_putc(buffer, '}');
+            drjson_buff_putc(buffer, '}');
         }break;
         case DRJSON_NULL:
-            result = drjson_buff_write(buffer, "null", 4); break;
+            drjson_buff_write(buffer, "null", 4); break;
         case DRJSON_BOOL:
             if(v.boolean)
-                result = drjson_buff_write(buffer, "true", 4);
+                drjson_buff_write(buffer, "true", 4);
             else
-                result = drjson_buff_write(buffer, "false", 5);
+                drjson_buff_write(buffer, "false", 5);
             break;
         case DRJSON_CAPSULE:
-            result = drjson_buff_ensure_n(buffer, 1024);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 1024);
             buffer->cursor += snprintf(buffer->buff+buffer->cursor, 1024, "(capsule) %p", v.capsule);
             break;
         case DRJSON_BOXED:
-            result = drjson_pretty_print_value_inner(buffer, *v.boxed, indent);
+            drjson_pretty_print_value_inner(buffer, *v.boxed, indent);
             break;
         case DRJSON_ERROR:
-            result = drjson_buff_ensure_n(buffer, 1024);
-            if(result) return result;
+            drjson_buff_ensure_n(buffer, 1024);
             buffer->cursor += snprintf(buffer->buff+buffer->cursor, 1024, "Error: %s (Code %d): %s", drjson_get_error_name(v), drjson_get_error_code(v), v.err_mess);
             break;
     }
-    return result < 0 ? result: 0;
 }
 
 DRJSON_API
