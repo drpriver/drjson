@@ -251,7 +251,11 @@ DrJsonValue
 drjson_make_string_copy(const DrJsonAllocator* allocator, const char* s, size_t length){
     char* string = allocator->alloc(allocator->user_pointer, length);
     if(!string) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate storage for string");
+#if defined(__clang__) || defined(__GNUC__)
+    __builtin_memcpy(string, s, length);
+#else
     memcpy(string, s, length);
+#endif
     return (DrJsonValue){.kind=DRJSON_STRING, .count=length, .allocated=1, .string=string};
 }
 
