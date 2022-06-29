@@ -265,7 +265,15 @@ drjson_parse(DrJsonParseContext* ctx);
 
 DRJSON_API
 DrJsonValue
+drjson_parse_string(DrJsonAllocator allocator, const char* text, size_t length);
+
+DRJSON_API
+DrJsonValue
 drjson_parse_braceless_object(DrJsonParseContext* ctx);
+
+DRJSON_API
+DrJsonValue
+drjson_parse_braceless_string(DrJsonAllocator allocator, const char* text, size_t length);
 
 DRJSON_API
 uint32_t
