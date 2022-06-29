@@ -610,6 +610,33 @@ drjson_parse(DrJsonParseContext* ctx){
     ctx->depth--;
     return result;
 }
+
+DRJSON_API
+DrJsonValue
+drjson_parse_string(DrJsonAllocator allocator, const char* text, size_t length){
+    DrJsonParseContext ctx = {
+        .allocator = allocator,
+        .begin = text,
+        .cursor = text,
+        .end = text+length,
+        .depth = 0,
+    };
+    return drjson_parse(&ctx);
+}
+
+DRJSON_API
+DrJsonValue
+drjson_parse_braceless_string(DrJsonAllocator allocator, const char* text, size_t length){
+    DrJsonParseContext ctx = {
+        .allocator = allocator,
+        .begin = text,
+        .cursor = text,
+        .end = text+length,
+        .depth = 0,
+    };
+    return drjson_parse_braceless_object(&ctx);
+}
+
 DRJSON_API
 DrJsonValue
 drjson_parse_braceless_object(DrJsonParseContext* ctx){

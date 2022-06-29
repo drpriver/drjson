@@ -191,15 +191,10 @@ main(int argc, const char* const* argv){
     else {
         jsonstr = read_file_streamed(stdin);
     }
-    DrJsonParseContext ctx = {
-        .begin = jsonstr.text,
-        .cursor = jsonstr.text,
-        .end = jsonstr.text+jsonstr.length,
-        .allocator = drjson_stdc_allocator(),
-    };
+    DrJsonAllocator allocator = drjson_stdc_allocator();
     DrJsonValue document = braceless?
-        drjson_parse_braceless_object(&ctx):
-        drjson_parse(&ctx);
+        drjson_parse_braceless_string(allocator, jsonstr.text, jsonstr.length):
+        drjson_parse_string(allocator, jsonstr.text, jsonstr.length);
     if(document.kind == DRJSON_ERROR){
         drjson_print_value_fp(stderr, document, 0, DRJSON_PRETTY_PRINT);
         fputc('\n', stderr);
@@ -210,7 +205,7 @@ main(int argc, const char* const* argv){
     DrJsonValue query_results[100];
     if(nqueries){
         for(int i = 0; i < nqueries; i++){
-            DrJsonValue qresult = drjson_multi_query(&ctx.allocator, result, queries[i].text, queries[i].length);
+            DrJsonValue qresult = drjson_multi_query(&allocator, result, queries[i].text, queries[i].length);
             if(qresult.kind == DRJSON_ERROR){
                 fprintf(stderr, "Error when evaluating the %dth query ('%s'):", i, queries[i].text);
                 drjson_print_value_fp(stderr, qresult, 0, DRJSON_PRETTY_PRINT);
