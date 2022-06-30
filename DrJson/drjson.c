@@ -980,7 +980,6 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
         VALUES,
         // GLOB,
     };
-    int err;
     size_t begin = 0;
     size_t i = 0;
     DrJsonValue result = drjson_make_error(DRJSON_ERROR_INVALID_ERROR, "whoops");
