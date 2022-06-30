@@ -54,29 +54,30 @@ enum DrJsonKind {
 };
 
 static const char*_Nonnull const DrJsonKindNames[] = {
-    [DRJSON_NUMBER] = "number",
-    [DRJSON_INTEGER] = "integer",
+    [DRJSON_NUMBER]   = "number",
+    [DRJSON_INTEGER]  = "integer",
     [DRJSON_UINTEGER] = "uinteger",
-    [DRJSON_STRING] = "string",
-    [DRJSON_ARRAY] = "array",
-    [DRJSON_OBJECT] = "object",
-    [DRJSON_NULL] = "null",
-    [DRJSON_BOOL] = "bool",
-    [DRJSON_CAPSULE] = "capsule",
-    [DRJSON_BOXED] = "boxed",
-    [DRJSON_ERROR] = "error",
+    [DRJSON_STRING]   = "string",
+    [DRJSON_ARRAY]    = "array",
+    [DRJSON_OBJECT]   = "object",
+    [DRJSON_NULL]     = "null",
+    [DRJSON_BOOL]     = "bool",
+    [DRJSON_CAPSULE]  = "capsule",
+    [DRJSON_BOXED]    = "boxed",
+    [DRJSON_ERROR]    = "error",
 };
 
 enum DrJsonErrorCode {
-    DRJSON_ERROR_NONE = 0,
+    DRJSON_ERROR_NONE           = 0,
     DRJSON_ERROR_UNEXPECTED_EOF = 1,
-    DRJSON_ERROR_ALLOC_FAILURE = 2,
-    DRJSON_ERROR_MISSING_KEY = 3,
-    DRJSON_ERROR_INDEX_ERROR = 4,
-    DRJSON_ERROR_INVALID_CHAR = 5,
-    DRJSON_ERROR_INVALID_VALUE = 6,
-    DRJSON_ERROR_TOO_DEEP = 7,
-    DRJSON_ERROR_INVALID_ERROR = 8,
+    DRJSON_ERROR_ALLOC_FAILURE  = 2,
+    DRJSON_ERROR_MISSING_KEY    = 3,
+    DRJSON_ERROR_INDEX_ERROR    = 4,
+    DRJSON_ERROR_INVALID_CHAR   = 5,
+    DRJSON_ERROR_INVALID_VALUE  = 6,
+    DRJSON_ERROR_TOO_DEEP       = 7,
+    DRJSON_ERROR_TYPE_ERROR     = 8,
+    DRJSON_ERROR_INVALID_ERROR  = 9,
 };
 
 static const char*_Nonnull const DrJsonErrorNames[] = {
@@ -88,11 +89,11 @@ static const char*_Nonnull const DrJsonErrorNames[] = {
     [DRJSON_ERROR_INVALID_CHAR]   = "Invalid Char",
     [DRJSON_ERROR_INVALID_VALUE]  = "Invalid Value",
     [DRJSON_ERROR_TOO_DEEP]       = "Too Many Levels of Nesting",
+    [DRJSON_ERROR_TYPE_ERROR]     = "Invalid type for operation",
     [DRJSON_ERROR_INVALID_ERROR]  = "Error is Invalid",
 };
 
 typedef struct DrJsonValue DrJsonValue;
-typedef struct DrJsonObjectPair DrJsonObjectPair;
 struct DrJsonValue {
     uint64_t kind:4;
     uint64_t count: 29;
@@ -105,7 +106,7 @@ struct DrJsonValue {
         uint64_t uinteger;
         const char* string; // not nul-terminated, use count.
         DrJsonValue* array_items; // count is how many there are, capacity is length of the allocation
-        DrJsonObjectPair* object_items;
+        void* object_items;
         const char* err_mess; // pointer to a c-string literal, nul terminated,
                               // but count is also its length
         _Bool boolean;
@@ -115,6 +116,48 @@ struct DrJsonValue {
     };
 };
 
+// shallow equality (although it does compare strings)
+static inline 
+int
+drjson_eq(DrJsonValue a, DrJsonValue b){
+    if(a.kind != b.kind) return 0;
+    switch(a.kind){
+        case DRJSON_NUMBER:
+            return a.number == b.number;
+        case DRJSON_INTEGER:
+            return a.integer == b.integer;
+        case DRJSON_UINTEGER:
+            return a.uinteger == b.uinteger;
+        case DRJSON_STRING:
+            if(a.count != b.count)
+                return 0;
+            return memcmp(a.string, b.string, a.count) == 0;
+        case DRJSON_ARRAY:
+            return a.array_items == b.array_items;
+        case DRJSON_OBJECT:
+            return a.object_items == b.object_items;
+        case DRJSON_NULL:
+            return 1;
+        case DRJSON_BOOL:
+            return a.boolean == b.boolean;
+        case DRJSON_CAPSULE:
+            return a.capsule == b.capsule;
+        case DRJSON_BOXED:
+            return a.boxed == b.boxed;
+        case DRJSON_ERROR:
+            return a.capacity == b.capacity;
+        default:
+            return 0;
+    }
+}
+
+static inline
+DrJsonValue*
+djrson_debox(DrJsonValue* v){
+    while(v->kind == DRJSON_BOXED)
+        v = v->boxed;
+    return v;
+}
 static inline
 enum DrJsonErrorCode
 drjson_get_error_code(DrJsonValue v){
@@ -136,18 +179,8 @@ drjson_is_numeric(DrJsonValue v){
     return v.kind == DRJSON_NUMBER || v.kind == DRJSON_INTEGER || v.kind == DRJSON_UINTEGER;
 }
 
-struct DrJsonObjectPair {
-    uint32_t key_length: 31;
-    uint32_t key_allocated: 1;
-    uint32_t key_hash;
-    const char* key;
-    DrJsonValue value;
-};
-
-
 typedef struct DrJsonAllocator DrJsonAllocator;
 struct DrJsonAllocator {
-    // NOTE: if these functions are NULL, malloc, realloc and free from libc will be used.
     void*_Nullable user_pointer;
     void*_Nullable (*_Nonnull alloc)(void*_Null_unspecified user_pointer, size_t size);
     void*_Nullable (*_Nonnull realloc)(void*_Null_unspecified user_pointer, void*_Nullable old_pointer, size_t old_size, size_t new_size);
@@ -213,17 +246,44 @@ drjson_make_capsule(void* p){
 static inline
 DrJsonValue
 drjson_make_box(DrJsonValue* p){
-    return (DrJsonValue){.kind=DRJSON_BOXED, .capsule=p};
+    return (DrJsonValue){.kind=DRJSON_BOXED, .boxed=p};
 }
 
 static inline
+size_t 
+drjson_size_for_object_of_length(size_t length){
+    size_t size = length*5*sizeof(void*);
+    return size;
+}
+static inline
 DrJsonValue
 drjson_make_object(const DrJsonAllocator* allocator, size_t initial_length){
-    DrJsonObjectPair* items = allocator->alloc(allocator->user_pointer, initial_length*sizeof(*items));
-    if(!items) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE,
-        "Failed to allocate memory for object");
+    size_t size = drjson_size_for_object_of_length(initial_length);
+    void* items = NULL;
+    if(size){
+        items = allocator->alloc(allocator->user_pointer, size);
+        if(!items) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE,
+            "Failed to allocate memory for object");
+        __builtin_memset(items, 0, size);
+    }
     return (DrJsonValue){.kind=DRJSON_OBJECT, .count=0, .capacity=initial_length, .object_items=items, .allocated=1};
 }
+
+// returns an array or error
+DRJSON_API
+DrJsonValue
+drjson_object_keys(const DrJsonAllocator* allocator, DrJsonValue object);
+
+// returns an array or error
+DRJSON_API
+DrJsonValue
+drjson_object_values(const DrJsonAllocator* allocator, DrJsonValue object);
+
+// returns an array or error
+// They array is a flat array of alternating key value.
+DRJSON_API
+DrJsonValue
+drjson_object_items(const DrJsonAllocator* allocator, DrJsonValue object);
 
 #define drjson_make(x) _Generic(x, \
         int64_t: drjson_make_int, \
@@ -296,6 +356,18 @@ drjson_object_set_item_no_copy_key(const DrJsonAllocator* allocator, DrJsonValue
 DRJSON_API
 int // 0 on success
 drjson_array_push_item(const DrJsonAllocator* allocator, DrJsonValue* array, DrJsonValue item);
+
+DRJSON_API
+DrJsonValue // returns DRJSON_ERROR if array is empty
+drjson_array_pop_item(DrJsonValue* array);
+
+DRJSON_API
+DrJsonValue // returns DRJSON_ERROR if array is empty
+drjson_array_del_item(DrJsonValue* array, size_t idx);
+
+DRJSON_API
+int // 0 on success
+drjson_array_insert_item(const DrJsonAllocator* allocator, DrJsonValue* array, size_t idx, DrJsonValue item);
 
 DRJSON_API
 DrJsonAllocator

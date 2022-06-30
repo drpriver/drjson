@@ -128,7 +128,8 @@ main(int argc, const char* const* argv){
             .help = "Don't require opening and closing braces around the document",
         },
         {
-            .name = SV("--pretty"),
+            .name = SV("-p"),
+            .altname1 = SV("--pretty"),
             .dest = ARGDEST(&pretty),
             .help = "Pretty print the output",
         },
