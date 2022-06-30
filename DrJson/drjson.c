@@ -1280,11 +1280,11 @@ drjson_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v){
         }break;
         case DRJSON_INTEGER:
             drjson_buff_ensure_n(buffer, 64);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%lld", v.integer);
+            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%lld", (long long)v.integer);
             break;
         case DRJSON_UINTEGER:
             drjson_buff_ensure_n(buffer, 64);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%llu", v.uinteger);
+            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%llu", (unsigned long long)v.uinteger);
             break;
         case DRJSON_STRING:
             drjson_buff_putc(buffer, '"');
@@ -1352,11 +1352,11 @@ drjson_pretty_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v, 
         }break;
         case DRJSON_INTEGER:
             drjson_buff_ensure_n(buffer, 64);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%lld", v.integer);
+            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%lld", (long long)v.integer);
             break;
         case DRJSON_UINTEGER:
             drjson_buff_ensure_n(buffer, 64);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%llu", v.uinteger);
+            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%llu", (unsigned long long)v.uinteger);
             break;
         case DRJSON_STRING:
             drjson_buff_putc(buffer, '"');
