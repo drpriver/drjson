@@ -93,6 +93,19 @@ static const char*_Nonnull const DrJsonErrorNames[] = {
     [DRJSON_ERROR_INVALID_ERROR]  = "Error is Invalid",
 };
 
+static const size_t DrJsonErrorNameLengths[] = {
+    [DRJSON_ERROR_NONE]           = sizeof("No error")-1,
+    [DRJSON_ERROR_UNEXPECTED_EOF] = sizeof("Unexpected End of Input")-1,
+    [DRJSON_ERROR_ALLOC_FAILURE]  = sizeof("Allocation Failure")-1,
+    [DRJSON_ERROR_MISSING_KEY]    = sizeof("Missing Key")-1,
+    [DRJSON_ERROR_INDEX_ERROR]    = sizeof("Index Error")-1,
+    [DRJSON_ERROR_INVALID_CHAR]   = sizeof("Invalid Char")-1,
+    [DRJSON_ERROR_INVALID_VALUE]  = sizeof("Invalid Value")-1,
+    [DRJSON_ERROR_TOO_DEEP]       = sizeof("Too Many Levels of Nesting")-1,
+    [DRJSON_ERROR_TYPE_ERROR]     = sizeof("Invalid type for operation")-1,
+    [DRJSON_ERROR_INVALID_ERROR]  = sizeof("Error is Invalid")-1,
+};
+
 typedef struct DrJsonValue DrJsonValue;
 struct DrJsonValue {
     uint64_t kind:4;
@@ -171,6 +184,11 @@ static inline
 const char*
 drjson_get_error_name(DrJsonValue v){
     return DrJsonErrorNames[drjson_get_error_code(v)];
+}
+static inline
+size_t
+drjson_get_error_name_length(DrJsonValue v){
+    return DrJsonErrorNameLengths[drjson_get_error_code(v)];
 }
 
 static inline

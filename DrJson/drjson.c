@@ -30,6 +30,7 @@
 #endif
 
 #include "drjson.h"
+#include "drjson_itoa.h"
 #include "hash_func.h"
 #include "bit_util.h"
 #define PARSE_NUMBER_PARSE_FLOATS 1
@@ -1246,6 +1247,8 @@ drjson_buff_write(DrJsonBuffered* restrict buffer, const char* restrict data, si
     __builtin_memcpy(buffer->buff+buffer->cursor, data, length);
     buffer->cursor += length;
 }
+
+#define drjson_buff_write_lit(b, lit) drjson_buff_write(b, "" lit, sizeof(lit)-1)
 static inline
 void
 drjson_buff_putc(DrJsonBuffered* restrict buffer, char c){
@@ -1275,17 +1278,17 @@ drjson_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v){
     if(buffer->errored) return;
     switch(v.kind){
         case DRJSON_NUMBER:{
-            drjson_buff_ensure_n(buffer, 64);
+            drjson_buff_ensure_n(buffer, 24);
             int len = fpconv_dtoa(v.number, buffer->buff+buffer->cursor);
             buffer->cursor += len;
         }break;
         case DRJSON_INTEGER:
-            drjson_buff_ensure_n(buffer, 64);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%lld", (long long)v.integer);
+            drjson_buff_ensure_n(buffer, 20);
+            buffer->cursor += drjson_int64_to_ascii(buffer->buff+buffer->cursor, v.integer);
             break;
         case DRJSON_UINTEGER:
-            drjson_buff_ensure_n(buffer, 64);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%llu", (unsigned long long)v.uinteger);
+            drjson_buff_ensure_n(buffer, 20);
+            buffer->cursor += drjson_uint64_to_ascii(buffer->buff+buffer->cursor, v.uinteger);
             break;
         case DRJSON_STRING:
             drjson_buff_putc(buffer, '"');
@@ -1320,23 +1323,29 @@ drjson_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v){
             drjson_buff_putc(buffer, '}');
         }break;
         case DRJSON_NULL:
-            drjson_buff_write(buffer, "null", 4); break;
+            drjson_buff_write_lit(buffer, "null"); break;
         case DRJSON_BOOL:
             if(v.boolean)
-                drjson_buff_write(buffer, "true", 4);
+                drjson_buff_write_lit(buffer, "true");
             else
-                drjson_buff_write(buffer, "false", 5);
+                drjson_buff_write_lit(buffer, "false");
             break;
         case DRJSON_CAPSULE:
-            drjson_buff_ensure_n(buffer, 1024);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 1024, "(capsule) %p", v.capsule);
+            drjson_buff_write_lit(buffer, "(capsule) 0x");
+            drjson_buff_ensure_n(buffer, 20);
+            buffer->cursor += drjson_uint64_to_ascii(buffer->buff+buffer->cursor, (uint64_t)v.capsule);
             break;
         case DRJSON_BOXED:
             drjson_print_value_inner(buffer, *v.boxed);
             break;
         case DRJSON_ERROR:
-            drjson_buff_ensure_n(buffer, 1024);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 1024, "Error: %s (Code %d): %s", drjson_get_error_name(v), drjson_get_error_code(v), v.err_mess);
+            drjson_buff_write_lit(buffer, "Error: ");
+            drjson_buff_write(buffer, drjson_get_error_name(v), drjson_get_error_name_length(v));
+            drjson_buff_write_lit(buffer, "(Code ");
+            drjson_buff_ensure_n(buffer, 20);
+            buffer->cursor += drjson_int64_to_ascii(buffer->buff+buffer->cursor, drjson_get_error_code(v));
+            drjson_buff_write_lit(buffer, "): ");
+            drjson_buff_write(buffer, v.err_mess, v.count);
             break;
     }
 }
@@ -1347,17 +1356,17 @@ drjson_pretty_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v, 
     if(buffer->errored) return;
     switch(v.kind){
         case DRJSON_NUMBER:{
-            drjson_buff_ensure_n(buffer, 64);
+            drjson_buff_ensure_n(buffer, 24);
             int len = fpconv_dtoa(v.number, buffer->buff+buffer->cursor);
             buffer->cursor += len;
         }break;
         case DRJSON_INTEGER:
-            drjson_buff_ensure_n(buffer, 64);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%lld", (long long)v.integer);
+            drjson_buff_ensure_n(buffer, 20);
+            buffer->cursor += drjson_int64_to_ascii(buffer->buff+buffer->cursor, v.integer);
             break;
         case DRJSON_UINTEGER:
-            drjson_buff_ensure_n(buffer, 64);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 64, "%llu", (unsigned long long)v.uinteger);
+            drjson_buff_ensure_n(buffer, 20);
+            buffer->cursor += drjson_uint64_to_ascii(buffer->buff+buffer->cursor, v.uinteger);
             break;
         case DRJSON_STRING:
             drjson_buff_putc(buffer, '"');
@@ -1416,23 +1425,29 @@ drjson_pretty_print_value_inner(DrJsonBuffered* restrict buffer, DrJsonValue v, 
             drjson_buff_putc(buffer, '}');
         }break;
         case DRJSON_NULL:
-            drjson_buff_write(buffer, "null", 4); break;
+            drjson_buff_write_lit(buffer, "null"); break;
         case DRJSON_BOOL:
             if(v.boolean)
-                drjson_buff_write(buffer, "true", 4);
+                drjson_buff_write_lit(buffer, "true");
             else
-                drjson_buff_write(buffer, "false", 5);
+                drjson_buff_write_lit(buffer, "false");
             break;
         case DRJSON_CAPSULE:
-            drjson_buff_ensure_n(buffer, 1024);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 1024, "(capsule) %p", v.capsule);
+            drjson_buff_write_lit(buffer, "(capsule) 0x");
+            drjson_buff_ensure_n(buffer, 20);
+            buffer->cursor += drjson_uint64_to_ascii(buffer->buff+buffer->cursor, (uint64_t)v.capsule);
             break;
         case DRJSON_BOXED:
             drjson_pretty_print_value_inner(buffer, *v.boxed, indent);
             break;
         case DRJSON_ERROR:
-            drjson_buff_ensure_n(buffer, 1024);
-            buffer->cursor += snprintf(buffer->buff+buffer->cursor, 1024, "Error: %s (Code %d): %s", drjson_get_error_name(v), drjson_get_error_code(v), v.err_mess);
+            drjson_buff_write_lit(buffer, "Error: ");
+            drjson_buff_write(buffer, drjson_get_error_name(v), drjson_get_error_name_length(v));
+            drjson_buff_write_lit(buffer, "(Code ");
+            drjson_buff_ensure_n(buffer, 20);
+            buffer->cursor += drjson_int64_to_ascii(buffer->buff+buffer->cursor, drjson_get_error_code(v));
+            drjson_buff_write_lit(buffer, "): ");
+            drjson_buff_write(buffer, v.err_mess, v.count);
             break;
     }
 }
