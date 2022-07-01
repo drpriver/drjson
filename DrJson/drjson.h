@@ -317,6 +317,12 @@ drjson_make_array(const DrJsonAllocator* allocator, size_t initial_length){
     return (DrJsonValue){.kind=DRJSON_ARRAY, .count=0, .capacity=initial_length, .array_items=items, .allocated=1};
 }
 
+static inline
+DrJsonValue
+drjson_make_array_view(DrJsonValue* values, size_t length){
+    return (DrJsonValue){.kind=DRJSON_ARRAY, .count=length, .capacity=length, .array_items=values, .allocated=0};
+}
+
 // NOTE:
 // The string needs to be one that does not need to be escaped.
 static inline

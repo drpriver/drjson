@@ -1267,6 +1267,8 @@ drjson_print_value(const DrJsonTextWriter* restrict writer, DrJsonValue v, int i
         drjson_pretty_print_value_inner(&buffer, v, indent);
     else
         drjson_print_value_inner(&buffer, v);
+    if(flags & DRJSON_APPEND_NEWLINE)
+        drjson_buff_putc(&buffer, '\n');
     if(buffer.cursor)
         drjson_buff_flush(&buffer);
     return buffer.errored;
