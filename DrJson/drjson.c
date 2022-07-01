@@ -892,7 +892,7 @@ drjson_object_get_item(DrJsonValue object, const char* key, size_t keylen, uint3
         DrJsonHashIndex hi = his[idx];
         if(!hi.hash) return NULL;
         if(hi.hash == hash){
-            DrJsonObjectPair* o = &pairs[idx];
+            DrJsonObjectPair* o = &pairs[hi.index];
             if(o->key.count == keylen && memcmp(o->key.string, key, keylen) == 0){
                 return &o->value;
             }
