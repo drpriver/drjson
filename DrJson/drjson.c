@@ -820,7 +820,7 @@ drjson_object_set_item(const DrJsonAllocator* allocator, DrJsonValue* object, co
             for(size_t i = 0; i < old_cap; i++){
                 DrJsonHashIndex hi = oldhi[i];
                 if(!hi.hash) continue;
-                size_t idx = hi.hash % new_cap;
+                uint32_t idx = fast_reduce32(hi.hash, new_cap);
                 while(newhi[idx].hash){
                     idx++;
                     if(idx >= new_cap) idx = 0;
@@ -832,8 +832,8 @@ drjson_object_set_item(const DrJsonAllocator* allocator, DrJsonValue* object, co
             object->capacity = new_cap;
         }
     }
-    size_t cap = object->capacity;
-    size_t idx = hash % cap;
+    uint32_t cap = object->capacity;
+    uint32_t idx = fast_reduce32(hash, cap);
     DrJsonHashIndex* his = object->object_items;
     DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*cap);
     for(;;){
@@ -884,8 +884,8 @@ drjson_object_get_item(DrJsonValue object, const char* key, size_t keylen, uint3
     if(object.kind != DRJSON_OBJECT) return NULL;
     if(!object.capacity)
         return NULL;
-    size_t cap = object.capacity;
-    size_t idx = hash % cap;
+    uint32_t cap = object.capacity;
+    uint32_t idx = fast_reduce32(hash, cap);
     DrJsonHashIndex* his = object.object_items;
     DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object.object_items)+sizeof(DrJsonHashIndex)*cap);
     for(;;){
