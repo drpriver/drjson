@@ -417,7 +417,8 @@ int
 drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
 
 enum {
-    DRJSON_PRETTY_PRINT = 0x1,
+    DRJSON_PRETTY_PRINT   = 0x1,
+    DRJSON_APPEND_NEWLINE = 0x2,
 };
 typedef struct DrJsonTextWriter DrJsonTextWriter;
 struct DrJsonTextWriter {
