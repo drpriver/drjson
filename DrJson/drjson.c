@@ -34,6 +34,7 @@
 #include "bit_util.h"
 #define PARSE_NUMBER_PARSE_FLOATS 1
 #include "parse_numbers.h"
+#define FPCONV_API static inline
 #include "fpconv/src/fpconv.h"
 
 #ifdef __clang__
