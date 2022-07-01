@@ -309,7 +309,7 @@ static int filter_special(double fp, char* dest)
 
     return 3;
 }
-
+FPCONV_API
 int fpconv_dtoa(double d, char* dest/*[24]*/)
 {
     char digits[18];

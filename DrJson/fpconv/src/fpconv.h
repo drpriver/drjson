@@ -34,7 +34,7 @@
  *
  */
 
-
+FPCONV_API
 int fpconv_dtoa(double fp, char* dest/*[24]*/);
 
 #ifdef __clang__
