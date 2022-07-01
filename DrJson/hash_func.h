@@ -231,6 +231,14 @@ hash_align8(const void* key, size_t len){
 
 #endif
 
+// This is faster than modulo if you just need to bring
+// a into the range of [0, b) and a is already well
+// distributed.
+static inline
+uint32_t fast_reduce32(uint32_t a, uint32_t b){
+    return ((uint64_t)a * (uint64_t)b) >> 32;
+}
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
