@@ -18,7 +18,7 @@ Bin/libdrjson.$(DRJSONVERSION).dylib: DrJson/drjson.c | Bin Deps
 Bin/drjson.o: DrJson/drjson.c | Bin Deps
 	$(CC) -c $< -o $@ -MT $@ -MD -MP -MF Deps/drjson.dep  $(OPT) $(DEBUG)
 
-Bin/demo: Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).dylib
+Bin/demo: Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).dylib | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).dylib -fvisibility=hidden -I.
 
 
@@ -32,11 +32,11 @@ clean:
 	rm -rf Bin/*
 
 
-Bin/drjson_fuzz: DrJson/drjson_fuzz.c
+Bin/drjson_fuzz: DrJson/drjson_fuzz.c | Bin Deps
 	clang -O0 -g $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_fuzz.dep -fsanitize=fuzzer,address,undefined
 
 .PHONY: fuzz
-fuzz: Bin/drjson_fuzz | Fuzz
+fuzz: Bin/drjson_fuzz | Fuzz Deps
 	$< Fuzz -fork=4
 
 .PHONY: all

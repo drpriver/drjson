@@ -188,10 +188,17 @@ skip_whitespace(DrJsonParseContext* ctx){
     else if(*cursor == '*'){
         cursor++;
         for(;;){
-            const char* p = memchr(cursor, '*', cursor-end);
+            const char* p = memchr(cursor, '*', end-cursor);
             if(p && p != end && p+1 != end && p[1] == '/'){
                 cursor = p+2;
                 goto strip;
+            }
+            if(p){
+                cursor = p + 1;
+            }
+            else {
+                cursor = end;
+                goto end;
             }
         }
     }
@@ -205,6 +212,8 @@ force_inline
 static inline
 _Bool
 match(DrJsonParseContext* ctx, char c){
+    if(ctx->cursor == ctx->end)
+        return 0;
     if(*ctx->cursor != c)
         return 0;
     ctx->cursor++;

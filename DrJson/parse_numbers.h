@@ -212,6 +212,10 @@ parse_uint64(const char* str, size_t length){
         str++;
         length--;
     }
+    if(!length){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
+    }
     // UINT64_MAX is 18,446,744,073,709,551,615 (20 characters)
     if(length > 20){
         result.errored = PARSENUMBER_OVERFLOWED_VALUE;
@@ -271,6 +275,10 @@ parse_int64(const char* str, size_t length){
     else if(*str == '+'){
         str++;
         length--;
+    }
+    if(!length){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
     }
     // INT64_MAX is 9223372036854775807 (19 characters)
     if(length > 19){
@@ -339,6 +347,10 @@ parse_uint32(const char*str, size_t length){
         str++;
         length--;
     }
+    if(!length){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
+    }
     // UINT32_MAX is 10 characters
     if(length > 10){
         result.errored = PARSENUMBER_OVERFLOWED_VALUE;
@@ -397,6 +409,10 @@ parse_int32(const char*str, size_t length){
     else if (*str == '+'){
         str++;
         length--;
+    }
+    if(!length){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
     }
     // INT32_max is 10 chars
     if(length > 10){
