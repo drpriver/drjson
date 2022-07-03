@@ -1,5 +1,6 @@
 Bin: ; mkdir -p $@
 Deps: ; mkdir -p $@
+Fuzz: ; mkdir -p $@
 DEBUG=
 OPT=-O3
 
@@ -29,6 +30,15 @@ Bin/drjson: DrJson/drjson_cli.c Bin/libdrjson.$(DRJSONVERSION).dylib
 .PHONY: clean
 clean:
 	rm -rf Bin/*
+
+
+Bin/drjson_fuzz: DrJson/drjson_fuzz.c
+	clang -O0 -g $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_fuzz.dep -fsanitize=fuzzer,address,undefined
+
+.PHONY: fuzz
+fuzz: Bin/drjson_fuzz | Fuzz
+	$< Fuzz -fork=4
+
 .PHONY: all
 all: Bin/libdrjson.a Bin/libdrjson.$(DRJSONVERSION).dylib Bin/drjson Bin/drjson.o Bin/demo
 
