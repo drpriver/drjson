@@ -1,3 +1,6 @@
+//
+// Copyright © 2022, David Priver
+//
 #ifndef DRJSON_H
 #define DRJSON_H
 #include <stddef.h> // size_t

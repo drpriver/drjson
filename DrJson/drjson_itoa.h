@@ -1,3 +1,6 @@
+//
+// Copyright © 2022, David Priver
+//
 #ifndef DRJSON_ITOA_H
 #define DRJSON_ITOA_H
 #include <stdint.h>
