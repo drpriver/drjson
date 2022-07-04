@@ -1,3 +1,6 @@
+//
+// Copyright © 2022, David Priver
+//
 #ifndef PARSE_NUMBERS_H
 #define PARSE_NUMBERS_H
 // size_t

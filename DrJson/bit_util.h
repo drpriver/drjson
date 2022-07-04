@@ -1,3 +1,6 @@
+//
+// Copyright © 2022, David Priver
+//
 #ifndef BIT_UTIL_H
 #define BIT_UTIL_H
 #include <stdint.h>

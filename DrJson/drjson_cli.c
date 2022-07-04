@@ -1,3 +1,6 @@
+//
+// Copyright © 2022, David Priver
+//
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>

@@ -1,3 +1,6 @@
+//
+// Copyright © 2022, David Priver
+//
 #ifndef DRJSON_C
 #define DRJSON_C
 #include <stdlib.h>

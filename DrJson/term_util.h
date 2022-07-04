@@ -1,3 +1,6 @@
+//
+// Copyright © 2022, David Priver
+//
 #ifndef TERM_UTIL_H
 #define TERM_UTIL_H
 #ifdef _WIN32
