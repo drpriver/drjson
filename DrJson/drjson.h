@@ -43,17 +43,22 @@
 #endif
 
 enum DrJsonKind {
-    DRJSON_NUMBER,
-    DRJSON_INTEGER,
-    DRJSON_UINTEGER,
-    DRJSON_STRING,
-    DRJSON_ARRAY,
-    DRJSON_OBJECT,
-    DRJSON_NULL,
-    DRJSON_BOOL,
-    DRJSON_CAPSULE, // has a pointer to a C object.
-    DRJSON_BOXED, // pointer to a drjson value
-    DRJSON_ERROR,
+    DRJSON_NUMBER = 0x0,
+    DRJSON_INTEGER = 0x1,
+    DRJSON_UINTEGER = 0x2,
+    DRJSON_STRING = 0x3,
+    DRJSON_ARRAY = 0x4,
+    DRJSON_OBJECT = 0x5,
+    DRJSON_NULL = 0x6,
+    DRJSON_BOOL = 0x7,
+    DRJSON_CAPSULE = 0x8, // has a pointer to a C object. (this will probably be removed in the future)
+    DRJSON_BOXED = 0x9, // pointer to a drjson value
+    DRJSON_ERROR = 0xa,
+    // 0xb unused
+    // 0xc unused
+    // 0xd unused
+    // 0xe unused
+    // 0xf unused
 };
 
 static const char*_Nonnull const DrJsonKindNames[] = {
@@ -111,10 +116,15 @@ static const size_t DrJsonErrorNameLengths[] = {
 
 typedef struct DrJsonValue DrJsonValue;
 struct DrJsonValue {
-    uint64_t kind:4;
-    uint64_t count: 29;
-    uint64_t capacity: 29; // NOTE: this contains the error code
-    uint64_t allocated: 1;
+    union {
+        uint64_t bits;
+        struct {
+            uint64_t kind:4;
+            uint64_t count: 29;
+            uint64_t capacity: 29; // NOTE: this contains the error code
+            uint64_t allocated: 1;
+        };
+    };
     // 1 bit unused
     union {
         double number;

@@ -9,11 +9,26 @@ DRJSONVERSION=1.0.0
 DEPFILES:= $(wildcard Deps/*.dep)
 include $(DEPFILES)
 
+
+ifeq ($(OS),Windows_NT)
+DYLIB=dll
+Bin/libdrjson.$(DRJSONVERSION).dll: DrJson/drjson.c | Bin Deps
+	clang $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dll.dep -shared
+else
+UNAME := $(shell uname)
+
 Bin/libdrjson.a: Bin/drjson.o | Bin
 	ar crs $@ $^
-
+ifeq ($(UNAME),Darwin)
+DYLIB=dylib
 Bin/libdrjson.$(DRJSONVERSION).dylib: DrJson/drjson.c | Bin Deps
 	$(CC) $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dylib.dep  -Wl,-headerpad_max_install_names -Wl,-undefined,error -shared -install_name @executable_path/libdrjson.$(DRJSONVERSION).dylib -compatibility_version $(DRJSONVERSION) -current_version $(DRJSONVERSION)
+else
+DYLIB=so
+Bin/libdrjson.$(DRJSONVERSION).so: DrJson/drjson.c | Bin Deps
+	$(CC) $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.so.dep -shared
+endif
+endif
 
 Bin/drjson.o: DrJson/drjson.c | Bin Deps
 	$(CC) -c $< -o $@ -MT $@ -MD -MP -MF Deps/drjson.dep  $(OPT) $(DEBUG)
@@ -25,8 +40,8 @@ Bin/demo: Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).dylib | Bin Deps
 README.html: README.md README.css
 	pandoc README.md README.css -f markdown -o $@ -s --toc
 
-Bin/drjson: DrJson/drjson_cli.c Bin/libdrjson.$(DRJSONVERSION).dylib
-	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).dylib -fvisibility=hidden -I.
+Bin/drjson: DrJson/drjson_cli.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) -fvisibility=hidden -I.
 .PHONY: clean
 clean:
 	rm -rf Bin/*
@@ -40,6 +55,6 @@ fuzz: Bin/drjson_fuzz | Fuzz Deps
 	$< Fuzz -fork=4
 
 .PHONY: all
-all: Bin/libdrjson.a Bin/libdrjson.$(DRJSONVERSION).dylib Bin/drjson Bin/drjson.o Bin/demo
+all: Bin/libdrjson.a Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) Bin/drjson Bin/drjson.o Bin/demo
 
 .DEFAULT_GOAL:=all
