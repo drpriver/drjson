@@ -1,6 +1,9 @@
 //
 // Copyright © 2022, David Priver
 //
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS 1
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -227,6 +230,10 @@ main(int argc, const char* const* argv){
         }
     }
     int err = drjson_print_value_fp(outfp, *result, 0, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0));
+    if(err){
+        fprintf(stderr, "err when writing: %d\n", err);
+    }
+    fflush(outfp);
     fclose(outfp);
     return err;
 }

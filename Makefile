@@ -1,8 +1,8 @@
-Bin: ; mkdir -p $@
-Deps: ; mkdir -p $@
-Fuzz: ; mkdir -p $@
-DEBUG=
-OPT=-O3
+Bin: ; mkdir $@
+Deps: ; mkdir $@
+Fuzz: ; mkdir $@
+DEBUG=-g
+OPT=-O1
 
 DRJSONVERSION=1.0.0
 
@@ -11,7 +11,10 @@ include $(DEPFILES)
 
 
 ifeq ($(OS),Windows_NT)
+CC=clang
 DYLIB=dll
+DYLINK=lib
+EXE=.exe
 Bin/libdrjson.$(DRJSONVERSION).dll: DrJson/drjson.c | Bin Deps
 	clang $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dll.dep -shared
 else
@@ -19,12 +22,17 @@ UNAME := $(shell uname)
 
 Bin/libdrjson.a: Bin/drjson.o | Bin
 	ar crs $@ $^
+all: Bin/libdrjson.a 
 ifeq ($(UNAME),Darwin)
 DYLIB=dylib
+DYLINK=dylib
+EXE=
 Bin/libdrjson.$(DRJSONVERSION).dylib: DrJson/drjson.c | Bin Deps
 	$(CC) $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dylib.dep  -Wl,-headerpad_max_install_names -Wl,-undefined,error -shared -install_name @executable_path/libdrjson.$(DRJSONVERSION).dylib -compatibility_version $(DRJSONVERSION) -current_version $(DRJSONVERSION)
 else
 DYLIB=so
+DYLINK=so
+EXE=
 Bin/libdrjson.$(DRJSONVERSION).so: DrJson/drjson.c | Bin Deps
 	$(CC) $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.so.dep -shared
 endif
@@ -33,28 +41,28 @@ endif
 Bin/drjson.o: DrJson/drjson.c | Bin Deps
 	$(CC) -c $< -o $@ -MT $@ -MD -MP -MF Deps/drjson.dep  $(OPT) $(DEBUG)
 
-Bin/demo: Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).dylib | Bin Deps
-	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).dylib -fvisibility=hidden -I.
+Bin/demo$(EXE): Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).$(DYLINK) -fvisibility=hidden -I.
 
 
 README.html: README.md README.css
 	pandoc README.md README.css -f markdown -o $@ -s --toc
 
-Bin/drjson: DrJson/drjson_cli.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
-	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) -fvisibility=hidden -I.
+Bin/drjson$(EXE): DrJson/drjson_cli.c | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_cli.dep $(OPT) $(DEBUG) -fvisibility=hidden -I.
 .PHONY: clean
 clean:
-	rm -rf Bin/*
+	$(RM) Bin/*
 
 
-Bin/drjson_fuzz: DrJson/drjson_fuzz.c | Bin Deps
+Bin/drjson_fuzz$(EXE): DrJson/drjson_fuzz.c | Bin Deps
 	clang -O0 -g $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_fuzz.dep -fsanitize=fuzzer,address,undefined
 
-.PHONY: fuzz
-fuzz: Bin/drjson_fuzz | Fuzz Deps
+.PHONY: do-fuzz
+do-fuzz: Bin/drjson_fuzz | Fuzz Deps
 	$< Fuzz -fork=4
 
 .PHONY: all
-all: Bin/libdrjson.a Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) Bin/drjson Bin/drjson.o Bin/demo
+all: Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) Bin/drjson$(EXE) Bin/drjson.o Bin/demo$(EXE)
 
 .DEFAULT_GOAL:=all
