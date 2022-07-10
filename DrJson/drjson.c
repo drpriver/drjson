@@ -745,7 +745,7 @@ drjson_array_insert_item(const DrJsonAllocator* allocator, DrJsonValue* array, s
         array->allocated = 1;
     }
     size_t nmove = array->count - idx;
-    __builtin_memmove(array->array_items+idx+1, array->array_items+idx, nmove * sizeof(*array->array_items));
+    drj_memmove(array->array_items+idx+1, array->array_items+idx, nmove * sizeof(*array->array_items));
     array->array_items[idx] = item;
     array->count++;
     return 0;
@@ -773,7 +773,7 @@ drjson_array_del_item(DrJsonValue* array, size_t idx){
         return drjson_array_pop_item(array);
     size_t nmove = array->count - idx-1;
     DrJsonValue result= array->array_items[idx];
-    __builtin_memmove(array->array_items+idx, array->array_items+idx+1, nmove*sizeof(*array->array_items));
+    drj_memmove(array->array_items+idx, array->array_items+idx+1, nmove*sizeof(*array->array_items));
     array->count--;
     return result;
 }
@@ -811,7 +811,7 @@ drjson_object_set_item(const DrJsonAllocator* allocator, DrJsonValue* object, co
             size_t size = drjson_size_for_object_of_length(new_cap);
             void* p = allocator->alloc(allocator->user_pointer, size);
             if(!p) return 1;
-            __builtin_memset(p, 0, size);
+            drj_memset(p, 0, size);
             object->object_items = p;
             object->allocated = 1;
             object->capacity = new_cap;
@@ -823,12 +823,12 @@ drjson_object_set_item(const DrJsonAllocator* allocator, DrJsonValue* object, co
             if(new_cap > OBJECT_MAX) return 1;
             size_t size = drjson_size_for_object_of_length(new_cap);
             void* p = allocator->alloc(allocator->user_pointer, size);
-            __builtin_memset(p, 0, size);
+            drj_memset(p, 0, size);
             DrJsonHashIndex* oldhi = object->object_items;
             DrJsonObjectPair* oldpairs = (DrJsonObjectPair*)(((char*)object->object_items)+old_cap*sizeof(DrJsonHashIndex));
             DrJsonHashIndex* newhi = p;
             DrJsonObjectPair* newpairs = (DrJsonObjectPair*)(((char*)p)+new_cap*sizeof(DrJsonHashIndex));
-            __builtin_memcpy(newpairs, oldpairs, object->count*sizeof(*oldpairs));
+            drj_memcpy(newpairs, oldpairs, object->count*sizeof(*oldpairs));
             for(size_t i = 0; i < old_cap; i++){
                 DrJsonHashIndex hi = oldhi[i];
                 if(!hi.hash) continue;
@@ -854,7 +854,7 @@ drjson_object_set_item(const DrJsonAllocator* allocator, DrJsonValue* object, co
             if(copy){
                 char* newkey = allocator->alloc(allocator->user_pointer, keylen);
                 if(!newkey) return 1;
-                __builtin_memcpy(newkey, key, keylen);
+                drj_memcpy(newkey, key, keylen);
                 key = newkey;
             }
             size_t pidx = object->count++;
@@ -998,13 +998,13 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
     size_t i = 0;
     DrJsonValue result = drjson_make_error(DRJSON_ERROR_INVALID_ERROR, "whoops");
     DrJsonValue* o = v;
-    #define ERROR(code, mess) do { \
+    #define RETERROR(code, mess) do { \
         if(result.allocated) \
             drjson_slow_recursive_free_all(allocator, result); \
         result = drjson_make_error(code, mess); \
         return result; \
     }while(0)
-    if(i == length) ERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Query is 0 length");
+    if(i == length) RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Query is 0 length");
     Ldispatch:
     o = djrson_debox(o);
     for(;i != length; i++){
@@ -1014,7 +1014,7 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
                 i++;
                 LHack:
                 begin = i;
-                if(i == length) ERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Empty query after a '.'");
+                if(i == length) RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Empty query after a '.'");
                 switch(query[i]){
                     case '"':
                         i++;
@@ -1026,33 +1026,33 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
                         i++;
                         if(length - i >= sizeof("keys")-1 && memcmp(query+i, "keys", sizeof("keys")-1) == 0){
                             i += sizeof("keys")-1;
-                            if(i != length) ERROR(DRJSON_ERROR_INVALID_CHAR, "More query after @keys is unsupported");
+                            if(i != length) RETERROR(DRJSON_ERROR_INVALID_CHAR, "More query after @keys is unsupported");
                             goto Lkeys;
                         }
                         if(length - i >= sizeof("values")-1 && memcmp(query+i, "values", sizeof("values")-1) == 0){
                             i += sizeof("values")-1;
-                            if(i != length) ERROR(DRJSON_ERROR_INVALID_CHAR, "More query after @values is unsupported");
+                            if(i != length) RETERROR(DRJSON_ERROR_INVALID_CHAR, "More query after @values is unsupported");
                             goto Lvalues;
                         }
                         if(length - i >= sizeof("items")-1 && memcmp(query+i, "items", sizeof("items")-1) == 0){
                             i += sizeof("items")-1;
-                            if(i != length) ERROR(DRJSON_ERROR_INVALID_CHAR, "More query after @items is unsupported");
+                            if(i != length) RETERROR(DRJSON_ERROR_INVALID_CHAR, "More query after @items is unsupported");
                             goto Litems;
                         }
                         if(length - i >= sizeof("length")-1 && memcmp(query+i, "length", sizeof("length")-1) == 0){
                             i += sizeof("length")-1;
-                            if(i != length) ERROR(DRJSON_ERROR_INVALID_CHAR, "More query after @length is unsupported");
+                            if(i != length) RETERROR(DRJSON_ERROR_INVALID_CHAR, "More query after @length is unsupported");
 
                             goto Llength;
                         }
-                        ERROR(DRJSON_ERROR_INVALID_CHAR, "Unknown special key");
+                        RETERROR(DRJSON_ERROR_INVALID_CHAR, "Unknown special key");
                     case CASE_0_9:
                     case CASE_a_z:
                     case CASE_A_Z:
                     case '_':
                         goto Lgetitem;
                     default:
-                        ERROR(DRJSON_ERROR_INVALID_CHAR, "Invalid character identifier");
+                        RETERROR(DRJSON_ERROR_INVALID_CHAR, "Invalid character identifier");
                 }
             case '[':
                 i++;
@@ -1061,7 +1061,7 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
             default:
                 if(i == 0)
                     goto LHack;
-                ERROR(DRJSON_ERROR_INVALID_CHAR, "Queries must continue with '.', '['");
+                RETERROR(DRJSON_ERROR_INVALID_CHAR, "Queries must continue with '.', '['");
         }
     }
     goto Ldone;
@@ -1078,14 +1078,14 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
                 case '-':
                     continue;
                 default:
-                    ERROR(DRJSON_ERROR_INVALID_CHAR, "Invalid character in identifier query");
+                    RETERROR(DRJSON_ERROR_INVALID_CHAR, "Invalid character in identifier query");
             }
         }
         // fall-through
     Ldo_getitem:
-        if(i == begin) ERROR(DRJSON_ERROR_INVALID_CHAR, "0 length query after '.'");
+        if(i == begin) RETERROR(DRJSON_ERROR_INVALID_CHAR, "0 length query after '.'");
         o = drjson_object_get_item(*o, query+begin, i-begin, 0);
-        if(!o) ERROR(DRJSON_ERROR_MISSING_KEY, "Key not found");
+        if(!o) RETERROR(DRJSON_ERROR_MISSING_KEY, "Key not found");
         goto Ldispatch;
     Lsubscript:
         for(;i!=length;i++){
@@ -1096,22 +1096,22 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
                 case ']':
                     goto Ldo_subscript;
                 default:
-                    ERROR(DRJSON_ERROR_MISSING_KEY, "Invalid subscript character (must be integer)");
+                    RETERROR(DRJSON_ERROR_MISSING_KEY, "Invalid subscript character (must be integer)");
             }
         }
         // Need to see a ']'
-        ERROR(DRJSON_ERROR_UNEXPECTED_EOF, "No ']' found to close a subscript");
+        RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "No ']' found to close a subscript");
     Ldo_subscript:
         {
             // lazy
             Int64Result pr = parse_int64(query+begin, i-begin);
             if(pr.errored){
-                ERROR(DRJSON_ERROR_INVALID_VALUE, "Unable to parse number for subscript");
+                RETERROR(DRJSON_ERROR_INVALID_VALUE, "Unable to parse number for subscript");
             }
-            if(o->kind != DRJSON_ARRAY) ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript applied to non-array");
+            if(o->kind != DRJSON_ARRAY) RETERROR(DRJSON_ERROR_MISSING_KEY, "Subscript applied to non-array");
             int64_t index = pr.result;
             if(index < 0) index += o->count;
-            if(index < 0 || index >= o->count) ERROR(DRJSON_ERROR_MISSING_KEY, "Subscript out of bounds of array");
+            if(index < 0 || index >= o->count) RETERROR(DRJSON_ERROR_MISSING_KEY, "Subscript out of bounds of array");
             o = &o->array_items[index];
         }
         i++;
@@ -1128,39 +1128,39 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
                 }
                 if(nbackslash & 1) continue;
                 o = drjson_object_get_item(*o, query+begin, i-begin, 0);
-                if(!o) ERROR(DRJSON_ERROR_MISSING_KEY, "Key not found");
+                if(!o) RETERROR(DRJSON_ERROR_MISSING_KEY, "Key not found");
                 i++;
                 goto Ldispatch;
             }
         }
-        ERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Unterminated quoted query");
+        RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Unterminated quoted query");
     Llength:
         if(o->kind != DRJSON_OBJECT && o->kind != DRJSON_ARRAY && o->kind != DRJSON_STRING)
-            ERROR(DRJSON_ERROR_INDEX_ERROR, "Length applied to non-object, non-array, non-string");
-        if(i != length) ERROR(DRJSON_ERROR_INVALID_CHAR, "Queries after @length not supported");
-        if(!allocator) ERROR(DRJSON_ERROR_ALLOC_FAILURE, "NULL allocator passed for result that needs allocation");
+            RETERROR(DRJSON_ERROR_INDEX_ERROR, "Length applied to non-object, non-array, non-string");
+        if(i != length) RETERROR(DRJSON_ERROR_INVALID_CHAR, "Queries after @length not supported");
+        if(!allocator) RETERROR(DRJSON_ERROR_ALLOC_FAILURE, "NULL allocator passed for result that needs allocation");
         return drjson_make_uint(o->count);
     Lkeys:
-        if(o->kind != DRJSON_OBJECT) ERROR(DRJSON_ERROR_MISSING_KEY, "@keys applied to non-object");
-        if(i != length) ERROR(DRJSON_ERROR_INVALID_CHAR, "Queries after @length not supported");
-        if(!allocator) ERROR(DRJSON_ERROR_ALLOC_FAILURE, "NULL allocator passed for result that needs allocation");
+        if(o->kind != DRJSON_OBJECT) RETERROR(DRJSON_ERROR_MISSING_KEY, "@keys applied to non-object");
+        if(i != length) RETERROR(DRJSON_ERROR_INVALID_CHAR, "Queries after @length not supported");
+        if(!allocator) RETERROR(DRJSON_ERROR_ALLOC_FAILURE, "NULL allocator passed for result that needs allocation");
         result = drjson_object_keys(allocator, *o);
         return result;
     Lvalues:
-        if(o->kind != DRJSON_OBJECT) ERROR(DRJSON_ERROR_MISSING_KEY, "Querying @values of non-object type");
-        if(i != length) ERROR(DRJSON_ERROR_INVALID_CHAR, "Queries after @values not supported");
-        if(!allocator) ERROR(DRJSON_ERROR_ALLOC_FAILURE, "NULL allocator passed for result that needs allocation");
+        if(o->kind != DRJSON_OBJECT) RETERROR(DRJSON_ERROR_MISSING_KEY, "Querying @values of non-object type");
+        if(i != length) RETERROR(DRJSON_ERROR_INVALID_CHAR, "Queries after @values not supported");
+        if(!allocator) RETERROR(DRJSON_ERROR_ALLOC_FAILURE, "NULL allocator passed for result that needs allocation");
         result = drjson_object_values(allocator, *o);
         return result;
     Litems:
-        if(o->kind != DRJSON_OBJECT) ERROR(DRJSON_ERROR_MISSING_KEY, "Querying @items of non-object type");
-        if(i != length) ERROR(DRJSON_ERROR_INVALID_CHAR, "Queries after @items not supported");
-        if(!allocator) ERROR(DRJSON_ERROR_ALLOC_FAILURE, "NULL allocator passed for result that needs allocation");
+        if(o->kind != DRJSON_OBJECT) RETERROR(DRJSON_ERROR_MISSING_KEY, "Querying @items of non-object type");
+        if(i != length) RETERROR(DRJSON_ERROR_INVALID_CHAR, "Queries after @items not supported");
+        if(!allocator) RETERROR(DRJSON_ERROR_ALLOC_FAILURE, "NULL allocator passed for result that needs allocation");
         result = drjson_object_items(allocator, *o);
         return result;
     Ldone:
         return drjson_make_box(o);
-    #undef ERROR
+    #undef RETERROR
 }
 
 #ifndef DRJSON_NO_STDIO
@@ -1170,6 +1170,7 @@ int wrapped_fwrite(void* ud, const void* data, size_t length){
 }
 
 DRJSON_API
+__attribute__((__noinline__)) // clang is generating invalid code on windows without this
 int
 drjson_print_value_fp(FILE* fp, DrJsonValue v, int indent, unsigned flags){
     DrJsonTextWriter writer = {
@@ -1201,11 +1202,11 @@ static int
 wrapped_write_file(void* restrict ud, const void* restrict data, size_t length){
     HANDLE hnd = ud;
     DWORD nwrit = 0;
-    return WriteFile(hdn, data, length, &nwrit, NULL) != TRUE;
+    return WriteFile(hnd, data, length, &nwrit, NULL) != TRUE;
 }
 DRJSON_API
 int
-drjson_print_value_HANDLE(HANDLE hnd, DrJsonValue v, int indent, unsigned flags){
+drjson_print_value_HANDLE(void* hnd, DrJsonValue v, int indent, unsigned flags){
     DrJsonTextWriter writer = {
         .up = (void*)hnd,
         .write = wrapped_write_file,
@@ -1256,7 +1257,7 @@ drjson_buff_write(DrJsonBuffered* restrict buffer, const char* restrict data, si
             buffer->errored = buffer->writer->write(buffer->writer->up, data, length);
         return;
     }
-    __builtin_memcpy(buffer->buff+buffer->cursor, data, length);
+    drj_memcpy(buffer->buff+buffer->cursor, data, length);
     buffer->cursor += length;
 }
 

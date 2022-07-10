@@ -5,6 +5,18 @@
 #define DRJSON_ITOA_H
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
+#ifndef drj_memcpy
+#ifndef __GNUC__
+#define drj_memset memset
+#define drj_memcpy memcpy
+#define drj_memmove memmove
+#else
+#define drj_memset __builtin_memset
+#define drj_memcpy __builtin_memcpy
+#define drj_memmove __builtin_memmove
+#endif
+#endif
 // The first 100 characters of 00 - 99.
 // Assumes a little endian cpu. (0x3733 translates to the string '37').
 // 0x30 is '0'.
@@ -32,13 +44,13 @@ drjson_uint64_to_ascii(char* buff, uint64_t value){
         p -= 2;
         value /= 100;
         uint64_t last_two_digits = old - 100*value;
-        __builtin_memcpy(p, &ZERO_TO_NINETY_NINE[last_two_digits], 2);
+        drj_memcpy(p, &ZERO_TO_NINETY_NINE[last_two_digits], 2);
     }
     p -= 2;
-    __builtin_memcpy(p, &ZERO_TO_NINETY_NINE[value], 2);
+    drj_memcpy(p, &ZERO_TO_NINETY_NINE[value], 2);
     p += value < 10;
     size_t length = (tmp + sizeof(tmp)) - p;
-    __builtin_memcpy(buff, p, length);
+    drj_memcpy(buff, p, length);
     return length;
 }
 
@@ -46,7 +58,7 @@ static inline
 size_t
 drjson_int64_to_ascii(char* buff, int64_t value){
     if(value == INT64_MIN){
-        __builtin_memcpy(buff, "-9223372036854775808", sizeof("-9223372036854775808")-1);
+        drj_memcpy(buff, "-9223372036854775808", sizeof("-9223372036854775808")-1);
         return sizeof("-9223372036854775808")-1;
     }
     int neg = value < 0;

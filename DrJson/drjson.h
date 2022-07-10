@@ -7,6 +7,18 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifndef drj_memcpy
+#ifndef __GNUC__
+#define drj_memset memset
+#define drj_memcpy memcpy
+#define drj_memmove memmove
+#else
+#define drj_memset __builtin_memset
+#define drj_memcpy __builtin_memcpy
+#define drj_memmove __builtin_memmove
+#endif
+#endif
+
 // Define DRJSON_NO_STDIO to avoid import stdio
 #ifndef DRJSON_NO_STDIO
 #include <stdio.h>
@@ -17,7 +29,7 @@
 #ifndef DRJSON_STATIC_LIB
 
 #ifdef _WIN32
-#define DRJSON_API extern __declspect(dllimport)
+#define DRJSON_API extern __declspec(dllimport)
 #else
 #define DRJSON_API extern __attribute__((visibility("default")))
 #endif
@@ -295,7 +307,7 @@ drjson_make_object(const DrJsonAllocator* allocator, size_t initial_length){
         items = allocator->alloc(allocator->user_pointer, size);
         if(!items) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE,
             "Failed to allocate memory for object");
-        __builtin_memset(items, 0, size);
+        drj_memset(items, 0, size);
     }
     return (DrJsonValue){.kind=DRJSON_OBJECT, .count=0, .capacity=initial_length, .object_items=items, .allocated=1};
 }
@@ -349,7 +361,7 @@ drjson_make_string_copy(const DrJsonAllocator* allocator, const char* s, size_t 
     char* string = allocator->alloc(allocator->user_pointer, length);
     if(!string) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate storage for string");
 #if defined(__clang__) || defined(__GNUC__)
-    __builtin_memcpy(string, s, length);
+    drj_memcpy(string, s, length);
 #else
     memcpy(string, s, length);
 #endif
@@ -464,7 +476,7 @@ drjson_print_value_fd(int fd, DrJsonValue v, int indent, unsigned flags);
 #else
 DRJSON_API
 int
-drjson_print_value_handle(HANDLE hnd, DrJsonValue v, int indent, unsigned flags);
+drjson_print_value_HANDLE(void* hnd, DrJsonValue v, int indent, unsigned flags);
 #endif
 
 #ifdef __clang__

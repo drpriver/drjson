@@ -183,6 +183,12 @@ fast_float_from_chars_float(const char *first, const char *last, float *value, e
 // memcpy
 #include <string.h>
 
+#ifndef __GNUC__
+#define ff_memcpy memcpy
+#else
+#define ff_memcpy __builtin_memcpy
+#endif
+
 #if(defined(__x86_64) || defined(__x86_64__) || defined(_M_X64)     \
              || defined(__amd64) || defined(__aarch64__) || defined(_M_ARM64) \
              || defined(__MINGW64__)                                                                                    \
@@ -440,7 +446,7 @@ FASTFLOAT_REALLY_INLINE
 uint64_t
 fast_float_read_u64(const char *chars){
     uint64_t val;
-    __builtin_memcpy(&val, chars, sizeof(uint64_t));
+    ff_memcpy(&val, chars, sizeof(uint64_t));
 #if FASTFLOAT_IS_BIG_ENDIAN == 1
     // Need to read as-if the number was in little-endian order.
     val = fast_float_byteswap(val);
@@ -455,7 +461,7 @@ fast_float_write_u64(uint8_t *chars, uint64_t val){
     // Need to read as-if the number was in little-endian order.
     val = fast_float_byteswap(val);
 #endif
-    __builtin_memcpy(chars, &val, sizeof(uint64_t));
+    ff_memcpy(chars, &val, sizeof(uint64_t));
 }
 
 // credit    @aqrit
@@ -2260,7 +2266,7 @@ fast_float_to_float_double(bool negative, fast_float_adjusted_mantissa am, void 
     word |= (uint64_t)(am.power2) << DOUBLE_MANTISSA_EXPLICIT_BITS;
     word = negative
     ? word | ((uint64_t)(1) << DOUBLE_SIGN_INDEX) : word;
-        __builtin_memcpy(value, &word, sizeof(double));
+        ff_memcpy(value, &word, sizeof(double));
 }
 
 FASTFLOAT_REALLY_INLINE
@@ -2272,12 +2278,12 @@ fast_float_to_float_float(bool negative, fast_float_adjusted_mantissa am, void *
     ? word | ((uint64_t)(1) << FLOAT_SIGN_INDEX) : word;
 #if FASTFLOAT_IS_BIG_ENDIAN == 1
      if(4 == sizeof(float))
-         __builtin_memcpy(value, (char *)&word + 4, sizeof(float)); // extract value at offset 4-7 if float on big-endian
+         ff_memcpy(value, (char *)&word + 4, sizeof(float)); // extract value at offset 4-7 if float on big-endian
      else
-         __builtin_memcpy(value, &word, sizeof(float));
+         ff_memcpy(value, &word, sizeof(float));
 #else
      // For little-endian systems:
-     __builtin_memcpy(value, &word, sizeof(float));
+     ff_memcpy(value, &word, sizeof(float));
 #endif
 }
 
