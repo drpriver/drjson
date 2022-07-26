@@ -985,7 +985,7 @@ drjson_checked_query(DrJsonValue* v, int type, const char* query, size_t length)
 DRJSON_API
 DrJsonValue
 drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, const char* query, size_t length){
-    v = djrson_debox(v);
+    v = drjson_debox(v);
     enum {
         GETITEM,
         SUBSCRIPT,
@@ -1006,7 +1006,7 @@ drjson_multi_query(const DrJsonAllocator*_Nullable allocator, DrJsonValue* v, co
     }while(0)
     if(i == length) RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Query is 0 length");
     Ldispatch:
-    o = djrson_debox(o);
+    o = drjson_debox(o);
     for(;i != length; i++){
         char c = query[i];
         switch(c){
@@ -1566,6 +1566,55 @@ int
 drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength){
     if(!length) return 1;
     return 1;
+}
+
+// getters/setters for langs that don't support bitfields
+DRJSON_API
+int
+drjson_kind(const DrJsonValue* v){
+    return v->kind;
+}
+
+DRJSON_API
+void
+drjson_set_kind(DrJsonValue* v, int kind){
+    v->kind = kind;
+}
+
+DRJSON_API
+int
+drjson_count(const DrJsonValue* v){
+    return v->count;
+}
+
+DRJSON_API
+void
+drjson_set_count(DrJsonValue* v, int count){
+    v->count = count;
+}
+
+DRJSON_API
+int
+drjson_capacity(const DrJsonValue* v){
+    return v->capacity;
+}
+
+DRJSON_API
+void
+drjson_set_capacity(DrJsonValue* v, int capacity){
+    v->capacity = capacity;
+}
+
+DRJSON_API
+int
+drjson_allocated(const DrJsonValue* v){
+    return v->allocated;
+}
+
+DRJSON_API
+void
+drjson_set_allocated(DrJsonValue* v, int allocated){
+    v->allocated = allocated;
 }
 
 
