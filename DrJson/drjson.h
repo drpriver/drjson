@@ -55,17 +55,17 @@
 #endif
 
 enum DrJsonKind {
-    DRJSON_NUMBER = 0x0,
-    DRJSON_INTEGER = 0x1,
+    DRJSON_NUMBER   = 0x0,
+    DRJSON_INTEGER  = 0x1,
     DRJSON_UINTEGER = 0x2,
-    DRJSON_STRING = 0x3,
-    DRJSON_ARRAY = 0x4,
-    DRJSON_OBJECT = 0x5,
-    DRJSON_NULL = 0x6,
-    DRJSON_BOOL = 0x7,
-    DRJSON_CAPSULE = 0x8, // has a pointer to a C object. (this will probably be removed in the future)
-    DRJSON_BOXED = 0x9, // pointer to a drjson value
-    DRJSON_ERROR = 0xa,
+    DRJSON_STRING   = 0x3,
+    DRJSON_ARRAY    = 0x4,
+    DRJSON_OBJECT   = 0x5,
+    DRJSON_NULL     = 0x6,
+    DRJSON_BOOL     = 0x7,
+    DRJSON_CAPSULE  = 0x8, // has a pointer to a C object. (this will probably be removed in the future)
+    DRJSON_BOXED    = 0x9, // pointer to a drjson value
+    DRJSON_ERROR    = 0xa,
     // 0xb unused
     // 0xc unused
     // 0xd unused
@@ -130,12 +130,15 @@ typedef struct DrJsonValue DrJsonValue;
 struct DrJsonValue {
     union {
         uint64_t bits;
+// Define this to hide the bitfields
+#ifndef DRJSON_NO_BITFIELDS
         struct {
             uint64_t kind:4;
             uint64_t count: 29;
             uint64_t capacity: 29; // NOTE: this contains the error code
             uint64_t allocated: 1;
         };
+#endif
     };
     // 1 bit unused
     union {
@@ -153,6 +156,39 @@ struct DrJsonValue {
         // Null is implicit
     };
 };
+
+// getters/setters for langs that don't support bitfields
+DRJSON_API
+int
+drjson_kind(const DrJsonValue* v);
+
+DRJSON_API
+void
+drjson_set_kind(DrJsonValue* v, int kind);
+
+DRJSON_API
+int
+drjson_count(const DrJsonValue* v);
+
+DRJSON_API
+void
+drjson_set_count(DrJsonValue* v, int);
+
+DRJSON_API
+int
+drjson_capacity(const DrJsonValue* v);
+
+DRJSON_API
+void
+drjson_set_capacity(DrJsonValue* v, int);
+
+DRJSON_API
+int
+drjson_allocated(const DrJsonValue* v);
+
+DRJSON_API
+void
+drjson_set_allocated(DrJsonValue* v, int);
 
 // shallow equality (although it does compare strings)
 static inline 
@@ -191,7 +227,7 @@ drjson_eq(DrJsonValue a, DrJsonValue b){
 
 static inline
 DrJsonValue*
-djrson_debox(DrJsonValue* v){
+drjson_debox(DrJsonValue* v){
     while(v->kind == DRJSON_BOXED)
         v = v->boxed;
     return v;
@@ -234,15 +270,6 @@ struct DrJsonAllocator {
     void (*_Nullable free_all)(void*_Null_unspecified user_pointer);
 };
 
-
-typedef struct DrJsonParseContext DrJsonParseContext;
-struct DrJsonParseContext {
-    const char* cursor;
-    const char* end;
-    const char* begin;
-    int depth;
-    DrJsonAllocator allocator;
-};
 
 static inline
 DrJsonValue
@@ -312,28 +339,6 @@ drjson_make_object(const DrJsonAllocator* allocator, size_t initial_length){
     return (DrJsonValue){.kind=DRJSON_OBJECT, .count=0, .capacity=initial_length, .object_items=items, .allocated=1};
 }
 
-// returns an array or error
-DRJSON_API
-DrJsonValue
-drjson_object_keys(const DrJsonAllocator* allocator, DrJsonValue object);
-
-// returns an array or error
-DRJSON_API
-DrJsonValue
-drjson_object_values(const DrJsonAllocator* allocator, DrJsonValue object);
-
-// returns an array or error
-// They array is a flat array of alternating key value.
-DRJSON_API
-DrJsonValue
-drjson_object_items(const DrJsonAllocator* allocator, DrJsonValue object);
-
-#define drjson_make(x) _Generic(x, \
-        int64_t: drjson_make_int, \
-        uint64_t: drjson_make_uint, \
-        double: drjson_make_number, \
-        _Bool: drjson_make_bool)(x)
-
 static inline
 DrJsonValue
 drjson_make_array(const DrJsonAllocator* allocator, size_t initial_length){
@@ -367,6 +372,39 @@ drjson_make_string_copy(const DrJsonAllocator* allocator, const char* s, size_t 
 #endif
     return (DrJsonValue){.kind=DRJSON_STRING, .count=length, .allocated=1, .string=string};
 }
+
+
+typedef struct DrJsonParseContext DrJsonParseContext;
+struct DrJsonParseContext {
+    const char* cursor;
+    const char* end;
+    const char* begin;
+    int depth;
+    DrJsonAllocator allocator;
+};
+
+
+// returns an array or error
+DRJSON_API
+DrJsonValue
+drjson_object_keys(const DrJsonAllocator* allocator, DrJsonValue object);
+
+// returns an array or error
+DRJSON_API
+DrJsonValue
+drjson_object_values(const DrJsonAllocator* allocator, DrJsonValue object);
+
+// returns an array or error
+// They array is a flat array of alternating key value.
+DRJSON_API
+DrJsonValue
+drjson_object_items(const DrJsonAllocator* allocator, DrJsonValue object);
+
+#define drjson_make(x) _Generic(x, \
+        int64_t: drjson_make_int, \
+        uint64_t: drjson_make_uint, \
+        double: drjson_make_number, \
+        _Bool: drjson_make_bool)(x)
 
 DRJSON_API
 DrJsonValue
