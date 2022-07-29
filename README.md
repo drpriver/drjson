@@ -157,6 +157,16 @@ efficient `free_all` function instead of having to deal with the
 `drjson_slow_rescurive_free_all`.
 See [`Demo/arena_allocator.h`](Demo/arena_allocator.h) for an example.
 
+## Objects
+Note that these objects are backed by hash tables that don't hate you, so the
+order of insertion is preserved.  For duplicate keys, the last value seen is
+used.
+
+To avoid json key attacks, where a validator in one part disagrees about
+ambiguities such as which key wins in the JSON spec, always serialize back from
+the parsed json tree - don't reuse the original string. Also, drjson accepts
+some extensions, so you especially want to serialize back to standard json!
+
 ## Extensions From JSON
 
 Drjson can parse all valid json documents, but can also parse some documents not allowed by the spec.
@@ -199,3 +209,12 @@ Be aware of this for two reasons:
     On the other hand, 36893488147419103232 (`2 ** 65`) doesn't fit in a 64 bit
     integer, but a double can hold its value exactly. DrJson instead parses it
     as a string, which is maybe counter-intuitive.
+
+## Future Directions
+
+I'm not happy with the C API and would prefer to hand out opaque handles
+instead of having objects and arrays inside a DrJsonValue.  This would allow
+you to drop the "Boxed" option. Usage of the handles would need to be coupled
+with a json context, would be an overall safer pattern. It would also allow
+useful capabilities, such as easily querying all of the objects and
+arrays from a json document without traversing the tree.
