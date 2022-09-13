@@ -1187,43 +1187,11 @@ __attribute__((__noinline__)) // probably ditto
 #endif
 int
 drjson_print_error_fp(FILE* fp, const char* filename, size_t filename_len, const DrJsonParseContext* ctx, DrJsonValue v){
-    size_t line = 0;
-    size_t column = 0;
-    // just do it the slow way, whatever.
-    for(const char* c = ctx->begin; c != ctx->cursor; c++){
-        switch(*c){
-            case '\n':
-                line++;
-                column = 0;
-                break;
-            default:
-                column++;
-                break;
-        }
-    }
-    char buff[1024];
-    size_t idx = 0;
-    if(filename_len && filename_len < sizeof(buff) - idx){
-        drj_memcpy(buff, filename, filename_len);
-        idx += filename_len;
-        if(sizeof(buff) - idx > 1) buff[idx++] = ':';
-    }
-    if(sizeof(buff) - idx > 20)
-        idx += drjson_uint64_to_ascii(buff+idx, line+1);
-    if(sizeof(buff) - idx > 1) buff[idx++] = ':';
-    if(sizeof(buff) - idx > 20)
-        idx += drjson_uint64_to_ascii(buff+idx, column+1);
-    if(sizeof(buff) - idx > 1) buff[idx++] = ':';
-    if(sizeof(buff) - idx > 1) buff[idx++] = ' ';
-
-
     DrJsonTextWriter writer = {
         .up = fp,
         .write = wrapped_fwrite,
     };
-    int err = writer.write(writer.up, buff, idx);
-    if(err) return err;
-    return drjson_print_value(&writer, v, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
+    return drjson_print_error(&writer, filename, filename_len, ctx, v);
 }
 #endif
 
@@ -1243,6 +1211,15 @@ drjson_print_value_fd(int fd, DrJsonValue v, int indent, unsigned flags){
     };
     return drjson_print_value(&writer, v, indent, flags);
 }
+DRJSON_API
+int
+drjson_print_error_fd(int fd, const char* filename, size_t filename_len, const DrJsonParseContext* ctx, DrJsonValue v){
+    DrJsonTextWriter writer = {
+        .up = (void*)(intptr_t)fd,
+        .write = wrapped_write,
+    };
+    return drjson_print_error(&writer, filename, filename_len, ctx, v);
+}
 #else
 static int
 wrapped_write_file(void* restrict ud, const void* restrict data, size_t length){
@@ -1258,6 +1235,15 @@ drjson_print_value_HANDLE(void* hnd, DrJsonValue v, int indent, unsigned flags){
         .write = wrapped_write_file,
     };
     return drjson_print_value(&writer, v, indent, flags);
+}
+DRJSON_API
+int
+drjson_print_error_HANDLE(void* hnd, const char* filename, size_t filename_len, const DrJsonParseContext* ctx, DrJsonValue v){
+    DrJsonTextWriter writer = {
+        .up = (void*)hnd,
+        .write = wrapped_write_file,
+    };
+    return drjson_print_error(&writer, filename, filename_len, ctx, v);
 }
 #endif
 
@@ -1328,6 +1314,45 @@ drjson_print_value(const DrJsonTextWriter* restrict writer, DrJsonValue v, int i
         drjson_print_value_inner(&buffer, v);
     if(flags & DRJSON_APPEND_NEWLINE)
         drjson_buff_putc(&buffer, '\n');
+    if(buffer.cursor)
+        drjson_buff_flush(&buffer);
+    return buffer.errored;
+}
+
+DRJSON_API
+int
+drjson_print_error(const DrJsonTextWriter* restrict writer, const char* filename, size_t filename_len, const DrJsonParseContext* ctx, DrJsonValue v){
+    size_t line = 0;
+    size_t column = 0;
+    // just do it the slow way, whatever.
+    for(const char* c = ctx->begin; c != ctx->cursor; c++){
+        switch(*c){
+            case '\n':
+                line++;
+                column = 0;
+                break;
+            default:
+                column++;
+                break;
+        }
+    }
+    DrJsonBuffered buffer;
+    buffer.cursor = 0;
+    buffer.writer = writer;
+    buffer.errored = 0;
+    if(filename_len){
+        drjson_buff_write(&buffer, filename, filename_len);
+        drjson_buff_putc(&buffer, ':');
+    }
+
+    drjson_buff_ensure_n(&buffer, 20);
+    buffer.cursor += drjson_uint64_to_ascii(buffer.buff+buffer.cursor, line+1);
+    drjson_buff_putc(&buffer, ':');
+    buffer.cursor += drjson_uint64_to_ascii(buffer.buff+buffer.cursor, column+1);
+    drjson_buff_putc(&buffer, ':');
+    drjson_buff_putc(&buffer, ' ');
+    drjson_pretty_print_value_inner(&buffer, v, 0);
+    drjson_buff_putc(&buffer, '\n');
     if(buffer.cursor)
         drjson_buff_flush(&buffer);
     return buffer.errored;

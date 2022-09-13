@@ -500,6 +500,11 @@ DRJSON_API
 int
 drjson_print_value(const DrJsonTextWriter* writer, DrJsonValue v, int indent, unsigned flags);
 
+// Returns 0 on success, 1 on error.
+DRJSON_API
+int
+drjson_print_error(const DrJsonTextWriter* restrict writer, const char* filename, size_t filename_len, const DrJsonParseContext* ctx, DrJsonValue v);
+
 #ifndef DRJSON_NO_STDIO
 // Like above, but for FILE*
 DRJSON_API
@@ -515,10 +520,17 @@ drjson_print_error_fp(FILE* fp, const char* filename, size_t filename_len, const
 DRJSON_API
 int
 drjson_print_value_fd(int fd, DrJsonValue v, int indent, unsigned flags);
+
+DRJSON_API
+int
+drjson_print_error_fd(int fd, const char* filename, size_t filename_len, const DrJsonParseContext*ctx, DrJsonValue v);
 #else
 DRJSON_API
 int
 drjson_print_value_HANDLE(void* hnd, DrJsonValue v, int indent, unsigned flags);
+DRJSON_API
+int
+drjson_print_error_HANDLE(void* hnd, const char* filename, size_t filename_len, const DrJsonParseContext*ctx, DrJsonValue v);
 #endif
 
 #ifdef __clang__
