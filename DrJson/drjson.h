@@ -505,6 +505,10 @@ drjson_print_value(const DrJsonTextWriter* writer, DrJsonValue v, int indent, un
 DRJSON_API
 int
 drjson_print_value_fp(FILE* fp, DrJsonValue v, int indent, unsigned flags);
+
+DRJSON_API
+int
+drjson_print_error_fp(FILE* fp, const char* filename, size_t filename_len, const DrJsonParseContext*ctx, DrJsonValue v);
 #endif
 
 #ifndef _WIN32

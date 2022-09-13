@@ -687,7 +687,7 @@ drjson_parse_braceless_object(DrJsonParseContext* ctx){
         if(unlikely(err)){
             if(!ctx->allocator.free_all)
                 drjson_slow_recursive_free_all(&ctx->allocator, item);
-            error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocte space for an item while setting member of an object");
+            error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate space for an item while setting member of an object");
             goto cleanup;
         }
     }
@@ -1170,7 +1170,9 @@ int wrapped_fwrite(void* ud, const void* data, size_t length){
 }
 
 DRJSON_API
+#ifdef __clang__
 __attribute__((__noinline__)) // clang is generating invalid code on windows without this
+#endif
 int
 drjson_print_value_fp(FILE* fp, DrJsonValue v, int indent, unsigned flags){
     DrJsonTextWriter writer = {
@@ -1178,6 +1180,50 @@ drjson_print_value_fp(FILE* fp, DrJsonValue v, int indent, unsigned flags){
         .write = wrapped_fwrite,
     };
     return drjson_print_value(&writer, v, indent, flags);
+}
+DRJSON_API
+#ifdef __clang__
+__attribute__((__noinline__)) // probably ditto
+#endif
+int
+drjson_print_error_fp(FILE* fp, const char* filename, size_t filename_len, const DrJsonParseContext* ctx, DrJsonValue v){
+    size_t line = 0;
+    size_t column = 0;
+    // just do it the slow way, whatever.
+    for(const char* c = ctx->begin; c != ctx->cursor; c++){
+        switch(*c){
+            case '\n':
+                line++;
+                column = 0;
+                break;
+            default:
+                column++;
+                break;
+        }
+    }
+    char buff[1024];
+    size_t idx = 0;
+    if(filename_len && filename_len < sizeof(buff) - idx){
+        drj_memcpy(buff, filename, filename_len);
+        idx += filename_len;
+        if(sizeof(buff) - idx > 1) buff[idx++] = ':';
+    }
+    if(sizeof(buff) - idx > 20)
+        idx += drjson_uint64_to_ascii(buff+idx, line+1);
+    if(sizeof(buff) - idx > 1) buff[idx++] = ':';
+    if(sizeof(buff) - idx > 20)
+        idx += drjson_uint64_to_ascii(buff+idx, column+1);
+    if(sizeof(buff) - idx > 1) buff[idx++] = ':';
+    if(sizeof(buff) - idx > 1) buff[idx++] = ' ';
+
+
+    DrJsonTextWriter writer = {
+        .up = fp,
+        .write = wrapped_fwrite,
+    };
+    int err = writer.write(writer.up, buff, idx);
+    if(err) return err;
+    return drjson_print_value(&writer, v, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
 }
 #endif
 
@@ -1565,6 +1611,7 @@ DRJSON_API
 int
 drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength){
     if(!length) return 1;
+    // TODO
     return 1;
 }
 

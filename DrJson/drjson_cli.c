@@ -199,11 +199,18 @@ main(int argc, const char* const* argv){
         jsonstr = read_file_streamed(stdin);
     }
     DrJsonAllocator allocator = drjson_stdc_allocator();
+    DrJsonParseContext ctx = {
+        .allocator = allocator,
+        .begin = jsonstr.text,
+        .cursor = jsonstr.text,
+        .end = jsonstr.text+jsonstr.length,
+        .depth = 0,
+    };
     DrJsonValue document = braceless?
-        drjson_parse_braceless_string(allocator, jsonstr.text, jsonstr.length):
-        drjson_parse_string(allocator, jsonstr.text, jsonstr.length);
+        drjson_parse_braceless_object(&ctx):
+        drjson_parse(&ctx);
     if(document.kind == DRJSON_ERROR){
-        drjson_print_value_fp(stderr, document, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
+        drjson_print_error_fp(stderr,  jsonpath.text, jsonpath.length, &ctx, document);
         return 1;
     }
     int nqueries = kw_args[QUERY_KWARG].num_parsed;
