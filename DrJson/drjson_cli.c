@@ -14,6 +14,8 @@
 #include "argument_parsing.h"
 #include "term_util.h"
 
+// Chose to use libc's FILE api instead of OS APIs for portability.
+
 static inline
 force_inline
 warn_unused
@@ -124,7 +126,7 @@ main(int argc, const char* const* argv){
             .name = SV("-q"),
             .altname1 = SV("--query"),
             .min_num=0,
-            .max_num=100,
+            .max_num=arrlen(queries),
             .dest = ARGDEST(&queries[0]),
             .help = "A query to filter the data. Queries can be stacked",
         },
