@@ -121,24 +121,29 @@ typedef struct fast_float_from_chars_result{
 } fast_float_from_chars_result;
 
 /**
- * This function parses the character sequence [first,last) for a number. It parses floating-point numbers expecting
- * a locale-indepent format equivalent to what is used by strtod in the default ("C") locale.
- * The resulting floating-point value is the closest floating-point values (using double),
- * using the "round to even" convention for values that would otherwise fall right in-between two values.
- * That is, we provide exact parsing according to the IEEE standard.
+ * This function parses the character sequence [first,last) for a number.
+ * It parses floating-point numbers expecting * a locale-indepent format
+ * equivalent to what is used by strtod in the default ("C") locale.  The
+ * resulting floating-point value is the closest floating-point values (using
+ * double), using the "round to even" convention for values that would
+ * otherwise fall right in-between two values.  That is, we provide exact
+ * parsing according to the IEEE standard.
  *
- * Given a successful parse, the pointer (`ptr`) in the returned value is set to point right after the
- * parsed number, and the `value` referenced is set to the parsed value. In case of error, the returned
- * `error` contains FASTFLOAT_INVALID_VALUE, otherwise the default (`0`) value is stored.
+ * Given a successful parse, the pointer (`ptr`) in the returned value is set
+ * to point right after the parsed number, and the `value` referenced is set
+ * to the parsed value. In case of error, the returned * `error` contains
+ * FASTFLOAT_INVALID_VALUE, otherwise the default (`0`) value is stored.
  *
- * The implementation does not throw and does not allocate memory (e.g., with `new` or `malloc`).
+ * The implementation does not throw and does not allocate memory (e.g., with
+ * `new` or `malloc`).
  *
  * Like the C++17 standard, the `from_chars` functions take a last argument of
  * the type `fast_float_chars_format`. It is a bitset value: we check whether
- * `fmt & FASTFLOAT_FORMAT_FIXED` and `fmt & FASTFLOAT_FORMAT_SCIENTIFIC` are set
- * to determine whether we allow the fixed point and scientific notation respectively.
- * You should default to  `FASTFLOAT_FORMAT_GENERAL` which allows both `fixed` and `scientific`. If no valid format bits are set, an error
- * is returned.
+ * `fmt & FASTFLOAT_FORMAT_FIXED` and `fmt & FASTFLOAT_FORMAT_SCIENTIFIC` are
+ * set to determine whether we allow the fixed point and scientific notation
+ * respectively. You should default to  `FASTFLOAT_FORMAT_GENERAL` which allows
+ * both `fixed` and `scientific`. If no valid format bits are set, an error is
+ * returned.
  *
  */
 
@@ -189,15 +194,15 @@ fast_float_from_chars_float(const char *first, const char *last, float *value, e
 #define ff_memcpy __builtin_memcpy
 #endif
 
-#if(defined(__x86_64) || defined(__x86_64__) || defined(_M_X64)     \
+#if(defined(__x86_64) || defined(__x86_64__) || defined(_M_X64)  \
              || defined(__amd64) || defined(__aarch64__) || defined(_M_ARM64) \
-             || defined(__MINGW64__)                                                                                    \
-             || defined(__s390x__)                                                                                        \
+             || defined(__MINGW64__) \
+             || defined(__s390x__) \
              || (defined(__ppc64__) || defined(__PPC64__) || defined(__ppc64le__) || defined(__PPC64LE__)) \
              || defined(__EMSCRIPTEN__))
 #define FASTFLOAT_64BIT
-#elif(defined(__i386) || defined(__i386__) || defined(_M_IX86)     \
-         || defined(__arm__) || defined(_M_ARM)                                     \
+#elif(defined(__i386) || defined(__i386__) || defined(_M_IX86) \
+         || defined(__arm__) || defined(_M_ARM) \
          || defined(__MINGW32__))
 #define FASTFLOAT_32BIT
 #else
@@ -211,7 +216,7 @@ fast_float_from_chars_float(const char *first, const char *last, float *value, e
     #elif SIZE_MAX == 0xffffffffffffffff
         #define FASTFLOAT_64BIT
     #else
-        #error Unknown platform (not 32-bit, not 64-bit?)
+        #error "Unknown platform (not 32-bit, not 64-bit?)"
     #endif
 #endif
 
@@ -263,8 +268,8 @@ fast_float_from_chars_float(const char *first, const char *last, float *value, e
 
 
 // Compares two ASCII strings in a case insensitive manner.
-static inline 
-bool 
+static inline
+bool
 fast_float_strncasecmp(const char *input1, const char *input2, size_t length){
     char running_diff = 0;
     for(size_t i = 0; i < length; i++){
@@ -304,11 +309,11 @@ fast_float_leading_zeroes(uint64_t input_num){
     #else
     int last_bit = 0;
     if(input_num & (uint64_t)(0xffffffff00000000)) input_num >>= 32, last_bit |= 32;
-    if(input_num & (uint64_t)(                0xffff0000)) input_num >>= 16, last_bit |= 16;
-    if(input_num & (uint64_t)(                        0xff00)) input_num >>=    8, last_bit |=    8;
-    if(input_num & (uint64_t)(                            0xf0)) input_num >>=    4, last_bit |=    4;
-    if(input_num & (uint64_t)(                             0xc)) input_num >>=    2, last_bit |=    2;
-    if(input_num & (uint64_t)(                             0x2)) input_num >>=    1, last_bit |=    1;
+    if(input_num & (uint64_t)(        0xffff0000)) input_num >>= 16, last_bit |= 16;
+    if(input_num & (uint64_t)(            0xff00)) input_num >>=  8, last_bit |=  8;
+    if(input_num & (uint64_t)(              0xf0)) input_num >>=  4, last_bit |=  4;
+    if(input_num & (uint64_t)(               0xc)) input_num >>=  2, last_bit |=  2;
+    if(input_num & (uint64_t)(               0x2)) input_num >>=  1, last_bit |=  1;
     return 63 - last_bit;
     #endif
 #else
@@ -319,16 +324,16 @@ fast_float_leading_zeroes(uint64_t input_num){
 #ifdef FASTFLOAT_32BIT
 
 // slow emulation routine for 32-bit
-FASTFLOAT_REALLY_INLINE 
-uint64_t 
+FASTFLOAT_REALLY_INLINE
+uint64_t
 emulu(uint32_t x, uint32_t y){
     return x * (uint64_t)y;
 }
 
 // slow emulation routine for 32-bit
 #if !defined(__MINGW64__)
-FASTFLOAT_REALLY_INLINE 
-uint64_t 
+FASTFLOAT_REALLY_INLINE
+uint64_t
 _umul128(uint64_t ab, uint64_t cd, uint64_t *hi){
     uint64_t ad = emulu((uint32_t)(ab >> 32), (uint32_t)cd);
     uint64_t bd = emulu((uint32_t)ab, (uint32_t)cd);
@@ -425,12 +430,12 @@ static const uint64_t FLOAT_MAX_MANTISSA_FAST_PATH = ((uint64_t)2) << FLOAT_MANT
 
 // Next function can be micro-optimized, but compilers are entirely
 // able to optimize it well.
-FASTFLOAT_REALLY_INLINE 
-bool 
+FASTFLOAT_REALLY_INLINE
+bool
 fast_float_is_integer(char c){ return c >= '0' && c <= '9'; }
 
-FASTFLOAT_REALLY_INLINE 
-uint64_t 
+FASTFLOAT_REALLY_INLINE
+uint64_t
 fast_float_byteswap(uint64_t val){
     return (val & 0xFF00000000000000) >> 56
         | (val & 0x00FF000000000000) >> 40
@@ -773,7 +778,7 @@ enum{SMALLEST_POWER_OF_FIVE = -342};
 enum{LARGEST_POWER_OF_FIVE = 308};
 enum{NUMBER_OF_ENTRIES = 2 * (LARGEST_POWER_OF_FIVE - SMALLEST_POWER_OF_FIVE + 1)};
 
-static 
+static
 const uint64_t fast_float_power_of_five_128[NUMBER_OF_ENTRIES] ={
                 0xeef453d6923bd65a,0x113faa2906a13b3f,
                 0x9558b4661b6565f8,0x4ac7ca59a424c507,
@@ -1428,9 +1433,10 @@ const uint64_t fast_float_power_of_five_128[NUMBER_OF_ENTRIES] ={
                 0x8e679c2f5e44ff8f,0x570f09eaa7ea7648,};
 
 
-// This will compute or rather approximate w * 5**q and return a pair of 64-bit words approximating
-// the result, with the "high" part corresponding to the most significant bits and the
-// low part corresponding to the least significant bits.
+// This will compute or rather approximate w * 5**q and return a pair of 64-bit
+// words approximating the result, with the "high" part corresponding to the
+// most significant bits and the low part corresponding to the least
+// significant bits.
 //
 FASTFLOAT_REALLY_INLINE
 value128
@@ -1470,17 +1476,18 @@ fast_float_compute_product_approximation(int bit_precision, int64_t q, uint64_t 
  * where
  *     p = log(5**-q)/log(2) = -q * log(5)/log(2)
  */
-FASTFLOAT_REALLY_INLINE 
-int 
+FASTFLOAT_REALLY_INLINE
+int
 power(int q){
     return (((152170 + 65536) * q) >> 16) + 63;
 }
 
 
 // w * 10 ** q
-// The returned value should be a valid ieee64 number that simply need to be packed.
-// However, in some very rare cases, the computation will fail. In such cases, we
-// return an adjusted_mantissa with a negative power of 2: the caller should recompute
+// The returned value should be a valid ieee64 number that simply need to be
+// packed.  However, in some very rare cases, the computation will fail. In
+// such cases, we return an adjusted_mantissa with a negative power of 2: the
+// caller should recompute
 // in such cases.
 FASTFLOAT_REALLY_INLINE
 fast_float_adjusted_mantissa
@@ -1507,24 +1514,29 @@ fast_float_compute_float_gen_float(int64_t q, uint64_t w){
     // The required precision is binary::mantissa_explicit_bits() + 3 because
     // 1. We need the implicit bit
     // 2. We need an extra bit for rounding purposes
-    // 3. We might lose a bit due to the "upperbit" routine (result too small, requiring a shift)
+    // 3. We might lose a bit due to the "upperbit" routine (result too small,
+    //    requiring a shift)
 
     value128 product = fast_float_compute_product_approximation(FLOAT_MANTISSA_EXPLICIT_BITS + 3, q, w);
     if(product.low == 0xFFFFFFFFFFFFFFFF){ //    could guard it further
-        // In some very rare cases, this could happen, in which case we might need a more accurate
-        // computation that what we can provide cheaply. This is very, very unlikely.
+        // In some very rare cases, this could happen, in which case we might
+        // need a more accurate computation that what we can provide cheaply.
+        // This is very, very unlikely.
         //
         const bool inside_safe_exponent = (q >= -27) && (q <= 55); // always good because 5**q <2**128 when q>=0,
-        // and otherwise, for q<0, we have 5**-q<2**64 and the 128-bit reciprocal allows for exact computation.
+        // and otherwise, for q<0, we have 5**-q<2**64 and the 128-bit
+        // reciprocal allows for exact computation.
         if(!inside_safe_exponent){
             answer.power2 = -1; // This (a negative value) indicates an error condition.
             return answer;
         }
     }
-    // The "compute_product_approximation" function can be slightly slower than a branchless approach:
+    // The "compute_product_approximation" function can be slightly slower than
+    // a branchless approach:
     // value128 product = compute_product(q, w);
-    // but in practice, we can win big with the compute_product_approximation if its additional branch
-    // is easily predicted. Which is best is data specific.
+    // but in practice, we can win big with the compute_product_approximation
+    // if its additional branch is easily predicted. Which is best is data
+    // specific.
     int upperbit = (int)(product.high >> 63);
 
     answer.mantissa = product.high >> (upperbit + 64 - FLOAT_MANTISSA_EXPLICIT_BITS - 3);
@@ -1584,10 +1596,10 @@ fast_float_compute_float_gen_float(int64_t q, uint64_t w){
 }
 
 // w * 10 ** q
-// The returned value should be a valid ieee64 number that simply need to be packed.
-// However, in some very rare cases, the computation will fail. In such cases, we
-// return an adjusted_mantissa with a negative power of 2: the caller should recompute
-// in such cases.
+// The returned value should be a valid ieee64 number that simply need to be
+// packed.  However, in some very rare cases, the computation will fail. In
+// such cases, we return an adjusted_mantissa with a negative power of 2: the
+// caller should recompute in such cases.
 FASTFLOAT_REALLY_INLINE
 fast_float_adjusted_mantissa
 fast_float_compute_float_gen_double(int64_t q, uint64_t w){
@@ -1613,12 +1625,14 @@ fast_float_compute_float_gen_double(int64_t q, uint64_t w){
     // The required precision is binary::mantissa_explicit_bits() + 3 because
     // 1. We need the implicit bit
     // 2. We need an extra bit for rounding purposes
-    // 3. We might lose a bit due to the "upperbit" routine (result too small, requiring a shift)
+    // 3. We might lose a bit due to the "upperbit" routine (result too small,
+    //    requiring a shift)
 
     value128 product = fast_float_compute_product_approximation(DOUBLE_MANTISSA_EXPLICIT_BITS + 3, q, w);
     if(product.low == 0xFFFFFFFFFFFFFFFF){ //    could guard it further
-        // In some very rare cases, this could happen, in which case we might need a more accurate
-        // computation that what we can provide cheaply. This is very, very unlikely.
+        // In some very rare cases, this could happen, in which case we might
+        // need a more accurate computation that what we can provide cheaply.
+        // This is very, very unlikely.
         //
         const bool inside_safe_exponent = (q >= -27) && (q <= 55); // always good because 5**q <2**128 when q>=0,
         // and otherwise, for q<0, we have 5**-q<2**64 and the 128-bit reciprocal allows for exact computation.
@@ -1627,10 +1641,12 @@ fast_float_compute_float_gen_double(int64_t q, uint64_t w){
             return answer;
         }
     }
-    // The "compute_product_approximation" function can be slightly slower than a branchless approach:
+    // The "compute_product_approximation" function can be slightly slower than
+    // a branchless approach:
     // value128 product = compute_product(q, w);
-    // but in practice, we can win big with the compute_product_approximation if its additional branch
-    // is easily predicted. Which is best is data specific.
+    // but in practice, we can win big with the compute_product_approximation
+    // if its additional branch is easily predicted. Which is best is data
+    // specific.
     int upperbit = (int)(product.high >> 63);
 
     answer.mantissa = product.high >> (upperbit + 64 - DOUBLE_MANTISSA_EXPLICIT_BITS - 3);
@@ -1699,12 +1715,13 @@ fast_float_compute_float_gen_double(int64_t q, uint64_t w){
  * Rob Pike suggested that this algorithm be called "Simple Decimal Conversion".
  *
  * It is probably not very fast but it is a fallback that should almost never
- * be used in real life. Though it is not fast, it is "easily" understood and debugged.
+ * be used in real life. Though it is not fast, it is "easily" understood and
+ * debugged.
  **/
 
 // remove all final zeroes
-static inline 
-void 
+static inline
+void
 fast_float_trim(fast_float_decimal *h){
     while((h->num_digits > 0) && (h->digits[h->num_digits - 1] == 0)){
         h->num_digits--;
@@ -1713,8 +1730,8 @@ fast_float_trim(fast_float_decimal *h){
 
 
 
-static inline 
-uint32_t 
+static inline
+uint32_t
 fast_float_number_of_digits_decimal_left_shift(const fast_float_decimal *h, uint32_t shift){
     shift &= 63;
     static const uint16_t number_of_digits_fast_float_decimal_left_shift_table[65] ={
@@ -1808,8 +1825,8 @@ fast_float_number_of_digits_decimal_left_shift(const fast_float_decimal *h, uint
     return num_new_digits;
 }
 
-static inline 
-uint64_t 
+static inline
+uint64_t
 fast_float_round_decimal(const fast_float_decimal *h){
     if((h->num_digits == 0) || (h->decimal_point < 0)){
         return 0;
@@ -1837,8 +1854,8 @@ fast_float_round_decimal(const fast_float_decimal *h){
 }
 
 // computes h * 2^-shift
-static inline 
-void 
+static inline
+void
 fast_float_decimal_left_shift(fast_float_decimal *h, uint32_t shift){
     if(h->num_digits == 0){
         return;
@@ -1881,8 +1898,8 @@ fast_float_decimal_left_shift(fast_float_decimal *h, uint32_t shift){
 }
 
 // computes h * 2^shift
-static inline 
-void 
+static inline
+void
 fast_float_decimal_right_shift(fast_float_decimal *h, uint32_t shift){
     uint32_t read_index = 0;
     uint32_t write_index = 0;
@@ -2316,9 +2333,9 @@ fast_float_from_chars_float(const char *first, const char *last, float *value, e
     if(FLOAT_MIN_EXPONENT_FAST_PATH <= pns.exponent && pns.exponent <= FLOAT_MAX_EXPONENT_FAST_PATH && pns.mantissa <= FLOAT_MAX_MANTISSA_FAST_PATH && !pns.too_many_digits){
         *value = (float)(pns.mantissa);
         if(pns.exponent < 0)
-	        *value = *value / POWERS_OF_TEN_FLOAT[-pns.exponent];
+            *value = *value / POWERS_OF_TEN_FLOAT[-pns.exponent];
         else
-	        *value = *value * POWERS_OF_TEN_FLOAT[pns.exponent];
+            *value = *value * POWERS_OF_TEN_FLOAT[pns.exponent];
         if(pns.negative)
             *value = -*value;
         return answer;
@@ -2364,9 +2381,9 @@ fast_float_from_chars_double(const char *first, const char *last, double *value,
     if(DOUBLE_MIN_EXPONENT_FAST_PATH <= pns.exponent && pns.exponent <= DOUBLE_MAX_EXPONENT_FAST_PATH && pns.mantissa <= DOUBLE_MAX_MANTISSA_FAST_PATH && !pns.too_many_digits){
         *value = (double)(pns.mantissa);
         if(pns.exponent < 0)
-	        *value = *value / POWERS_OF_TEN_DOUBLE[-pns.exponent];
+            *value = *value / POWERS_OF_TEN_DOUBLE[-pns.exponent];
         else
-	        *value = *value * POWERS_OF_TEN_DOUBLE[pns.exponent];
+            *value = *value * POWERS_OF_TEN_DOUBLE[pns.exponent];
         if(pns.negative)
             *value = -*value;
         return answer;
