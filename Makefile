@@ -2,9 +2,9 @@ Bin: ; mkdir $@
 Deps: ; mkdir $@
 Fuzz: ; mkdir $@
 DEBUG=-g
-OPT=-O1
+OPT=-O3
 
-DRJSONVERSION=1.0.0
+DRJSONVERSION=2.0.0
 
 DEPFILES:= $(wildcard Deps/*.dep)
 include $(DEPFILES)
@@ -28,7 +28,7 @@ DYLIB=dylib
 DYLINK=dylib
 EXE=
 Bin/libdrjson.$(DRJSONVERSION).dylib: DrJson/drjson.c | Bin Deps
-	$(CC) $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dylib.dep  -Wl,-headerpad_max_install_names -Wl,-undefined,error -shared -install_name @executable_path/libdrjson.$(DRJSONVERSION).dylib -compatibility_version $(DRJSONVERSION) -current_version $(DRJSONVERSION)
+	$(CC) $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dylib.dep  -Wl,-headerpad_max_install_names -Wl,-undefined,error -shared -install_name @executable_path/libdrjson.$(DRJSONVERSION).dylib -compatibility_version $(DRJSONVERSION) -current_version $(DRJSONVERSION) -arch arm64 -arch x86_64
 else
 DYLIB=so
 DYLINK=so
@@ -43,6 +43,9 @@ Bin/drjson.o: DrJson/drjson.c | Bin Deps
 
 Bin/demo$(EXE): Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/demo.dep $(OPT) $(DEBUG) Bin/libdrjson.$(DRJSONVERSION).$(DYLINK) -fvisibility=hidden -I.
+
+Bin/test$(EXE): DrJson/test_drjson.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test.dep Bin/libdrjson.$(DRJSONVERSION).$(DYLINK) -fvisibility=hidden -I.
 
 
 README.html: README.md README.css

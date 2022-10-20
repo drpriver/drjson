@@ -34,7 +34,48 @@
 #pragma clang assume_nonnull begin
 #endif
 
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(__IMPORTC__)
+__import core.checkedint;
+
+static inline
+int
+__builtin_mul_overflow_32(uint32_t a, uint32_t b, uint32_t* dst){
+    _Bool overflowed = 0;
+    *dst = mulu(a, b, overflowed);
+    return overflowed;
+}
+static inline
+int
+__builtin_mul_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
+    _Bool overflowed = 0;
+    *dst = mulu(a, b, overflowed);
+    return overflowed;
+}
+#define __builtin_mul_overflow(a, b, dst) _Generic(a, \
+    uint32_t: __builtin_mul_overflow_32, \
+    uint64_t: __builtin_mul_overflow_64)(a, b, dst)
+
+static inline
+int
+__builtin_add_overflow_32(uint32_t a, uint32_t b, uint32_t* dst){
+    _Bool overflowed = 0;
+    *dst = addu(a, b, overflowed);
+    return overflowed;
+}
+static inline
+int
+__builtin_add_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
+    _Bool overflowed = 0;
+    *dst = addu(a, b, overflowed);
+    return overflowed;
+}
+#define __builtin_add_overflow(a, b, dst) _Generic(a, \
+    uint32_t: __builtin_add_overflow_32, \
+    uint64_t: __builtin_add_overflow_64)(a, b, dst)
+
+
+
+#elif defined(_MSC_VER) && !defined(__clang__)
 // Shim the overflow intrinsics for MSVC
 // These are slow as they use division.
 static inline

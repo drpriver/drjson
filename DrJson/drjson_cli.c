@@ -176,7 +176,7 @@ main(int argc, const char* const* argv){
             print_argparse_help(&parser, columns);
             return 0;
         case VERSION:
-            puts("drjson v1.0.0");
+            puts("drjson v" DRJSON_VERSION);
             return 0;
         case FISH:
             print_argparse_fish_completions(&parser);
@@ -201,8 +201,11 @@ main(int argc, const char* const* argv){
         jsonstr = read_file_streamed(stdin);
     }
     DrJsonAllocator allocator = drjson_stdc_allocator();
-    DrJsonParseContext ctx = {
+    DrJsonContext jctx = {
         .allocator = allocator,
+    };
+    DrJsonParseContext ctx = {
+        .ctx = &jctx,
         .begin = jsonstr.text,
         .cursor = jsonstr.text,
         .end = jsonstr.text+jsonstr.length,
@@ -212,22 +215,19 @@ main(int argc, const char* const* argv){
         drjson_parse_braceless_object(&ctx):
         drjson_parse(&ctx);
     if(document.kind == DRJSON_ERROR){
-        drjson_print_error_fp(stderr,  jsonpath.text, jsonpath.length, &ctx, document);
+        drjson_print_error_fp(stderr,  jsonpath.text, jsonpath.length, 0, 0, document);
         return 1;
     }
     int nqueries = kw_args[QUERY_KWARG].num_parsed;
-    DrJsonValue* result = &document;
-    DrJsonValue query_results[100];
+    DrJsonValue result = document;
     if(nqueries){
         for(int i = 0; i < nqueries; i++){
-            DrJsonValue qresult = drjson_multi_query(&allocator, result, queries[i].text, queries[i].length);
-            if(qresult.kind == DRJSON_ERROR){
-                fprintf(stderr, "Error when evaluating the %dth query ('%s'):", i, queries[i].text);
-                drjson_print_value_fp(stderr, qresult, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
+            result = drjson_query(&jctx, result, queries[i].text, queries[i].length);
+            if(result.kind == DRJSON_ERROR){
+                fprintf(stderr, "Error when evaluating the %dth query ('%s'): ", i, queries[i].text);
+                drjson_print_value_fp(&jctx, stderr, result, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
                 return 1;
             }
-            query_results[i] = qresult;
-            result = &query_results[i];
         }
     }
     FILE* outfp = stdout;
@@ -238,7 +238,7 @@ main(int argc, const char* const* argv){
             return 1;
         }
     }
-    int err = drjson_print_value_fp(outfp, *result, 0, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0));
+    int err = drjson_print_value_fp(&jctx, outfp, result, 0, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0));
     if(err){
         fprintf(stderr, "err when writing: %d\n", err);
     }

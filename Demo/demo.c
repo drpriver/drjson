@@ -41,8 +41,9 @@ read_file_streamed(FILE* fp){
 }
 
 int main(int argc, char** argv){
-    const char* data = "{\n"
-        "foo: 123.4e12\n"
+    const char* data = ""
+        "{\n"
+        "    foo: 123.4e12\n"
         "}\n";
     size_t nbytes = strlen(data);
     if(argc > 1){
@@ -61,11 +62,7 @@ int main(int argc, char** argv){
     }
 
     ArenaAllocator aa = {0};
-
-    DrJsonParseContext ctx = {
-        .begin = data,
-        .cursor = data,
-        .end = data + nbytes, 
+    DrJsonContext jctx = {
         .allocator = {
             .user_pointer = &aa,
             .alloc = (void*(*)(void*, size_t))ArenaAllocator_alloc,
@@ -73,15 +70,21 @@ int main(int argc, char** argv){
             .free = (void(*)(void*, const void*, size_t))ArenaAllocator_free,
             .free_all = (void(*)(void*))ArenaAllocator_free_all,
         },
-        // .allocator = drjson_stdc_allocator(),
+    };
+
+    DrJsonParseContext ctx = {
+        .ctx = &jctx,
+        .begin = data,
+        .cursor = data,
+        .end = data + nbytes,
     };
     DrJsonValue v = drjson_parse(&ctx);
-    if(v.kind == DRJSON_ERROR){
-        fprintf(stderr, "%s (%d): %s\n", drjson_get_error_name(v), drjson_get_error_code(v), v.err_mess);
+    if(drjson_kind(v) == DRJSON_ERROR){
+        fprintf(stderr, "%s (%d): %s\n", drjson_get_error_name(v), drjson_error_code(v), drjson_error_mess(v));
         return 1;
     }
     if(argc <= 2){
-        drjson_print_value_fp(stdout, v, 0, DRJSON_PRETTY_PRINT);
+        drjson_print_value_fp(&jctx, stdout, v, 0, DRJSON_PRETTY_PRINT);
         putchar('\n');
         return 0;
     }
@@ -91,57 +94,57 @@ int main(int argc, char** argv){
     size_t qlen = strlen(query);
     if(qlen){
         if(argc > 3){
-            DrJsonValue it = drjson_checked_query(&v, atoi(argv[3]), query, qlen);
-            drjson_print_value_fp(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            DrJsonValue it = drjson_checked_query(&jctx, v, atoi(argv[3]), query, qlen);
+            drjson_print_value_fp(&jctx, stdout, it, 0, DRJSON_PRETTY_PRINT);
             putchar('\n');
             return 0;
         }
-        DrJsonValue it = drjson_query(&v, query, qlen);
-        if(it.kind != DRJSON_ERROR){
+        DrJsonValue it = drjson_query(&jctx, v, query, qlen);
+        if(drjson_kind(it) != DRJSON_ERROR){
             // printf("v%s: ", query);
-            drjson_print_value_fp(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            drjson_print_value_fp(&jctx, stdout, it, 0, DRJSON_PRETTY_PRINT);
             putchar('\n');
         }
         else {
-            it = drjson_multi_query(&ctx.allocator, &v, query, qlen);
-            drjson_print_value_fp(stdout, it, 0, DRJSON_PRETTY_PRINT);
+            drjson_print_value_fp(&jctx, stdout, it, 0, DRJSON_PRETTY_PRINT);
             putchar('\n');
         }
     }
-    if(ctx.allocator.free_all)
-        ctx.allocator.free_all(ctx.allocator.user_pointer);
-    else
-        drjson_slow_recursive_free_all(&ctx.allocator, v);
+    if(jctx.allocator.free_all)
+        jctx.allocator.free_all(jctx.allocator.user_pointer);
 
     return 0;
 }
 
 // this is unused, it's just to see if the README compiles
-int 
+int
 write_foo_bar_baz_to_fp(const char* json, size_t length, FILE* fp){
+  int result = 0;
+  DrJsonContext jctx = {
+      .allocator = drjson_stdc_allocator(),
+  };
   DrJsonParseContext ctx = {
-    .begin=json, 
-    .cursor=json, 
-    .end=json+length, 
-    .allocator=drjson_stdc_allocator(),
+    .begin=json,
+    .cursor=json,
+    .end=json+length,
+    .ctx = &jctx,
   };
   DrJsonValue v = drjson_parse(&ctx);
-  if(v.kind == DRJSON_ERROR){
-    // handle error
-    return 1;
+  if(drjson_kind(v) == DRJSON_ERROR){
+    result = 1;
+    goto done;
   }
-  DrJsonValue o = drjson_query(&v, "foo.bar.baz", sizeof("foo.bar.baz")-1);
-  if(o.kind != DRJSON_BOXED){
-    // handle error
-    drjson_slow_recursive_free_all(&ctx.allocator, v);
-    return 2;
+  DrJsonValue o = drjson_query(&jctx, v, "foo.bar.baz", sizeof("foo.bar.baz")-1);
+  if(drjson_kind(o) == DRJSON_ERROR){
+    result = 2;
+    goto done;
   }
-  int err = drjson_print_value_fp(fp, *o.boxed, 0, DRJSON_PRETTY_PRINT);
+  int err = drjson_print_value_fp(&jctx, fp, o, 0, DRJSON_PRETTY_PRINT);
   if(err){
-    // handle error
-     drjson_slow_recursive_free_all(&ctx.allocator, v);
-     return 3;
+    result = 3;
+    goto done;
   }
-  drjson_slow_recursive_free_all(&ctx.allocator, v);
-  return 0;
+  done:
+  drjson_ctx_free_all(&jctx);
+  return result;
 }

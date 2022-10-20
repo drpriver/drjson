@@ -456,6 +456,13 @@ struct ArgStyle {
     const char* post_description;
 };
 
+typedef struct ArgParseKwParams ArgParseKwParams;
+struct ArgParseKwParams {
+    ArgToParse* args;
+    size_t count;
+    const ArgParseKwParams* _Nullable next;
+};
+
 //
 // Parser structure.
 struct ArgParser {
@@ -483,10 +490,8 @@ struct ArgParser {
     //
     // The keyword arguments. Create an array of these.
     // The order doesn't matter.
-    struct {
-        ArgToParse* args;
-        size_t count;
-    } keyword;
+    // Linked list so you can take keyword args from a caller.
+    ArgParseKwParams keyword;
     // If an error occurred, these are set depending on what error occurred.
     // Exactly when they are set or not is an implementation detail, so use
     // `print_argparse_error` instead.
@@ -607,34 +612,36 @@ print_argparse_help(const ArgParser* p, int columns){
             printf(" %s", arg->name.text);
         }
     }
-    for(size_t i = 0; i < p->keyword.count; i++){
-        ArgToParse* arg = &p->keyword.args[i];
-        if(arg->hidden)
-            continue;
-        if(arg->dest.type == ARG_FLAG || arg->dest.type == ARG_BITFLAG){
-            if(arg->altname1.length){
-                int to_print = sizeof(" [%s | %s]") - 5 + arg->name.length + arg->altname1.length;
-                help_state_update(&hs, to_print);
-                printf(" [%s | %s]", arg->name.text, arg->altname1.text);
+    for(const ArgParseKwParams* keywords = &p->keyword; keywords; keywords = keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            ArgToParse* arg = &keywords->args[i];
+            if(arg->hidden)
+                continue;
+            if(arg->dest.type == ARG_FLAG || arg->dest.type == ARG_BITFLAG){
+                if(arg->altname1.length){
+                    int to_print = sizeof(" [%s | %s]") - 5 + arg->name.length + arg->altname1.length;
+                    help_state_update(&hs, to_print);
+                    printf(" [%s | %s]", arg->name.text, arg->altname1.text);
+                }
+                else{
+                    int to_print = sizeof(" [%s]") - 3 + arg->name.length;
+                    help_state_update(&hs, to_print);
+                    printf(" [%s]", arg->name.text);
+                }
             }
-            else{
-                int to_print = sizeof(" [%s]") - 3 + arg->name.length;
-                help_state_update(&hs, to_print);
-                printf(" [%s]", arg->name.text);
-            }
-        }
-        else {
-            if(arg->altname1.text){
-                LongString tn = ArgTypeNames[arg->dest.type];
-                int to_print = sizeof(" [%s | %s <%s>%s]") - 9 + arg->name.length + arg->altname1.length + tn.length + (arg->max_num > 1?sizeof(" ...")-1: 0);
-                help_state_update(&hs, to_print);
-                printf(" [%s | %s <%s>%s]", arg->name.text, arg->altname1.text, tn.text, arg->max_num > 1?" ...":"");
-            }
-            else{
-                LongString tn = ArgTypeNames[arg->dest.type];
-                int to_print = sizeof(" [%s <%s>%s]") - 7 + arg->name.length + tn.length + (arg->max_num > 1?sizeof(" ...")-1:0);
-                help_state_update(&hs, to_print);
-                printf(" [%s <%s>%s]", arg->name.text, tn.text, arg->max_num>1?" ...":"");
+            else {
+                if(arg->altname1.text){
+                    LongString tn = ArgTypeNames[arg->dest.type];
+                    int to_print = sizeof(" [%s | %s <%s>%s]") - 9 + arg->name.length + arg->altname1.length + tn.length + (arg->max_num > 1?sizeof(" ...")-1: 0);
+                    help_state_update(&hs, to_print);
+                    printf(" [%s | %s <%s>%s]", arg->name.text, arg->altname1.text, tn.text, arg->max_num > 1?" ...":"");
+                }
+                else{
+                    LongString tn = ArgTypeNames[arg->dest.type];
+                    int to_print = sizeof(" [%s <%s>%s]") - 7 + arg->name.length + tn.length + (arg->max_num > 1?sizeof(" ...")-1:0);
+                    help_state_update(&hs, to_print);
+                    printf(" [%s <%s>%s]", arg->name.text, tn.text, arg->max_num>1?" ...":"");
+                }
             }
         }
     }
@@ -671,17 +678,19 @@ print_argparse_help(const ArgParser* p, int columns){
     // It's possible for all keyword arguments to be hidden,
     // so only print the header until we hit a non-hidden argument.
     bool printed_keyword_header = false;
-    for(size_t i = 0; i < p->keyword.count; i++){
-        ArgToParse* arg = &p->keyword.args[i];
-        if(arg->hidden)
-            continue;
-        if(!printed_keyword_header){
-            printed_keyword_header = true;
-            printf("\n%sKeyword Arguments%s:\n", style.pre_header, style.post_header);
-            if(!p->styling.no_dashed_header_underline)
-                printf("------------------\n");
+    for(const ArgParseKwParams* keywords = &p->keyword; keywords; keywords = keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            ArgToParse* arg = &keywords->args[i];
+            if(arg->hidden)
+                continue;
+            if(!printed_keyword_header){
+                printed_keyword_header = true;
+                printf("\n%sKeyword Arguments%s:\n", style.pre_header, style.post_header);
+                if(!p->styling.no_dashed_header_underline)
+                    printf("------------------\n");
+            }
+            print_arg_help(arg, columns, &style);
         }
-        print_arg_help(arg, columns, &style);
     }
 }
 
@@ -693,16 +702,18 @@ print_argparse_hidden_help(const ArgParser* p, int columns){
     // There might be no hidden args. Only print the header if we are actually
     // going to print an arg.
     bool printed_an_arg = false;
-    for(size_t i = 0; i < p->keyword.count; i++){
-        ArgToParse* arg = &p->keyword.args[i];
-        if(!arg->hidden) continue;
-        if(!printed_an_arg){
-            printed_an_arg = true;
-            printf("%sHidden Arguments%s:\n", style.pre_header, style.post_header);
-            if(!p->styling.no_dashed_header_underline)
-                printf("-----------------\n");
+    for(const ArgParseKwParams* keywords = &p->keyword; keywords; keywords=keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            ArgToParse* arg = &keywords->args[i];
+            if(!arg->hidden) continue;
+            if(!printed_an_arg){
+                printed_an_arg = true;
+                printf("%sHidden Arguments%s:\n", style.pre_header, style.post_header);
+                if(!p->styling.no_dashed_header_underline)
+                    printf("-----------------\n");
+            }
+            print_arg_help(arg, columns, &style);
         }
-        print_arg_help(arg, columns, &style);
     }
 }
 
@@ -868,8 +879,10 @@ next_tokenize_help(const char* help){
             // Note that this list includes '\0' as a word boundary.
             case ' ': case '\n': case '\r': case '\t': case '\f': case '\0':{
                 return (struct HelpTokenized){
-                    .token.text = begin,
-                    .token.length = (size_t)(help - begin),
+                    .token={
+                        .text = begin,
+                        .length = (size_t)(help - begin),
+                    },
                     .rest = help,
                 };
             }break;
@@ -877,7 +890,7 @@ next_tokenize_help(const char* help){
                 continue;
         }
     }
-    unreachable();
+    // unreachable();
 }
 
 static inline
@@ -995,16 +1008,16 @@ parse_arg(ArgToParse* arg, StringView s){
             APPEND_ARG(int, value);
         }break;
         case ARG_FLOAT32:{
-            FloatResult pr = parse_float(s.text, s.length);
-            if(pr.errored)
+            FloatResult fr = parse_float(s.text, s.length);
+            if(fr.errored)
                 return ARGPARSE_CONVERSION_ERROR;
-            APPEND_ARG(float, pr.result);
+            APPEND_ARG(float, fr.result);
         }break;
         case ARG_FLOAT64:{
-            DoubleResult pr = parse_double(s.text, s.length);
-            if(pr.errored)
+            DoubleResult fr = parse_double(s.text, s.length);
+            if(fr.errored)
                 return ARGPARSE_CONVERSION_ERROR;
-            APPEND_ARG(double, pr.result);
+            APPEND_ARG(double, fr.result);
         }break;
         // for flags, using the append_proc doesn't make sense.
         case ARG_BITFLAG:
@@ -1154,13 +1167,15 @@ static inline
 ArgToParse*_Nullable
 find_matching_kwarg(ArgParser* parser, StringView sv){
     // do an inefficient linear search for now.
-    for(size_t i = 0; i < parser->keyword.count; i++){
-        ArgToParse* kw = &parser->keyword.args[i];
-        if(SV_equals(kw->name, sv))
-            return kw;
-        if(kw->altname1.length){
-            if(SV_equals(kw->altname1, sv))
+    for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords = keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            ArgToParse* kw = &keywords->args[i];
+            if(SV_equals(kw->name, sv))
                 return kw;
+            if(kw->altname1.length){
+                if(SV_equals(kw->altname1, sv))
+                    return kw;
+            }
         }
     }
     return NULL;
@@ -1257,20 +1272,22 @@ parse_args(ArgParser* parser, const Args* args, enum ArgParseFlags flags){
             return ARGPARSE_EXCESS_ARGS;
         }
     }
-    for(size_t i = 0; i < parser->keyword.count; i++){
-        ArgToParse* arg = &parser->keyword.args[i];
-        if(arg->num_parsed < arg->min_num){
-            parser->failed.arg_to_parse = arg;
-            return ARGPARSE_INSUFFICIENT_ARGS;
-        }
-        if(arg->num_parsed > agp_maxnum(arg->max_num)){
-            parser->failed.arg_to_parse = arg;
-            return ARGPARSE_EXCESS_ARGS;
-        }
-        // This only makes sense for keyword arguments.
-        if(arg->visited && arg->num_parsed == 0){
-            parser->failed.arg_to_parse = arg;
-            return ARGPARSE_VISITED_NO_ARG_GIVEN;
+    for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords = keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            ArgToParse* arg = &keywords->args[i];
+            if(arg->num_parsed < arg->min_num){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_INSUFFICIENT_ARGS;
+            }
+            if(arg->num_parsed > agp_maxnum(arg->max_num)){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_EXCESS_ARGS;
+            }
+            // This only makes sense for keyword arguments.
+            if(arg->visited && arg->num_parsed == 0){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_VISITED_NO_ARG_GIVEN;
+            }
         }
     }
     return 0;
@@ -1364,20 +1381,22 @@ parse_args_longstrings(ArgParser* parser, const LongString*args, size_t args_cou
             return ARGPARSE_EXCESS_ARGS;
         }
     }
-    for(size_t i = 0; i < parser->keyword.count; i++){
-        ArgToParse* arg = &parser->keyword.args[i];
-        if(arg->num_parsed < arg->min_num){
-            parser->failed.arg_to_parse = arg;
-            return ARGPARSE_INSUFFICIENT_ARGS;
-        }
-        if(arg->num_parsed > agp_maxnum(arg->max_num)){
-            parser->failed.arg_to_parse = arg;
-            return ARGPARSE_EXCESS_ARGS;
-        }
-        // This only makes sense for keyword arguments.
-        if(arg->visited && arg->num_parsed == 0){
-            parser->failed.arg_to_parse = arg;
-            return ARGPARSE_VISITED_NO_ARG_GIVEN;
+    for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords=keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            ArgToParse* arg = &keywords->args[i];
+            if(arg->num_parsed < arg->min_num){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_INSUFFICIENT_ARGS;
+            }
+            if(arg->num_parsed > agp_maxnum(arg->max_num)){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_EXCESS_ARGS;
+            }
+            // This only makes sense for keyword arguments.
+            if(arg->visited && arg->num_parsed == 0){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_VISITED_NO_ARG_GIVEN;
+            }
         }
     }
     return 0;
@@ -1589,52 +1608,54 @@ print_argparse_fish_completions(const ArgParser* p){
         }
         putchar('\n');
     }
-    for(size_t i = 0; i < p->keyword.count; i++){
-        ArgToParse* a = &p->keyword.args[i];
-        printf("complete -c %s", p->name);
-        StringView names[] = {a->name, a->altname1};
-        for(size_t j = 0; j < arrlen(names); j++){
-            StringView name = names[j];
-            if(!name.length) continue;
-            if(name.length > 2 && memcmp(name.text, "--", 2) == 0){
-                printf(" -l %.*s", (int)name.length-2, name.text+2);
-            }
-            else if(name.length == 2 && name.text[0] == '-'){
-                printf(" -s %.*s", (int)name.length-1, name.text+1);
-            }
-            else if(name.length > 1 && name.text[0] == '-'){
-                printf(" -o %.*s", (int)name.length-1, name.text+1);
-            }
-        }
-        switch(a->dest.type){
-            case ARG_FLAG:
-            case ARG_BITFLAG:
-                break;
-            case ARG_FLOAT32:
-            case ARG_FLOAT64:
-            case ARG_STRING:
-            case ARG_CSTRING:
-            case ARG_INTEGER64:
-            case ARG_UINTEGER64:
-            case ARG_USER_DEFINED:
-            case ARG_INT:
-                printf(" -r");
-                break;
-            case ARG_ENUM:
-                printf(" -a \"");
-                for(size_t j = 0; j < a->dest.enum_pointer->enum_count; j++){
-                    if(j != 0) putchar(' ');
-                    StringView sv = a->dest.enum_pointer->enum_names[j];
-                    printf("%.*s", (int)sv.length, sv.text);
+    for(const ArgParseKwParams* keywords = &p->keyword; keywords; keywords = keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            ArgToParse* a = &keywords->args[i];
+            printf("complete -c %s", p->name);
+            StringView names[] = {a->name, a->altname1};
+            for(size_t j = 0; j < arrlen(names); j++){
+                StringView name = names[j];
+                if(!name.length) continue;
+                if(name.length > 2 && memcmp(name.text, "--", 2) == 0){
+                    printf(" -l %.*s", (int)name.length-2, name.text+2);
                 }
+                else if(name.length == 2 && name.text[0] == '-'){
+                    printf(" -s %.*s", (int)name.length-1, name.text+1);
+                }
+                else if(name.length > 1 && name.text[0] == '-'){
+                    printf(" -o %.*s", (int)name.length-1, name.text+1);
+                }
+            }
+            switch(a->dest.type){
+                case ARG_FLAG:
+                case ARG_BITFLAG:
+                    break;
+                case ARG_FLOAT32:
+                case ARG_FLOAT64:
+                case ARG_STRING:
+                case ARG_CSTRING:
+                case ARG_INTEGER64:
+                case ARG_UINTEGER64:
+                case ARG_USER_DEFINED:
+                case ARG_INT:
+                    printf(" -r");
+                    break;
+                case ARG_ENUM:
+                    printf(" -a \"");
+                    for(size_t j = 0; j < a->dest.enum_pointer->enum_count; j++){
+                        if(j != 0) putchar(' ');
+                        StringView sv = a->dest.enum_pointer->enum_names[j];
+                        printf("%.*s", (int)sv.length, sv.text);
+                    }
+                    putchar('"');
+            }
+            if(a->help){
+                printf(" -d \"");
+                print_argparse_single_line_help_escaped(a->help);
                 putchar('"');
+            }
+            putchar('\n');
         }
-        if(a->help){
-            printf(" -d \"");
-            print_argparse_single_line_help_escaped(a->help);
-            putchar('"');
-        }
-        putchar('\n');
     }
 }
 

@@ -188,7 +188,9 @@ fast_float_from_chars_float(const char *first, const char *last, float *value, e
 // memcpy
 #include <string.h>
 
-#ifndef __GNUC__
+#if defined(__IMPORTC__)
+#define ff_memcpy memcpy
+#elif !defined(__GNUC__)
 #define ff_memcpy memcpy
 #else
 #define ff_memcpy __builtin_memcpy
@@ -294,12 +296,18 @@ typedef struct value128{
     uint64_t high;
 } value128;
 
+#if defined(__IMPORTC__)
+__import core.bitop;
+#endif
+
 /* result might be undefined when input_num is zero */
 FASTFLOAT_REALLY_INLINE
 int
 fast_float_leading_zeroes(uint64_t input_num){
     assert(input_num > 0);
-#ifdef FASTFLOAT_VISUAL_STUDIO
+#if defined(__IMPORTC__)
+    return 63-bsr(input_num);
+#elif defined(FASTFLOAT_VISUAL_STUDIO)
     #if defined(_M_X64) || defined(_M_ARM64)
     unsigned long leading_zero = 0;
     // Search the mask data from most significant bit (MSB)
@@ -348,6 +356,9 @@ _umul128(uint64_t ab, uint64_t cd, uint64_t *hi){
 
 #endif // FASTFLOAT_32BIT
 
+#if defined(__IMPORTC__)
+__import core.int128;
+#endif
 
 // compute 64-bit a*b
 FASTFLOAT_REALLY_INLINE
@@ -360,6 +371,12 @@ fast_float_full_multiplication(uint64_t a, uint64_t b){
     answer.low = a * b;
 #elif defined(FASTFLOAT_32BIT) || (defined(_WIN64) && !defined(__clang__))
     answer.low = _umul128(a, b, &answer.high); // _umul128 not available on ARM64
+#elif defined(__IMPORTC__)
+    Cent A = {a};
+    Cent B = {b};
+    Cent R = mul(A, B);
+    answer.low = R.lo;
+    answer.high = R.hi;
 #elif defined(FASTFLOAT_64BIT)
     __uint128_t r = ((__uint128_t)a) * b;
     answer.low = (uint64_t)(r);
