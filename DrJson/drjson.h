@@ -551,7 +551,7 @@ int
 drjson_print_value_mem(const DrJsonContext* ctx, void* buff, size_t bufflen, DrJsonValue v, int indent, unsigned flags, size_t*_Nullable printed);
 
 DRJSON_API
-int
+void
 drjson_get_line_column(const DrJsonParseContext* ctx, size_t* line, size_t* column);
 
 // Returns 0 on success, 1 on error.

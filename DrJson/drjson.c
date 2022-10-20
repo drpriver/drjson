@@ -1887,6 +1887,27 @@ drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* re
 }
 #endif
 
+DRJSON_API
+void
+drjson_get_line_column(const DrJsonParseContext* ctx, size_t* line, size_t* column){
+    size_t lin = 0;
+    size_t col = 0;
+    // just do it the slow way, whatever.
+    for(const char* c = ctx->begin; c != ctx->cursor; c++){
+        switch(*c){
+            case '\n':
+                lin++;
+                col = 0;
+                break;
+            default:
+                col++;
+                break;
+        }
+    }
+    *line = lin;
+    *column = col;
+}
+
 #undef drjson_kind
 #undef drjson_error_code
 #undef drjson_error_mess

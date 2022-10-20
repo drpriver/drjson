@@ -215,7 +215,9 @@ main(int argc, const char* const* argv){
         drjson_parse_braceless_object(&ctx):
         drjson_parse(&ctx);
     if(document.kind == DRJSON_ERROR){
-        drjson_print_error_fp(stderr,  jsonpath.text, jsonpath.length, 0, 0, document);
+        size_t l, c;
+        drjson_get_line_column(&ctx, &l, &c);
+        drjson_print_error_fp(stderr,  jsonpath.text, jsonpath.length, l, c, document);
         return 1;
     }
     int nqueries = kw_args[QUERY_KWARG].num_parsed;

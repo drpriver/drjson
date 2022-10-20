@@ -80,7 +80,9 @@ int main(int argc, char** argv){
     };
     DrJsonValue v = drjson_parse(&ctx);
     if(drjson_kind(v) == DRJSON_ERROR){
-        fprintf(stderr, "%s (%d): %s\n", drjson_get_error_name(v), drjson_error_code(v), drjson_error_mess(v));
+        size_t l, c;
+        drjson_get_line_column(&ctx, &l, &c);
+        drjson_print_error_fp(stderr, "input", 5, l, c, v);
         return 1;
     }
     if(argc <= 2){
