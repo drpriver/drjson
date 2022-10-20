@@ -273,7 +273,7 @@ drjson_is_numeric(DrJsonValue v){
 // shallow equality (although it does compare strings)
 static inline
 int
-drjson_eq(const DrJsonContext* ctx, DrJsonValue a, DrJsonValue b){
+drjson_eq(DrJsonValue a, DrJsonValue b){
     if(drjson_kind(a) != drjson_kind(b)) return 0;
     switch(drjson_kind(a)){
         case DRJSON_NUMBER:
@@ -424,7 +424,7 @@ DrJsonValue
 drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length){
     DrJsonStringNode* node = drjson_store_string_copy(ctx, s, length);
     if(!node) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate storage for string");
-    return (DrJsonValue){._skind=DRJSON_STRING, .slen=length, .string=node->data};
+    return drjson_make_string_no_copy(node->data, length);
 }
 #endif
 

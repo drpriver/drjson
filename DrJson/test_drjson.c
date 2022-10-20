@@ -35,7 +35,7 @@ TestFunction(TestSimpleParsing){
 
     DrJsonValue val = drjson_object_get_item(&ctx, v, "hello", strlen("hello"), 0);
     TestAssertNotEqual((int)drjson_kind(val), DRJSON_ERROR);
-    TestAssert(drjson_eq(&ctx, q, val));
+    TestAssert(drjson_eq(q, val));
 
     drjson_ctx_free_all(&ctx);
     TESTEND();
