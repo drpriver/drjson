@@ -1438,6 +1438,8 @@ drjson_print_value(const DrJsonContext* ctx, const DrJsonTextWriter* restrict wr
         drjson_print_value_inner(ctx, &buffer, v);
     if(flags & DRJSON_APPEND_NEWLINE)
         drjson_buff_putc(&buffer, '\n');
+    if(flags & DRJSON_APPEND_ZERO)
+        drjson_buff_putc(&buffer, '\0');
     if(buffer.cursor)
         drjson_buff_flush(&buffer);
     return buffer.errored;

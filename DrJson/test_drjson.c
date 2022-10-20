@@ -83,10 +83,11 @@ TestFunction(TestSerialization){
     TestAssertNotEqual((int)drjson_kind(v), DRJSON_ERROR);
     char buff[512];
     size_t printed;
-    int err = drjson_print_value_mem(&ctx, buff, sizeof buff, v, 0, 0, &printed);
+    int err = drjson_print_value_mem(&ctx, buff, sizeof buff, v, 0, DRJSON_APPEND_ZERO, &printed);
     TestAssertFalse(err);
-    TestAssert(printed < sizeof buff);
-    buff[printed] = 0;
+    TestAssert(printed <= sizeof buff);
+    TestAssert(printed);
+    TestAssertEquals(buff[printed-1], '\0');
     TestAssertEquals2(str_eq, buff, "{\"foo\":{\"bar\":{\"bazinga\":3}}}");
     drjson_ctx_free_all(&ctx);
     TESTEND();

@@ -539,6 +539,7 @@ drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* re
 enum {
     DRJSON_PRETTY_PRINT   = 0x1,
     DRJSON_APPEND_NEWLINE = 0x2,
+    DRJSON_APPEND_ZERO    = 0x4,
 };
 
 // Returns 0 on success, 1 on error.
