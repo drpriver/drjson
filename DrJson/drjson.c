@@ -16,6 +16,7 @@
 #ifndef _WIN32
 #include <unistd.h>
 #else
+typedef long long ssize_t;
 #include <windows.h>
 #endif
 
