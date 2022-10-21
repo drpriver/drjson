@@ -818,9 +818,6 @@ run_the_tests(size_t*_Nonnull which_tests, int test_count, struct TestResults* r
 #ifndef SUPPRESS_TEST_MAIN
 #include "argument_parsing.h"
 #include "term_util.h"
-#ifdef _WIN32
-#include "Platform/Windows/wincli.h"
-#endif
 #include <inttypes.h>
 
 // shuffling stuff
@@ -900,10 +897,6 @@ shuffle_tests(size_t*_Nonnull which_tests, int test_count){
 static
 int
 test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullable extra_kwargs){
-#ifdef _WIN32
-    // unclear if this is actually needed or if argv is utf8.
-    if(get_main_args(&argc, &argv) != 0) return 1;
-#endif
     if(argc < 1){
         fprintf(stderr, "Somehow this program was called without an argv.\n");
         return 1;
