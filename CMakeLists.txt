@@ -54,3 +54,9 @@ install(TARGETS drjson-dylib
 		PUBLIC_HEADER DESTINATION include/DrJson)
 install(TARGETS drjson DESTINATION bin)
 
+add_executable(test-drjson DrJson/test_drjson.c)
+target_link_libraries(test-drjson drjson-dylib)
+
+enable_testing()
+add_test(test-drjson test-drjson)
+

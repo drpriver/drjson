@@ -23,3 +23,5 @@ drjson_dylib = both_libraries(
   c_args: ignore_bogus_deprecations,
 )
 executable('drjson', 'DrJson/drjson_cli.c', install:true, c_args:ignore_bogus_deprecations)
+test_drjson =  executable('test-drjson', 'DrJson/test_drjson.c', link_with:drjson_dylib, c_args: ignore_bogus_deprecations)
+test('test-drjson', test_drjson)
