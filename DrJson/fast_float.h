@@ -188,9 +188,7 @@ fast_float_from_chars_float(const char *first, const char *last, float *value, e
 // memcpy
 #include <string.h>
 
-#if defined(__IMPORTC__)
-#define ff_memcpy memcpy
-#elif !defined(__GNUC__)
+#if !defined(__GNUC__) || defined(__IMPORTC__)
 #define ff_memcpy memcpy
 #else
 #define ff_memcpy __builtin_memcpy
