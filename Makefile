@@ -15,14 +15,16 @@ CC=clang
 DYLIB=dll
 DYLINK=lib
 EXE=.exe
+RM=del /q
 Bin/libdrjson.$(DRJSONVERSION).dll: DrJson/drjson.c | Bin Deps
 	clang $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dll.dep -shared
 else
+RM=rm -rf
 UNAME := $(shell uname)
 
 Bin/libdrjson.a: Bin/drjson.o | Bin
 	ar crs $@ $^
-all: Bin/libdrjson.a 
+all: Bin/libdrjson.a
 ifeq ($(UNAME),Darwin)
 DYLIB=dylib
 DYLINK=dylib
@@ -66,6 +68,10 @@ do-fuzz: Bin/drjson_fuzz | Fuzz Deps
 	$< Fuzz -fork=4
 
 .PHONY: all
-all: Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) Bin/drjson$(EXE) Bin/drjson.o Bin/demo$(EXE)
+all: Bin/libdrjson.$(DRJSONVERSION).$(DYLIB)
+all: Bin/drjson$(EXE)
+all: Bin/drjson.o
+all: Bin/demo$(EXE)
+all: Bin/test$(EXE)
 
 .DEFAULT_GOAL:=all
