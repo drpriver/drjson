@@ -15,12 +15,14 @@ CC=clang
 DYLIB=dll
 DYLINK=lib
 EXE=.exe
-RM=del /q
 Bin/libdrjson.$(DRJSONVERSION).dll: DrJson/drjson.c | Bin Deps
 	clang $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dll.dep -shared
+clean:
+	del /q Bin\*
 else
-RM=rm -rf
 UNAME := $(shell uname)
+clean:
+	rm -rf Bin/*
 
 Bin/libdrjson.a: Bin/drjson.o | Bin
 	ar crs $@ $^
@@ -56,8 +58,6 @@ README.html: README.md README.css
 Bin/drjson$(EXE): DrJson/drjson_cli.c | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_cli.dep $(OPT) $(DEBUG) -fvisibility=hidden -I.
 .PHONY: clean
-clean:
-	$(RM) Bin/*
 
 
 Bin/drjson_fuzz$(EXE): DrJson/drjson_fuzz.c | Bin Deps
