@@ -152,31 +152,19 @@ struct DrJsonStringNode {
     char data[];
 };
 
-typedef struct DrJsonObject DrJsonObject;
-struct DrJsonObject {
-    void* object_items;
-    size_t count;
-    size_t capacity;
-};
-
-typedef struct DrJsonArray DrJsonArray;
-struct DrJsonArray {
-    DrJsonValue* array_items;
-    size_t count;
-    size_t capacity;
-};
-
 typedef struct DrJsonContext DrJsonContext;
 struct DrJsonContext {
+    // initialize with your allocator
     DrJsonAllocator allocator;
+    // initialize below to 0
     DrJsonStringNode* strings;
     struct {
-        DrJsonObject* data;
+        void* data;
         size_t count;
         size_t capacity;
     } objects;
     struct {
-        DrJsonArray* data;
+        void* data;
         size_t count;
         size_t capacity;
     } arrays;
@@ -352,40 +340,9 @@ drjson_size_for_object_of_length(size_t len){
     return 5*sizeof(void*)*len;
 }
 
-static inline
+DRJSON_API
 void
-drjson_ctx_free_all(DrJsonContext* ctx){
-    if(ctx->allocator.free_all){
-        ctx->allocator.free_all(ctx->allocator.user_pointer);
-        return;
-    }
-    if(!ctx->allocator.free)
-        return;
-    // Release strings
-    for(DrJsonStringNode* node = ctx->strings; node;){
-        DrJsonStringNode* next = node->next;
-        ctx->allocator.free(ctx->allocator.user_pointer, node, node->data_length+sizeof *node);
-        node = next;
-    }
-    // Free each object
-    for(size_t i = 0; i < ctx->objects.count; i++){
-        DrJsonObject* o = &ctx->objects.data[i];
-        if(o->object_items)
-            ctx->allocator.free(ctx->allocator.user_pointer, o->object_items, drjson_size_for_object_of_length(o->capacity));
-    }
-    // Then the objects array
-    if(ctx->objects.data)
-        ctx->allocator.free(ctx->allocator.user_pointer, ctx->objects.data, ctx->objects.capacity*sizeof *ctx->objects.data);
-    // Free each array
-    for(size_t i = 0; i < ctx->arrays.count; i++){
-        DrJsonArray* a = &ctx->arrays.data[i];
-        if(a->array_items)
-            ctx->allocator.free(ctx->allocator.user_pointer, a->array_items,a->capacity*sizeof *a->array_items);
-    }
-    // Free arrays array
-    if(ctx->arrays.data)
-        ctx->allocator.free(ctx->allocator.user_pointer, ctx->arrays.data, ctx->arrays.capacity*sizeof *ctx->arrays.data);
-}
+drjson_ctx_free_all(DrJsonContext* ctx);
 
 DRJSON_API
 DrJsonValue
@@ -513,10 +470,6 @@ drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue array, size_t idx);
 DRJSON_API
 int // 0 on success
 drjson_array_insert_item(const DrJsonContext* ctx, DrJsonValue array, size_t idx, DrJsonValue item);
-
-DRJSON_API
-DrJsonAllocator
-drjson_stdc_allocator(void);
 
 DRJSON_API
 DrJsonValue
