@@ -95,14 +95,34 @@ struct DrJsonValue {
 #endif
     };
     union {
+        // DRJSON_NUMBER
         double number;
+
+        // DRJSON_INTEGER
         int64_t integer;
+
+        // DRJSON_UINTEGER
         uint64_t uinteger;
+
+        // DRJSON_STRING
         const char* string; // not nul-terminated, use slen.
+                            //
+        // DRJSON_ERROR
         const char* err_mess; // pointer to a c-string literal, nul terminated. Length is also given.
+
+        // DRJSON_BOOL
         _Bool boolean;
+
+        // DRJSON_ARRAY
+        // DRJSON_ARRAY_VIEW
         size_t array_idx;
+
+        // DRJSON_OBJECT
+        // DRJSON_OBJECT_KEYS
+        // DRJSON_OBJECT_VALUES
+        // DRJSON_OBJECT_ITEMS
         size_t object_idx;
+
         // null is implicit
     };
 };
@@ -113,18 +133,41 @@ _Static_assert(sizeof(DrJsonValue) == 2*sizeof(void*), "");
 DRJSON_API
 int
 drjson_kind(DrJsonValue v);
+// Retrieves the `kind` field from a json value.
+//
+// If DRJSON_OPAQUE_BITFIELDS is not defined, this is replaced with a macro.
+// This is provided for interfacing with compilers/languages that can't handle
+// bitfields.
 
 DRJSON_API
 int
 drjson_error_code(DrJsonValue v);
+// Retrieves the `error_code` field from a json value.
+// It is only valid to call this if `kind` is DRJSON_ERROR.
+//
+// If DRJSON_OPAQUE_BITFIELDS is not defined, this is replaced with a macro.
+// This is provided for interfacing with compilers/languages that can't handle
+// bitfields.
 
 DRJSON_API
 size_t
 drjson_slen(DrJsonValue v);
+// Retrieves the `slen` field from a json value.
+// It is only valid to call this if `kind` is DRJSON_STRING.
+//
+// If DRJSON_OPAQUE_BITFIELDS is not defined, this is replaced with a macro.
+// This is provided for interfacing with compilers/languages that can't handle
+// bitfields.
 
 DRJSON_API
 const char*
 drjson_error_mess(DrJsonValue v);
+// Retrieves the `err_mess` field from a json value.
+// It is only valid to call this if `kind` is DRJSON_STRING.
+//
+// If DRJSON_OPAQUE_BITFIELDS is not defined, this is replaced with a macro.
+// This is provided for interfacing with compilers/languages that can't handle
+// bitfields.
 
 #ifndef DRJSON_OPAQUE_BITFIELDS
 #define drjson_kind(v) (v).kind
@@ -134,6 +177,8 @@ drjson_error_mess(DrJsonValue v);
 #endif
 
 typedef struct DrJsonAllocator DrJsonAllocator;
+// To use a custom allocator, fill out this struct.
+// If you just want to use malloc, etc. just use `drjson_stdc_allocator`.
 struct DrJsonAllocator {
     void*_Nullable user_pointer;
     void*_Nullable (*_Nonnull alloc)(void*_Null_unspecified user_pointer, size_t size);
@@ -144,6 +189,12 @@ struct DrJsonAllocator {
     // allocated.
     void (*_Nullable free_all)(void*_Null_unspecified user_pointer);
 };
+
+
+DRJSON_API
+DrJsonAllocator
+drjson_stdc_allocator(void);
+// A default allocator that just calls malloc, free, etc.
 
 typedef struct DrJsonStringNode DrJsonStringNode;
 struct DrJsonStringNode {
@@ -172,13 +223,14 @@ struct DrJsonContext {
 
 typedef struct DrJsonParseContext DrJsonParseContext;
 struct DrJsonParseContext {
-    const char* cursor;
-    const char* end;
-    const char* begin;
-    int depth;
-    DrJsonContext* ctx;
+    const char* cursor; // initialize to string
+    const char* end; // initialize to string + length
+    const char* begin; // initialize to string
+    int depth; // initialize to 0
+    DrJsonContext* ctx; //
 };
 
+// Writer abstraction for serializing json.
 typedef struct DrJsonTextWriter DrJsonTextWriter;
 struct DrJsonTextWriter {
     void*_Null_unspecified up; //user pointer
@@ -199,6 +251,22 @@ static const char*_Nonnull const DrJsonKindNames[] = {
     [DRJSON_OBJECT_KEYS]   = "object keys",
     [DRJSON_OBJECT_VALUES] = "object values",
     [DRJSON_OBJECT_ITEMS]  = "object items",
+};
+
+static const size_t DrJsonKindNameLengths[] = {
+    [DRJSON_ERROR]         = sizeof("error")-1,
+    [DRJSON_NUMBER]        = sizeof("number")-1,
+    [DRJSON_INTEGER]       = sizeof("integer")-1,
+    [DRJSON_UINTEGER]      = sizeof("uinteger")-1,
+    [DRJSON_STRING]        = sizeof("string")-1,
+    [DRJSON_ARRAY]         = sizeof("array")-1,
+    [DRJSON_OBJECT]        = sizeof("object")-1,
+    [DRJSON_NULL]          = sizeof("null")-1,
+    [DRJSON_BOOL]          = sizeof("bool")-1,
+    [DRJSON_ARRAY_VIEW]    = sizeof("array view")-1,
+    [DRJSON_OBJECT_KEYS]   = sizeof("object keys")-1,
+    [DRJSON_OBJECT_VALUES] = sizeof("object values")-1,
+    [DRJSON_OBJECT_ITEMS]  = sizeof("object items")-1,
 };
 
 enum DrJsonErrorCode {
