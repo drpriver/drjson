@@ -169,6 +169,7 @@ main(int argc, const char* const* argv){
         .early_out.count = arrlen(early_args),
         .keyword.args = kw_args,
         .keyword.count = arrlen(kw_args),
+        .styling.plain = !isatty(fileno(stdout)),
     };
     int columns = get_terminal_size().columns;
     switch(check_for_early_out_args(&parser, &args)){

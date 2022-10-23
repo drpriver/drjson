@@ -17,30 +17,31 @@ $ drjson -h
 drjson: CLI interface to drjson.
 
 usage: drjson filepath [-o | --output <string>]
-              [-q | --query <string> ...] [--braceless] [--pretty]
+                       [-q | --query <string> ...]
+                       [--braceless] [-p | --pretty]
 
 Early Out Arguments:
 --------------------
 -h, --help:
-    Print this help and exit. 
+    Print this help and exit.
 -v, --version:
-    Print the version and exit. 
+    Print the version and exit.
 
 Positional Arguments:
 ---------------------
 filepath <string>
-    Json file to parse 
+    Json file to parse
 
 Keyword Arguments:
 ------------------
 -o, --output <string>
-    Where to write the result 
--q, --query <string> ... 
-    A query to filter the data. Queries can be stacked 
+    Where to write the result
+-q, --query <string> ...
+    A query to filter the data. Queries can be stacked
 --braceless
-    Don't require opening and closing braces around the document 
---pretty
-    Pretty print the output 
+    Don't require opening and closing braces around the document
+-p, --pretty
+    Pretty print the output
 
 ```
 <hr>
@@ -103,33 +104,30 @@ $ drjson Examples/settings.drjson --braceless --pretty
 static
 int
 write_foo_bar_baz_to_fp(const char* json, size_t length, FILE* fp){
-  DrJsonParseContext ctx = {
-    .begin=json,
-    .cursor=json,
-    .end=json+length,
-    .allocator=drjson_stdc_allocator(),
-  };
-  DrJsonValue v = drjson_parse(&ctx);
+  DrJsonContext ctx = {.allocator=drjson_stdc_allocator()};
+  DrJsonValue v = drjson_parse_string(&ctx, json, length, 0);
+  int result = 0;
   if(v.kind == DRJSON_ERROR){
-    // handle error
-    return 1;
+    result = 1;
+    goto done;
   }
-  const char* query = "foo.bar.baz";
+  const char* query = ".foo.bar.baz";
   size_t qlen = strlen(query);
-  DrJsonValue o = drjson_query(&v, query, qlen);
-  if(o.kind != DRJSON_BOXED){
-    // handle error
-    drjson_slow_recursive_free_all(&ctx.allocator, v);
-    return 2;
+  DrJsonValue o = drjson_query(&ctx, v, query, qlen);
+  if(o.kind == DRJSON_ERROR){
+    result = 2;
+    goto done;
   }
-  int err = drjson_print_value(fp, *o.boxed, 0, DRJSON_PRETTY_PRINT);
+  const int indent = 0;
+  const unsigned flags = DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE;
+  int err = drjson_print_value_fp(&ctx, fp, o, indent, flags);
   if(err){
-    // handle error
-     drjson_slow_recursive_free_all(&ctx.allocator, v);
-     return 3;
+    result = 3;
+    goto done;
   }
-  drjson_slow_recursive_free_all(&ctx.allocator, v);
-  return 0;
+  done:
+  drjson_ctx_free_all(&ctx);
+  return result;
 }
 
 int
@@ -146,16 +144,11 @@ main(){
     "  }\n"
     "}\n";
   int ret = write_foo_bar_baz_to_fp(json, strlen(json), stdout);
-  putchar('\n');
   fflush(stdout);
   return ret;
 }
-```
 
-It is recommended instead to provide your own allocator that provides an
-efficient `free_all` function instead of having to deal with the
-`drjson_slow_rescurive_free_all`.
-See [`Demo/arena_allocator.h`](Demo/arena_allocator.h) for an example.
+```
 
 ## Objects
 Note that these objects are backed by hash tables that don't hate you, so the
@@ -209,12 +202,3 @@ Be aware of this for two reasons:
     On the other hand, 36893488147419103232 (`2 ** 65`) doesn't fit in a 64 bit
     integer, but a double can hold its value exactly. DrJson instead parses it
     as a string, which is maybe counter-intuitive.
-
-## Future Directions
-
-I'm not happy with the C API and would prefer to hand out opaque handles
-instead of having objects and arrays inside a DrJsonValue.  This would allow
-you to drop the "Boxed" option. Usage of the handles would need to be coupled
-with a json context, would be an overall safer pattern. It would also allow
-useful capabilities, such as easily querying all of the objects and
-arrays from a json document without traversing the tree.
