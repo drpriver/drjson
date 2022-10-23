@@ -7,6 +7,12 @@ else
   ignore_bogus_deprecations = []
 endif
 
+if host_machine.system() == 'darwin'
+  arches = ['-arch', 'x86_64', '-arch', 'arm64']
+else
+  arches = []
+endif
+
 cc = meson.get_compiler('c')
 m_dep = cc.find_library('m', required: false)
 
@@ -20,8 +26,9 @@ drjson_dylib = both_libraries(
   version: meson.project_version(),
   soversion: meson.project_version(),
   darwin_versions:[COMPAT_VERSION, meson.project_version()],
-  c_args: ignore_bogus_deprecations,
+  c_args: ignore_bogus_deprecations + arches,
+  link_args: arches,
 )
 executable('drjson', 'DrJson/drjson_cli.c', install:true, c_args:ignore_bogus_deprecations)
-test_drjson =  executable('test-drjson', 'DrJson/test_drjson.c', link_with:drjson_dylib, c_args: ignore_bogus_deprecations)
+test_drjson =  executable('test-drjson', 'DrJson/test_drjson.c', link_with:drjson_dylib, c_args: ignore_bogus_deprecations+arches)
 test('test-drjson', test_drjson)
