@@ -115,6 +115,7 @@ main(int argc, const char* const* argv){
     enum {QUERY_KWARG=1};
     _Bool braceless = 0;
     _Bool pretty = 0;
+    int indent = 0;
     ArgToParse kw_args[] = {
         {
             .name = SV("-o"),
@@ -140,6 +141,12 @@ main(int argc, const char* const* argv){
             .altname1 = SV("--pretty"),
             .dest = ARGDEST(&pretty),
             .help = "Pretty print the output",
+        },
+        {
+            .name = SV("-i"),
+            .altname1 = SV("--indent"),
+            .dest = ARGDEST(&indent),
+            .help = "Number of leading spaces to print",
         },
     };
     enum {HELP=0, VERSION, FISH};
@@ -190,6 +197,12 @@ main(int argc, const char* const* argv){
         print_argparse_error(&parser, error);
         return error;
     }
+    if(indent < 0)
+        indent = 0;
+    if(indent > 80)
+        indent = 80;
+    if(indent)
+        pretty = 1;
     LongString jsonstr = {0};
     if(jsonpath.length){
         jsonstr = read_file(jsonpath.text);
@@ -241,7 +254,7 @@ main(int argc, const char* const* argv){
             return 1;
         }
     }
-    int err = drjson_print_value_fp(&jctx, outfp, result, 0, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0));
+    int err = drjson_print_value_fp(&jctx, outfp, result, indent, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0));
     if(err){
         fprintf(stderr, "err when writing: %d\n", err);
     }

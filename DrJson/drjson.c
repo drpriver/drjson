@@ -1445,8 +1445,11 @@ drjson_print_value(const DrJsonContext* ctx, const DrJsonTextWriter* restrict wr
     buffer.cursor = 0;
     buffer.writer = writer;
     buffer.errored = 0;
-    if(flags & DRJSON_PRETTY_PRINT)
+    if(flags & DRJSON_PRETTY_PRINT){
+        for(int i = 0; i < indent; i++)
+            drjson_buff_putc(&buffer, ' ');
         drjson_pretty_print_value_inner(ctx, &buffer, v, indent);
+    }
     else
         drjson_print_value_inner(ctx, &buffer, v);
     if(flags & DRJSON_APPEND_NEWLINE)
