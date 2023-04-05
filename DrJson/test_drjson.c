@@ -51,7 +51,6 @@ TestFunction(TestSimpleParsing){
 
 TestFunction(TestDoubleParsing){
     TESTBEGIN();
-    double NaN = NAN;
     struct {
         const char* example;
         double value;
