@@ -312,7 +312,7 @@ main(int argc, const char* const* argv){
                 drjson_print_value_fp(&jctx, stdout, this, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
                 continue;
             }
-            if(SV_equals(sv, SV("pop"))){
+            if(SV_equals(sv, SV("pop")) || SV_equals(sv, SV("up")) || SV_equals(sv, SV("cd .."))){
                 if(top)
                     this = stack[--top];
                 continue;
@@ -322,14 +322,18 @@ main(int argc, const char* const* argv){
                     "reset: restores the current value to the global document\n"
                     "quit: quits\n"
                     "print: prints the current value\n"
-                    "push <query>: sets the current value to the result of the query (if successful)\n"
-                    "pop: pops the stack\n"
+                    "push <query>, cd <query>: sets the current value to the result of the query (if successful)\n"
+                    "pop, up: pops the stack\n"
                     "<query>: prints the result of the query\n");
                 continue;
             }
             _Bool push = 0;
             if(sv.length > 5 && SV_equals((StringView){5, cmd}, SV("push "))){
                 sv = (StringView){len-5, cmd+5};
+                push = 1;
+            }
+            if(sv.length > 3 && SV_equals((StringView){3, cmd}, SV("cd "))){
+                sv = (StringView){len-3, cmd+3};
                 push = 1;
             }
             DrJsonValue v = drjson_query(&jctx, this, sv.text, sv.length);
@@ -417,6 +421,12 @@ drj_completer(GetInputCtx* ctx, size_t original_curr_pos, size_t original_used_l
             StringView sv = { k.slen, k.string };
             if(!SV_startswith(sv, buffview)) continue;
             key_svs[n_strs++] = sv;
+        }
+        if(n_strs < arrlen(key_svs) && SV_startswith(SV("@keys"), buffview)){
+            key_svs[n_strs++] = SV("@keys");
+        }
+        if(n_strs < arrlen(key_svs) && SV_startswith(SV("@length"), buffview)){
+            key_svs[n_strs++] = SV("@length");
         }
         qsort(key_svs, n_strs, sizeof key_svs[0], StringView_cmp);
     }
