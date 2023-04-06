@@ -13,6 +13,7 @@
 // "drjson.c" is #included at the bottom
 #include "argument_parsing.h"
 #include "term_util.h"
+#include "get_input.h"
 
 // Chose to use libc's FILE api instead of OS APIs for portability.
 
@@ -35,6 +36,8 @@ file_size_from_fp(FILE* fp){
     errored:
     return -1;
 }
+
+
 
 static inline
 LongString
@@ -95,6 +98,12 @@ finally:
     return result;
 }
 
+static GiTabCompletionFunc drj_completer;
+typedef struct DrjCompleterCtx DrjCompleterCtx;
+struct DrjCompleterCtx {
+    DrJsonContext* ctx;
+    DrJsonValue* v;
+};
 
 int 
 main(int argc, const char* const* argv){
@@ -115,6 +124,7 @@ main(int argc, const char* const* argv){
     enum {QUERY_KWARG=1};
     _Bool braceless = 0;
     _Bool pretty = 0;
+    _Bool interactive = 0;
     int indent = 0;
     ArgToParse kw_args[] = {
         {
@@ -143,10 +153,15 @@ main(int argc, const char* const* argv){
             .help = "Pretty print the output",
         },
         {
-            .name = SV("-i"),
-            .altname1 = SV("--indent"),
+            .name = SV("--indent"),
             .dest = ARGDEST(&indent),
             .help = "Number of leading spaces to print",
+        },
+        {
+            .name = SV("-i"),
+            .altname1 = SV("--interactive"),
+            .help = "Enter a cli prompt",
+            .dest = ARGDEST(&interactive),
         },
     };
     enum {HELP=0, VERSION, FISH};
@@ -234,6 +249,105 @@ main(int argc, const char* const* argv){
         drjson_print_error_fp(stderr,  jsonpath.text, jsonpath.length, l, c, document);
         return 1;
     }
+    if(interactive){
+        DrJsonValue this = document;
+        DrJsonValue stack[1024] = {this};
+        size_t top = 0;
+        DrjCompleterCtx dj = {.v = &this, .ctx=&jctx};
+        for(int i = 0; i < kw_args[QUERY_KWARG].num_parsed; i++){
+            DrJsonValue v = drjson_query(&jctx, this, queries[i].text, queries[i].length);
+            if(v.kind == DRJSON_ERROR){
+                fprintf(stderr, "Error when evaluating the %dth query ('%s'): ", i, queries[i].text);
+                drjson_print_value_fp(&jctx, stderr, v, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
+                return 1;
+            }
+            this = v;
+            stack[++top] = this;
+        }
+        char prompt[1024];
+        GetInputCtx gi = {
+            .prompt=SV("> "),
+            .tab_completion_func = drj_completer,
+            .tab_completion_user_data = &dj,
+        };
+        for(;;){
+            int n = snprintf(prompt, sizeof prompt, "%s %zu) ", DrJsonKindNames[this.kind], top);
+            gi.prompt = (StringView){n, prompt};
+            ssize_t len = gi_get_input(&gi);
+            if(len < 0) break;
+            fputs("\r", stdout);
+            char* cmd = gi.buff;
+            // strip spaces
+            for(;;){
+                switch(*cmd){
+                    case ' ':
+                        cmd++;
+                        len--;
+                        continue;
+                    break;
+                }
+                break;
+            }
+            for(;len;){
+                switch(cmd[len-1]){
+                    case ' ':
+                        len--;
+                        continue;
+                    break;
+                }
+                break;
+            }
+            if(!len) continue;
+            gi_add_line_to_history_len(&gi, cmd, len);
+            StringView sv = {len, cmd};
+            if(SV_equals(sv, SV("reset"))){
+                this = document;
+                continue;
+            }
+            if(SV_equals(sv, SV("q")) || SV_equals(sv, SV("quit"))){
+                break;
+                continue;
+            }
+            if(SV_equals(sv, SV("print")) || SV_equals(sv, SV("p"))){
+                drjson_print_value_fp(&jctx, stdout, this, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
+                continue;
+            }
+            if(SV_equals(sv, SV("pop"))){
+                if(top)
+                    this = stack[--top];
+                continue;
+            }
+            if(SV_equals(sv, SV("h")) || SV_equals(sv, SV("help"))){
+                puts(
+                    "reset: restores the current value to the global document\n"
+                    "quit: quits\n"
+                    "print: prints the current value\n"
+                    "push <query>: sets the current value to the result of the query (if successful)\n"
+                    "pop: pops the stack\n"
+                    "<query>: prints the result of the query\n");
+                continue;
+            }
+            _Bool push = 0;
+            if(sv.length > 5 && SV_equals((StringView){5, cmd}, SV("push "))){
+                sv = (StringView){len-5, cmd+5};
+                push = 1;
+            }
+            DrJsonValue v = drjson_query(&jctx, this, sv.text, sv.length);
+            if(v.kind == DRJSON_ERROR){
+                fprintf(stderr, "\rError\n");
+                continue;
+            }
+            if(push){
+                this = v;
+                if(top < arrlen(stack)){
+                    stack[++top] = this;
+                }
+                continue;
+            }
+            drjson_print_value_fp(&jctx, stdout, v, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
+        }
+        return 0;
+    }
     int nqueries = kw_args[QUERY_KWARG].num_parsed;
     DrJsonValue result = document;
     if(nqueries){
@@ -263,5 +377,66 @@ main(int argc, const char* const* argv){
     return err;
 }
 
+static inline
+_Bool
+SV_startswith(StringView hay, StringView needle){
+    if(needle.length > hay.length) return 0;
+    if(!needle.length) return 1;
+    return memcmp(needle.text, hay.text, needle.length) == 0;
+}
+
+
+static
+int
+drj_completer(GetInputCtx* ctx, size_t original_curr_pos, size_t original_used_len, int n_tabs){
+    static int n_strs;
+    static StringView key_svs[1024];
+    static ptrdiff_t prefix;
+
+    if(!ctx->tab_completion_user_data) return -1;
+    if(original_curr_pos != original_used_len) return 0;
+    DrjCompleterCtx* dj = ctx->tab_completion_user_data;
+
+    if(n_tabs == 1){ // first one
+        prefix = 0;
+        n_strs = 0;
+        char* space = strrchr(ctx->buff, ' ');
+        if(space){
+            prefix = space+1 - ctx->buff;
+        }
+        DrJsonValue keys = drjson_object_keys(*dj->v);
+        if(keys.kind == DRJSON_ERROR) return 0;
+        int64_t len = drjson_len(dj->ctx, keys);
+        if(len <= 0) return 0;
+        StringView buffview = {original_used_len-prefix, ctx->buff+prefix};
+        for(int64_t i = 0; i < len; i++){
+            if(n_strs == arrlen(key_svs)) break;
+            DrJsonValue k = drjson_get_by_index(dj->ctx, keys, i);
+            if(k.kind == DRJSON_ERROR) return 0;
+            if(k.kind != DRJSON_STRING) return 0;
+            StringView sv = { k.slen, k.string };
+            if(!SV_startswith(sv, buffview)) continue;
+            key_svs[n_strs++] = sv;
+        }
+        qsort(key_svs, n_strs, sizeof key_svs[0], StringView_cmp);
+    }
+    if((n_tabs % (n_strs+1))==0){
+        memcpy(ctx->buff, ctx->altbuff, original_used_len);
+        ctx->buff_count = original_used_len;
+        ctx->buff_cursor = original_curr_pos;
+        ctx->buff[original_used_len] = 0;
+        ctx->tab_completion_cookie = 0;
+        return 0;
+    }
+    StringView k = key_svs[(n_tabs-1)%(n_strs+1)];
+    if(k.length+prefix >= sizeof ctx->buff) return 0;
+    memcpy(ctx->buff+prefix, k.text, k.length);
+    ctx->buff[prefix+k.length] = 0;
+    ctx->buff_count = prefix+k.length;
+    ctx->buff_cursor = prefix+k.length;
+    return 0;
+}
+
 #include "drjson.c"
+#include "get_input.c"
 
