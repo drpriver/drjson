@@ -105,6 +105,7 @@ read_one(char* buff){
         int c = _getch();
         DBG("c = %d\n", c);
         switch(c){
+            case 0:
             case 224:{
                 int next = _getch();
                 DBG("next = %d\n", next);
@@ -138,7 +139,9 @@ read_one(char* buff){
                         *buff = '\x05';
                         return 1;
                     case 'S': // del
-                        *buff = '\x7f';
+                        // *buff = '\x7f';
+                        *buff = '\033';
+                        remaining = "3~";
                         return 1;
 
                         // insert
@@ -323,6 +326,7 @@ get_line_internal_loop(GetInputCtx* ctx){
         ESC = 27,           // Escape
         BACKSPACE =  127,   // Backspace
         // fake key codes
+        #undef DELETE
         DELETE    = -1,
         UP        = -2,
         DOWN      = -3,
