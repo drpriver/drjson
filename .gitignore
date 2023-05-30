@@ -5,3 +5,5 @@ builddir
 cbuild
 *.html
 build
+wheelhouse
+civenv

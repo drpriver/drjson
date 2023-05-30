@@ -122,6 +122,11 @@ Py_XNewRef(PyObject* o){
     Py_INCREF(o);
     return o;
 }
+static inline
+PyObject*
+Py_NewRef(PyObject* o){
+    return Py_XNewRef(o);
+}
 #endif
 #if PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION < 9
 // shim

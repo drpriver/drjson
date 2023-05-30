@@ -75,3 +75,61 @@ all: Bin/demo$(EXE)
 all: Bin/test$(EXE)
 
 .DEFAULT_GOAL:=all
+
+ifeq ($(OS),Windows_NT)
+UNAME:=Windows
+include windows.mak
+else
+UNAME := $(shell uname)
+endif
+
+.PHONY: drjson-wheel
+.PHONY: wheels
+ifeq ($(UNAME),Darwin)
+civenv:
+	python3 -m venv civenv
+	. civenv/bin/activate && python -m pip install cibuildwheel && python -m pip install twine
+
+# macos you need to build multiple times
+wheels: civenv
+	rm -rf PyDrJson/dist PyDrJson/build
+	rm -f PyDrJson/wheelhouse/*.whl
+	. civenv/bin/activate && cd PyDrJson && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs x86_64 .
+	. civenv/bin/activate && cd PyDrJson && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs arm64 .
+	. civenv/bin/activate && cd PyDrJson && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs universal2 .
+
+endif
+
+ifeq ($(UNAME),Linux)
+civenv:
+	python3 -m venv civenv
+	. civenv/bin/activate && python -m pip install cibuildwheel && python -m pip install twine
+
+wheels: civenv
+	rm -rf PyDrJson/dist PyDrJson/build
+	rm -f PyDrJson/wheelhouse/*.whl
+	. civenv/bin/activate && cd PyDrJson && CIBW_SKIP='{pp*,*musl*}' cibuildwheel --platform linux --archs x86_64 .
+
+endif
+
+ifeq ($(UNAME),Windows)
+civenv:
+	py -m venv civenv
+	civenv\Scripts\activate && py -m pip install cibuildwheel && py -m pip install twine
+
+wheels: civenv
+	rmdir dist PyDrJson/\build PyDrJson\wheelhouse /s /q
+	civenv\Scripts\activate && cmd /V /C "SET CIBW_SKIP={pp*,cp36*,cp37*} && cibuildwheel --platform windows --archs AMD64 ."
+endif
+
+
+.PHONY: pypi-upload
+pypi-upload: archive-wheels civenv
+	. civenv/bin/activate && python3 -m twine upload PyDrJson/wheelhouse/* --verbose
+
+.PHONY: archive-wheels
+archive-wheels: | ArchivedWheels
+	cp PyDrJson/wheelhouse/*.whl ArchivedWheels
+ArchivedWheels: ; $(MKDIR) -p $@
+
+include $(wildcard gather.mak)
