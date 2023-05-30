@@ -453,6 +453,9 @@ drjson_make_string_no_copy(const char* s, size_t length){
 static inline
 DrJsonValue
 drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length){
+    if(!length){
+        return drjson_make_string_no_copy("", 0);
+    }
     DrJsonStringNode* node = drjson_store_string_copy(ctx, s, length);
     if(!node) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate storage for string");
     return drjson_make_string_no_copy(node->data, length);
