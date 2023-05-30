@@ -1372,6 +1372,7 @@ drjson_print_error_fp(FILE* fp, const char* filename, size_t filename_len, size_
 }
 #endif
 
+#ifndef DRJSON_NO_IO
 #ifndef _WIN32
 static
 int
@@ -1422,6 +1423,7 @@ drjson_print_error_HANDLE(void* hnd, const char* filename, size_t filename_len, 
     };
     return drjson_print_error(&writer, filename, filename_len, line, column, v);
 }
+#endif
 #endif
 
 enum {DRJSON_BUFF_SIZE = 1024*512};

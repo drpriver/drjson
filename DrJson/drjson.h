@@ -601,6 +601,7 @@ int
 drjson_print_error_fp(FILE* fp, const char* filename, size_t filename_len, size_t line, size_t column, DrJsonValue v);
 #endif
 
+#ifndef DRJSON_NO_IO
 #ifndef _WIN32
 DRJSON_API
 int
@@ -616,6 +617,7 @@ drjson_print_value_HANDLE(const DrJsonContext* ctx, void* hnd, DrJsonValue v, in
 DRJSON_API
 int
 drjson_print_error_HANDLE(void* hnd, const char* filename, size_t filename_len, size_t line, size_t column, DrJsonValue v);
+#endif
 #endif
 
 #ifdef __clang__
