@@ -523,6 +523,11 @@ DRJSON_API
 int64_t
 drjson_len(const DrJsonContext* ctx, DrJsonValue v);
 
+// empties an array or object
+DRJSON_API
+int
+drjson_clear(const DrJsonContext* ctx, DrJsonValue v);
+
 DRJSON_API
 int // 0 on success
 drjson_array_push_item(const DrJsonContext* ctx, DrJsonValue array, DrJsonValue item);

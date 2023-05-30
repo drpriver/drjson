@@ -840,6 +840,27 @@ drjson_array_pop_item(const DrJsonContext* ctx, DrJsonValue a){
 }
 
 DRJSON_API
+int
+drjson_clear(const DrJsonContext* ctx, DrJsonValue v){
+    switch(v.kind){
+        case DRJSON_ARRAY:{
+            DrJsonArray* adata = ctx->arrays.data;
+            DrJsonArray* array = &adata[v.array_idx];
+            array->count = 0;
+            return 0;
+        }
+        case DRJSON_OBJECT:{
+            DrJsonObject* odata = ctx->objects.data;
+            DrJsonObject* object = &odata[v.object_idx];
+            drj_memset(object->object_items, 0, drjson_size_for_object_of_length(object->capacity));
+            return 0;
+        }
+        default:
+            return 1;
+    }
+}
+
+DRJSON_API
 DrJsonValue
 drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx){
     if(a.kind != DRJSON_ARRAY) return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "Argument is not an array");
