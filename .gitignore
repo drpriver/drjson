@@ -4,3 +4,4 @@ Deps
 builddir
 cbuild
 *.html
+build
