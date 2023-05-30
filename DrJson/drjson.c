@@ -368,6 +368,24 @@ parse_string(DrJsonParseContext* ctx){
         ctx->cursor = cursor;
         return drjson_make_string_no_copy(string_start, string_end-string_start);
     }
+    else if(match(ctx, '\'')){
+        cursor = ctx->cursor;
+        string_start = cursor;
+        for(;;){
+            const char* close = memchr(cursor, '\'', end-cursor);
+            if(unlikely(!close)) return drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "No closing \"'\" for a string");
+            cursor = close+1;
+            int nbackslashes = 0;
+            int negidx = -1;
+            while(close[negidx--] == '\\')
+                nbackslashes++;
+            if(nbackslashes & 1) continue;
+            string_end = close;
+            break;
+        }
+        ctx->cursor = cursor;
+        return drjson_make_string_no_copy(string_start, string_end-string_start);
+    }
     else {
         string_start = cursor;
         // allow bare identifiers
@@ -647,6 +665,7 @@ drjson_parse(DrJsonParseContext* ctx){
         case '[':
             result = parse_array(ctx);
             break;
+        case '\'':
         case '"':
             result = parse_string(ctx);
             break;
