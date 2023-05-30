@@ -317,6 +317,9 @@ main(int argc, const char* const* argv){
                     this = stack[--top];
                 continue;
             }
+            if(SV_equals(sv, SV("ls"))){
+                sv = SV("@keys");
+            }
             if(SV_equals(sv, SV("h")) || SV_equals(sv, SV("help"))){
                 puts(
                     "reset: restores the current value to the global document\n"
@@ -324,6 +327,7 @@ main(int argc, const char* const* argv){
                     "print: prints the current value\n"
                     "push <query>, cd <query>: sets the current value to the result of the query (if successful)\n"
                     "pop, up: pops the stack\n"
+                    "ls: print current keys\n"
                     "<query>: prints the result of the query\n");
                 continue;
             }
