@@ -333,6 +333,9 @@ drjson_is_numeric(DrJsonValue v){
 static inline
 int
 drjson_eq(DrJsonValue a, DrJsonValue b){
+    if((drjson_kind(a) == DRJSON_INTEGER  || drjson_kind(a) == DRJSON_UINTEGER) && (drjson_kind(b) == DRJSON_INTEGER || drjson_kind(b) == DRJSON_UINTEGER)){
+        return a.uinteger == b.uinteger;
+    }
     if(drjson_kind(a) != drjson_kind(b)) return 0;
     switch(drjson_kind(a)){
         case DRJSON_NUMBER:
