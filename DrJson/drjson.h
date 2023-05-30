@@ -7,6 +7,9 @@
 #include <stdint.h>
 #include <string.h>
 
+#define DRJSON_VERSION_MAJOR 2
+#define DRJSON_VERSION_MINOR 0
+#define DRJSON_VERSION_MICRO 0
 #define DRJSON_VERSION "2.0.0"
 
 #ifndef drj_memcpy
