@@ -504,7 +504,7 @@ drjson_parse_braceless_string(DrJsonContext* ctx, const char* text, size_t lengt
 
 DRJSON_API
 uint32_t
-drjson_object_key_hash( const char* key, size_t keylen);
+drjson_object_key_hash(const char* key, size_t keylen);
 
 DRJSON_API
 DrJsonValue
