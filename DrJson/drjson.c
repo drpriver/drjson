@@ -399,6 +399,7 @@ parse_string(DrJsonParseContext* ctx){
                 case CASE_0_9:
                 case '_':
                 case '-':
+                case '.':
                     continue;
             }
         }
