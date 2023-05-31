@@ -78,7 +78,6 @@ all: Bin/test$(EXE)
 
 ifeq ($(OS),Windows_NT)
 UNAME:=Windows
-include windows.mak
 else
 UNAME := $(shell uname)
 endif
@@ -118,7 +117,7 @@ civenv:
 	civenv\Scripts\activate && py -m pip install cibuildwheel && py -m pip install twine
 
 wheels: civenv
-	rmdir dist PyDrJson/\build PyDrJson\wheelhouse /s /q
+	-rmdir dist PyDrJson\build PyDrJson\wheelhouse /s /q
 	civenv\Scripts\activate && cmd /V /C "SET CIBW_SKIP={pp*,cp36*,cp37*} && cibuildwheel --platform windows --archs AMD64 ."
 endif
 
