@@ -3,9 +3,9 @@
 #define DRJSON_API static inline
 #define DRJSON_NO_STDIO
 #define DRJSON_NO_IO
-#include "DrJson/drjson.h"
-#include "DrJson/drjson.c"
-#include "DrJson/long_string.h"
+#include "drjson.h"
+#include "drjson.c"
+#include "long_string.h"
 
 static PyModuleDef drjson;
 static PyMethodDef drjson_methods[];

@@ -91,11 +91,12 @@ civenv:
 
 # macos you need to build multiple times
 wheels: civenv
-	rm -rf PyDrJson/dist PyDrJson/build
-	rm -f PyDrJson/wheelhouse/*.whl
-	. civenv/bin/activate && cd PyDrJson && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs x86_64 .
-	. civenv/bin/activate && cd PyDrJson && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs arm64 .
-	. civenv/bin/activate && cd PyDrJson && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs universal2 .
+	rm -rf dist build
+	rm -f wheelhouse/*.whl
+	. civenv/bin/activate && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs x86_64 .
+	. civenv/bin/activate && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs arm64 .
+	. civenv/bin/activate && CIBW_SKIP='{pp*,cp36*,cp37*}' cibuildwheel --platform macos --archs universal2 .
+	rm -rf PyDrJson/drjson.egg-info
 
 endif
 
@@ -105,9 +106,9 @@ civenv:
 	. civenv/bin/activate && python -m pip install cibuildwheel && python -m pip install twine
 
 wheels: civenv
-	rm -rf PyDrJson/dist PyDrJson/build
+	rm -rf dist build
 	rm -f PyDrJson/wheelhouse/*.whl
-	. civenv/bin/activate && cd PyDrJson && CIBW_SKIP='{pp*,*musl*}' cibuildwheel --platform linux --archs x86_64 .
+	. civenv/bin/activate && CIBW_SKIP='{pp*,*musl*}' cibuildwheel --platform linux --archs x86_64 .
 
 endif
 
@@ -117,7 +118,7 @@ civenv:
 	civenv\Scripts\activate && py -m pip install cibuildwheel && py -m pip install twine
 
 wheels: civenv
-	-rmdir dist PyDrJson\build PyDrJson\wheelhouse /s /q
+	-rmdir dist build wheelhouse /s /q
 	civenv\Scripts\activate && cmd /V /C "SET CIBW_SKIP={pp*,cp36*,cp37*} && cibuildwheel --platform windows --archs AMD64 ."
 endif
 

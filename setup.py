@@ -17,10 +17,10 @@ if sys.platform == 'win32':
 
 extension = Extension(
     'drjson.drjson',
-    sources = ['pydrjson.c'],
-    include_dirs=['..']
+    sources = ['DrJson/pydrjson.c'],
+    include_dirs=['.']
 )
-with open('README-pypi.md', encoding='utf-8') as fp:
+with open('PyDrJson/README-pypi.md', encoding='utf-8') as fp:
     LONG_DESCRIPTION = fp.read()
 
 setup(
@@ -54,4 +54,5 @@ setup(
     package_data={
         'drjson': ['py.typed', 'drjson.pyi'],
     },
+    package_dir={'':'PyDrJson'}
 )
