@@ -1,4 +1,4 @@
-from typing import Tuple, Any, Protocol, Callable, overload, Final
+from typing import Tuple, Any, Protocol, Callable, overload, Final, Union, Optional
 version: Tuple[int, int, int]
 __version__: str
 ERROR: int
@@ -50,7 +50,7 @@ class Value:
     def py(self) -> Union[int, str, float, list, dict]:
         ...
 
-    def query(self, query:str, type:int=None) -> Value:
+    def query(self, query:str, type:Optional[int]=None) -> Value:
         ...
 
     def clear(self) -> None:
@@ -76,5 +76,6 @@ class Value:
     def dump(self, writer:Union[Writer, Callable[[str], None]], flags:int=0) -> None:
         ...
 
+    @overload
     def dump(self, writer:Union[None, Writer, Callable[[str], None]]=None, flags:int=0) -> Union[str, None]:
         ...
