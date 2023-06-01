@@ -53,6 +53,9 @@ static PyObject*_Nullable DrjVal_pop(PyObject*s);
 static PyObject*_Nullable DrjVal_append(PyObject*s, PyObject* arg);
 static PyObject*_Nullable DrjVal_insert(PyObject*s, PyObject* arg, PyObject* kwargs);
 static PyObject*_Nullable DrjVal_dump(PyObject*s, PyObject*, PyObject*);
+static PyObject*_Nullable DrjVal_keys(PyObject*s);
+static PyObject*_Nullable DrjVal_values(PyObject*s);
+static PyObject*_Nullable DrjVal_items(PyObject*s);
 static PyObject*_Nullable DrjVal_query(PyObject*s, PyObject* args, PyObject* kwargs);
 static Py_ssize_t DrjVal_len(PyObject*s);
 static PyObject*_Nullable DrjVal_subscript(PyObject* s, PyObject* k);
@@ -108,13 +111,13 @@ PyInit_drjson(void){
     PyModule_AddIntConstant(mod, "PRETTY_PRINT", DRJSON_PRETTY_PRINT);
 
     if(PyType_Ready(&DrjPyCtxType) < 0)
-        return NULL;
+        goto fail;
     Py_INCREF(&DrjPyCtxType);
     ctx_type = (PyObject*)&DrjPyCtxType;
     if(PyModule_AddObjectRef(mod, "Ctx", ctx_type) < 0) goto fail;
 
     if(PyType_Ready(&DrjValType) < 0)
-        return NULL;
+        goto fail;
     Py_INCREF(&DrjValType);
     val_type = (PyObject*)&DrjValType;
     if(PyModule_AddObjectRef(mod, "Value", val_type) < 0) goto fail;
@@ -459,6 +462,33 @@ static PyMethodDef DrjVal_methods[] = {
             "Serializes to a json string.\n"
             "The writer should be a callable that takes a string or have a method called `write` that takes a string.\n",
     },
+    {
+        .ml_name = "keys",
+        .ml_meth = (PyCFunction)DrjVal_keys,
+        .ml_flags = METH_NOARGS,
+        .ml_doc = "keys(self)\n"
+            "--\n"
+            "\n"
+            "Returns a keys view into this object.\n"
+    },
+    {
+        .ml_name = "items",
+        .ml_meth = (PyCFunction)DrjVal_items,
+        .ml_flags = METH_NOARGS,
+        .ml_doc = "keys(self)\n"
+            "--\n"
+            "\n"
+            "Returns a items view into this object.\n"
+    },
+    {
+        .ml_name = "values",
+        .ml_meth = (PyCFunction)DrjVal_values,
+        .ml_flags = METH_NOARGS,
+        .ml_doc = "keys(self)\n"
+            "--\n"
+            "\n"
+            "Returns a values view into this object.\n"
+    },
     {},
 };
 static PyMemberDef DrjVal_members[] = {
@@ -647,7 +677,35 @@ DrjVal_dump(PyObject* s, PyObject* args, PyObject* kwargs){
 
 }
 
+static
+PyObject*_Nullable
+DrjVal_keys(PyObject* s){
+    DrjValue* self = (DrjValue*)s;
+    DrJsonValue v = drjson_object_keys(self->value);
+    if(v.kind == DRJSON_ERROR)
+        return exception_from_error(v);
+    return (PyObject*)make_drjval(self->ctx, v);
+}
 
+static
+PyObject*_Nullable
+DrjVal_items(PyObject* s){
+    DrjValue* self = (DrjValue*)s;
+    DrJsonValue v = drjson_object_items(self->value);
+    if(v.kind == DRJSON_ERROR)
+        return exception_from_error(v);
+    return (PyObject*)make_drjval(self->ctx, v);
+}
+
+static
+PyObject*_Nullable
+DrjVal_values(PyObject* s){
+    DrjValue* self = (DrjValue*)s;
+    DrJsonValue v = drjson_object_values(self->value);
+    if(v.kind == DRJSON_ERROR)
+        return exception_from_error(v);
+    return (PyObject*)make_drjval(self->ctx, v);
+}
 
 static 
 PyObject*_Nullable 

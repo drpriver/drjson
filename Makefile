@@ -125,11 +125,11 @@ endif
 
 .PHONY: pypi-upload
 pypi-upload: archive-wheels civenv
-	. civenv/bin/activate && python3 -m twine upload PyDrJson/wheelhouse/* --verbose
+	. civenv/bin/activate && python3 -m twine upload wheelhouse/* --verbose
 
 .PHONY: archive-wheels
 archive-wheels: | ArchivedWheels
-	cp PyDrJson/wheelhouse/*.whl ArchivedWheels
-ArchivedWheels: ; $(MKDIR) -p $@
+	cp wheelhouse/*.whl ArchivedWheels
+ArchivedWheels: ; mkdir -p $@
 
 include $(wildcard gather.mak)

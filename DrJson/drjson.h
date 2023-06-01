@@ -9,8 +9,8 @@
 
 #define DRJSON_VERSION_MAJOR 2
 #define DRJSON_VERSION_MINOR 0
-#define DRJSON_VERSION_MICRO 0
-#define DRJSON_VERSION "2.0.0"
+#define DRJSON_VERSION_MICRO 1
+#define DRJSON_VERSION "2.0.1"
 
 #ifndef drj_memcpy
 #if !defined(__GNUC__) || defined(__IMPORTC__)

@@ -1,5 +1,5 @@
 project('DrJson', 'c', version: '2.0.0')
-COMPAT_VERSION='2.0.0' # for macos dylib
+COMPAT_VERSION='2.0.1' # for macos dylib
 
 if host_machine.system() == 'windows'
   ignore_bogus_deprecations = ['-D_CRT_NONSTDC_NO_WARNINGS', '-D_CRT_SECURE_NO_WARNINGS']

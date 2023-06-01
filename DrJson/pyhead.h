@@ -47,7 +47,7 @@
 //   https://bugs.python.org/issue28709
 static inline
 PyTypeObject*
-dndc_PyStructSequence_NewType(PyStructSequence_Desc* desc){
+my_PyStructSequence_NewType(PyStructSequence_Desc* desc){
     PyObject* collections = NULL;
     PyObject* namedtup = NULL;
     PyObject* fieldnames = NULL;
@@ -88,7 +88,7 @@ fail:
 #else
 static inline
 PyTypeObject*
-dndc_PyStructSequence_NewType(PyStructSequence_Desc *desc){
+my_PyStructSequence_NewType(PyStructSequence_Desc *desc){
     return PyStructSequence_NewType(desc);
 }
 #endif
