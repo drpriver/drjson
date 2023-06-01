@@ -107,7 +107,7 @@ civenv:
 
 wheels: civenv
 	rm -rf dist build
-	rm -f PyDrJson/wheelhouse/*.whl
+	rm -f wheelhouse/*.whl
 	. civenv/bin/activate && CIBW_SKIP='{pp*,*musl*}' cibuildwheel --platform linux --archs x86_64 .
 
 endif
