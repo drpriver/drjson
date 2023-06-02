@@ -125,15 +125,18 @@ static inline
 force_inline
 void
 drj_get_obj_ptrs(void* p, size_t cap, DrJsonHashIndex*_Nullable*_Nonnull hi, DrJsonObjectPair*_Nullable*_Nonnull pa){
-    *hi = p;
-    *pa = (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
+    *pa = p;
+    *hi = (DrJsonHashIndex*)(((char*)p)+cap*sizeof(DrJsonObjectPair));
+    // *hi = p;
+    // *pa = (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
 }
 
 static inline
 force_inline
 DrJsonObjectPair*
 drj_obj_get_pairs(void* p, size_t cap){
-    return (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
+    return p;
+    // return (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
 }
 
 
