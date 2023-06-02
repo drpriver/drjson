@@ -30,6 +30,7 @@ struct DrjPyCtx {
 };
 static PyObject* _Nullable DrjPyCtx_new(PyTypeObject* type, PyObject* args, PyObject* kwargs);
 static void DrjPyCtx_dealloc(PyObject* o);
+static PyObject*_Nullable DrjPyCtx_mem(PyObject* o);
 static PyObject* _Nullable DrjPyCtx_parse(PyObject* s, PyObject* args, PyObject* kwargs);
 static PyObject* _Nullable DrjPyCtx_make_value(PyObject* s, PyObject* arg);
 
@@ -56,6 +57,7 @@ static PyObject*_Nullable DrjVal_dump(PyObject*s, PyObject*, PyObject*);
 static PyObject*_Nullable DrjVal_keys(PyObject*s);
 static PyObject*_Nullable DrjVal_values(PyObject*s);
 static PyObject*_Nullable DrjVal_items(PyObject*s);
+static PyObject*_Nullable DrjVal_mem(PyObject*s);
 static PyObject*_Nullable DrjVal_query(PyObject*s, PyObject* args, PyObject* kwargs);
 static Py_ssize_t DrjVal_len(PyObject*s);
 static PyObject*_Nullable DrjVal_subscript(PyObject* s, PyObject* k);
@@ -188,6 +190,15 @@ static PyMethodDef DrjPyCtx_methods[] = {
             "\n"
             "Converts (recursively) a basic python type to a json value.\n",
     },
+    {
+        .ml_name = "mem",
+        .ml_meth = (PyCFunction)DrjPyCtx_mem,
+        .ml_flags = METH_NOARGS,
+        .ml_doc = "mem(self)\n"
+            "--\n"
+            "\n"
+            "Returns the memory usage of the ctx.\n",
+    },
     {NULL, NULL, 0, NULL}
 };
 
@@ -215,6 +226,33 @@ DrjPyCtx_dealloc(PyObject* o){
     drjson_ctx_free_all(&self->ctx);
     Py_CLEAR(self->slist);
     Py_TYPE(self)->tp_free((PyObject *) self);
+}
+
+static
+PyObject* _Nullable
+DrjPyCtx_mem(PyObject* s){
+    DrjPyCtx* self = (DrjPyCtx*)s;
+    Py_ssize_t object_array = sizeof(DrJsonObject)*self->ctx.objects.capacity;
+    DrJsonObject* odata = self->ctx.objects.data;
+    Py_ssize_t objects = 0;
+    Py_ssize_t obj_slop = 0;
+    for(size_t i = 0; i < self->ctx.objects.count; i++){
+        DrJsonObject* object = &odata[i];
+        objects += drjson_size_for_object_of_length(object->capacity);
+        obj_slop += drjson_size_for_object_of_length(object->capacity) - drjson_size_for_object_of_length(object->count);
+    }
+    Py_ssize_t array_array = sizeof(DrJsonArray)*self->ctx.arrays.capacity;
+    Py_ssize_t arrays = 0;
+    Py_ssize_t arr_slop = 0;
+    DrJsonArray* adata = self->ctx.arrays.data;
+    for(size_t i = 0; i < self->ctx.arrays.count; i++){
+        DrJsonArray* array = &adata[i];
+        arrays += array->capacity * sizeof *array->array_items;
+        arr_slop += (array->capacity * sizeof *array->array_items) - (array->count * sizeof *array->array_items);
+    }
+    Py_ssize_t usage = object_array + objects + array_array + arrays;
+    return Py_BuildValue("nnnnnnn", usage, object_array, objects, obj_slop, array_array, arrays, arr_slop);
+    return PyLong_FromSsize_t(usage);
 }
 
 static
@@ -489,6 +527,15 @@ static PyMethodDef DrjVal_methods[] = {
             "\n"
             "Returns a values view into this object.\n"
     },
+    {
+        .ml_name = "mem",
+        .ml_meth = (PyCFunction)DrjVal_mem,
+        .ml_flags = METH_NOARGS,
+        .ml_doc = "mem(self)\n"
+            "--\n"
+            "\n"
+            "Returns the memory usage of this object (not recursive).\n"
+    },
     {},
 };
 static PyMemberDef DrjVal_members[] = {
@@ -705,6 +752,27 @@ DrjVal_values(PyObject* s){
     if(v.kind == DRJSON_ERROR)
         return exception_from_error(v);
     return (PyObject*)make_drjval(self->ctx, v);
+}
+
+static
+PyObject*_Nullable
+DrjVal_mem(PyObject* s){
+    DrjValue* self = (DrjValue*)s;
+    Py_ssize_t usage = 0;
+    switch(self->value.kind){
+        default: break;
+        case DRJSON_ARRAY:{
+            const DrJsonArray* adata = self->ctx->ctx.arrays.data;
+            const DrJsonArray* array = &adata[self->value.array_idx];
+            usage = array->capacity * sizeof *array->array_items;
+        }break;
+        case DRJSON_OBJECT:{
+            DrJsonObject* odata = self->ctx->ctx.objects.data;
+            DrJsonObject* object = &odata[self->value.object_idx];
+            usage = drjson_size_for_object_of_length(object->capacity);
+        }break;
+    }
+    return PyLong_FromSsize_t(usage);
 }
 
 static 
