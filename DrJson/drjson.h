@@ -206,23 +206,12 @@ struct DrJsonStringNode {
     char data[];
 };
 
+// Opaque type
 typedef struct DrJsonContext DrJsonContext;
-struct DrJsonContext {
-    // initialize with your allocator
-    DrJsonAllocator allocator;
-    // initialize below to 0
-    DrJsonStringNode* strings;
-    struct {
-        void* data;
-        size_t count;
-        size_t capacity;
-    } objects;
-    struct {
-        void* data;
-        size_t count;
-        size_t capacity;
-    } arrays;
-};
+
+DRJSON_API
+DrJsonContext*_Nullable
+drjson_create_ctx(DrJsonAllocator allocator);
 
 typedef struct DrJsonParseContext DrJsonParseContext;
 struct DrJsonParseContext {
@@ -414,6 +403,7 @@ drjson_size_for_object_of_length(size_t len){
     return 5*sizeof(void*)*len;
 }
 
+// Frees the ctx and all data allocated by the ctx
 DRJSON_API
 void
 drjson_ctx_free_all(DrJsonContext* ctx);
@@ -428,39 +418,19 @@ drjson_make_array(DrJsonContext* ctx, size_t initial_cap);
 
 
 // Copies the string and tracks it in the ctx.
-static inline
+DRJSON_API
 DrJsonStringNode*_Nullable
-drjson_store_string_copy(DrJsonContext* ctx, const char* s, size_t length){
-    if(!s || !length) return NULL;
-    DrJsonStringNode* node = ctx->allocator.alloc(ctx->allocator.user_pointer, length + sizeof *node);
-    if(!node) return NULL;
-    drj_memcpy(node->data, s, length);
-    node->data_length = length;
-    node->next = ctx->strings;
-    ctx->strings = node;
-    return node;
-}
+drjson_store_string_copy(DrJsonContext* ctx, const char* s, size_t length);
 
-#ifndef DRJSON_OPAQUE_BITFIELDS
 // NOTE:
 // The string needs to be one that does not need to be escaped.
-static inline
+DRJSON_API
 DrJsonValue
-drjson_make_string_no_copy(const char* s, size_t length){
-    return (DrJsonValue){._skind=DRJSON_STRING, .slen=length, .string=s};
-}
+drjson_make_string_no_copy(const char* s, size_t length);
 
-static inline
+DRJSON_API
 DrJsonValue
-drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length){
-    if(!length){
-        return drjson_make_string_no_copy("", 0);
-    }
-    DrJsonStringNode* node = drjson_store_string_copy(ctx, s, length);
-    if(!node) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate storage for string");
-    return drjson_make_string_no_copy(node->data, length);
-}
-#endif
+drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length);
 
 // XXX: should these be static inline as they are trivial?
 

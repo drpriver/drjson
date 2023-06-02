@@ -8,7 +8,7 @@
 #include <assert.h>
 #include <errno.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
 typedef long long ssize_t;
 #endif
 
@@ -121,6 +121,40 @@ struct DrJsonObject {
     size_t capacity;
 };
 
+typedef struct DrJsonArray DrJsonArray;
+struct DrJsonArray {
+    DrJsonValue* array_items;
+    size_t count;
+    size_t capacity;
+};
+
+struct DrJsonContext {
+    // initialize with your allocator
+    DrJsonAllocator allocator;
+    // initialize below to 0
+    DrJsonStringNode* strings;
+    struct {
+        DrJsonObject* data;
+        size_t count;
+        size_t capacity;
+    } objects;
+    struct {
+        DrJsonArray* data;
+        size_t count;
+        size_t capacity;
+    } arrays;
+};
+
+DRJSON_API
+DrJsonContext*_Nullable
+drjson_create_ctx(DrJsonAllocator allocator){
+    DrJsonContext* ctx = allocator.alloc(allocator.user_pointer, sizeof *ctx);
+    if(!ctx) return NULL;
+    drj_memset(ctx, 0, sizeof *ctx);
+    ctx->allocator = allocator;
+    return ctx;
+}
+
 static inline
 force_inline
 void
@@ -139,13 +173,6 @@ drj_obj_get_pairs(void* p, size_t cap){
     // return (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
 }
 
-
-typedef struct DrJsonArray DrJsonArray;
-struct DrJsonArray {
-    DrJsonValue* array_items;
-    size_t count;
-    size_t capacity;
-};
 
 
 
@@ -2072,6 +2099,39 @@ drjson_ctx_free_all(DrJsonContext* ctx){
     // Free arrays array
     if(ctx->arrays.data)
         ctx->allocator.free(ctx->allocator.user_pointer, ctx->arrays.data, ctx->arrays.capacity*sizeof(DrJsonArray));
+    ctx->allocator.free(ctx->allocator.user_pointer, ctx, sizeof *ctx);
+}
+
+DRJSON_API
+DrJsonStringNode*_Nullable
+drjson_store_string_copy(DrJsonContext* ctx, const char* s, size_t length){
+    if(!s || !length) return NULL;
+    DrJsonStringNode* node = ctx->allocator.alloc(ctx->allocator.user_pointer, length + sizeof *node);
+    if(!node) return NULL;
+    drj_memcpy(node->data, s, length);
+    node->data_length = length;
+    node->next = ctx->strings;
+    ctx->strings = node;
+    return node;
+}
+
+// NOTE:
+// The string needs to be one that does not need to be escaped.
+DRJSON_API
+DrJsonValue
+drjson_make_string_no_copy(const char* s, size_t length){
+    return (DrJsonValue){._skind=DRJSON_STRING, .slen=length, .string=s};
+}
+
+DRJSON_API
+DrJsonValue
+drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length){
+    if(!length){
+        return drjson_make_string_no_copy("", 0);
+    }
+    DrJsonStringNode* node = drjson_store_string_copy(ctx, s, length);
+    if(!node) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate storage for string");
+    return drjson_make_string_no_copy(node->data, length);
 }
 
 

@@ -22,30 +22,28 @@ int main(int argc, char** argv){
 TestFunction(TestSimpleParsing){
     TESTBEGIN();
     const char* example = "{ hello world }";
-    DrJsonContext ctx = {
-        .allocator = drjson_stdc_allocator(),
-    };
+    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
     DrJsonParseContext pctx = {
         .begin = example,
         .cursor = example,
         .end = example + strlen(example),
-        .ctx = &ctx,
+        .ctx = ctx,
     };
     DrJsonValue v = drjson_parse(&pctx);
     TestAssertNotEqual((int)drjson_kind(v), DRJSON_ERROR);
     TestAssertEquals((int)drjson_kind(v), DRJSON_OBJECT);
 
-    DrJsonValue q = drjson_query(&ctx, v, "hello", strlen("hello"));
+    DrJsonValue q = drjson_query(ctx, v, "hello", strlen("hello"));
     TestAssertNotEqual((int)drjson_kind(q), DRJSON_ERROR);
     TestAssertEquals((int)drjson_kind(q), DRJSON_STRING);
-    TestAssertEquals(drjson_len(&ctx, q), sizeof("world")-1);
+    TestAssertEquals(drjson_len(ctx, q), sizeof("world")-1);
     TestAssert(memcmp(q.string, "world", sizeof("world")-1)==0);
 
-    DrJsonValue val = drjson_object_get_item(&ctx, v, "hello", strlen("hello"), 0);
+    DrJsonValue val = drjson_object_get_item(ctx, v, "hello", strlen("hello"), 0);
     TestAssertNotEqual((int)drjson_kind(val), DRJSON_ERROR);
     TestAssert(drjson_eq(q, val));
 
-    drjson_ctx_free_all(&ctx);
+    drjson_ctx_free_all(ctx);
     TESTEND();
 }
 
@@ -62,14 +60,12 @@ TestFunction(TestDoubleParsing){
     };
     for(size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++){
         const char* example = cases[i].example;
-        DrJsonContext ctx = {
-            .allocator = drjson_stdc_allocator(),
-        };
-        DrJsonValue v = drjson_parse_string(&ctx, example, strlen(example), 0);
+        DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+        DrJsonValue v = drjson_parse_string(ctx, example, strlen(example), 0);
         TestAssertNotEqual((int)drjson_kind(v), DRJSON_ERROR);
         TestAssertEquals((int)drjson_kind(v), DRJSON_NUMBER);
         TestAssertEquals(v.number, cases[i].value);
-        drjson_ctx_free_all(&ctx);
+        drjson_ctx_free_all(ctx);
     }
     TESTEND();
 }
@@ -83,19 +79,17 @@ str_eq(const char* a, const char* b){
 TestFunction(TestSerialization){
     TESTBEGIN();
     const char* example = "{foo {bar {bazinga 3}}}";
-    DrJsonContext ctx = {
-        .allocator = drjson_stdc_allocator(),
-    };
-    DrJsonValue v = drjson_parse_string(&ctx, example, strlen(example), 0);
+    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonValue v = drjson_parse_string(ctx, example, strlen(example), 0);
     TestAssertNotEqual((int)drjson_kind(v), DRJSON_ERROR);
     char buff[512];
     size_t printed;
-    int err = drjson_print_value_mem(&ctx, buff, sizeof buff, v, 0, DRJSON_APPEND_ZERO, &printed);
+    int err = drjson_print_value_mem(ctx, buff, sizeof buff, v, 0, DRJSON_APPEND_ZERO, &printed);
     TestAssertFalse(err);
     TestAssert(printed <= sizeof buff);
     TestAssert(printed);
     TestAssertEquals(buff[printed-1], '\0');
     TestAssertEquals2(str_eq, buff, "{\"foo\":{\"bar\":{\"bazinga\":3}}}");
-    drjson_ctx_free_all(&ctx);
+    drjson_ctx_free_all(ctx);
     TESTEND();
 }
