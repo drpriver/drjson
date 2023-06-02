@@ -8,15 +8,19 @@
 #include <assert.h>
 #include <errno.h>
 
+#ifndef _WIN32
+typedef long long ssize_t;
+#endif
+
 #ifndef DRJSON_NO_STDIO
 #include <stdio.h>
+// Why do I require stdarg?
 #include <stdarg.h>
 #endif
 
 #ifndef _WIN32
 #include <unistd.h>
 #else
-typedef long long ssize_t;
 #include <windows.h>
 #endif
 
