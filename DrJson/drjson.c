@@ -98,21 +98,6 @@ typedef long long ssize_t;
     case '6': case '7': case '8': case '9'
 #endif
 
-typedef struct DrJsonObject DrJsonObject;
-struct DrJsonObject {
-    void* object_items;
-    size_t count;
-    size_t capacity;
-};
-
-typedef struct DrJsonArray DrJsonArray;
-struct DrJsonArray {
-    DrJsonValue* array_items;
-    size_t count;
-    size_t capacity;
-};
-
-
 typedef struct DrJsonObjectPair DrJsonObjectPair;
 struct DrJsonObjectPair {
     DrJsonValue key;
@@ -124,6 +109,43 @@ struct DrJsonHashIndex {
     uint32_t hash;
     uint32_t index;
 };
+
+typedef struct DrJsonObject DrJsonObject;
+struct DrJsonObject {
+    void* object_items;
+    size_t count;
+    size_t capacity;
+};
+
+static inline
+force_inline
+void
+drj_get_obj_ptrs(void* p, size_t cap, DrJsonHashIndex*_Nullable*_Nonnull hi, DrJsonObjectPair*_Nullable*_Nonnull pa){
+    *hi = p;
+    *pa = (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
+}
+
+static inline
+force_inline
+DrJsonObjectPair*
+drj_obj_get_pairs(void* p, size_t cap){
+    return (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
+}
+
+
+typedef struct DrJsonArray DrJsonArray;
+struct DrJsonArray {
+    DrJsonValue* array_items;
+    size_t count;
+    size_t capacity;
+};
+
+
+
+static inline
+force_inline
+int
+drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, const char* key, size_t keylen, uint32_t hash, DrJsonValue item, _Bool copy);
 
 // check the size_for_object_of_length
 _Static_assert(sizeof(DrJsonHashIndex) + sizeof(DrJsonObjectPair) == sizeof(void*)*5,"");
@@ -927,10 +949,10 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, const char* key, size_
             size_t size = drjson_size_for_object_of_length(new_cap);
             void* p = allocator->alloc(allocator->user_pointer, size);
             drj_memset(p, 0, size);
-            DrJsonHashIndex* oldhi = object->object_items;
-            DrJsonObjectPair* oldpairs = (DrJsonObjectPair*)(((char*)object->object_items)+old_cap*sizeof(DrJsonHashIndex));
-            DrJsonHashIndex* newhi = p;
-            DrJsonObjectPair* newpairs = (DrJsonObjectPair*)(((char*)p)+new_cap*sizeof(DrJsonHashIndex));
+            DrJsonHashIndex* oldhi; DrJsonObjectPair* oldpairs;
+            drj_get_obj_ptrs(object->object_items, old_cap, &oldhi, &oldpairs);
+            DrJsonHashIndex* newhi; DrJsonObjectPair* newpairs;
+            drj_get_obj_ptrs(p, new_cap, &newhi, &newpairs);
             drj_memcpy(newpairs, oldpairs, object->count*sizeof(*oldpairs));
             for(size_t i = 0; i < old_cap; i++){
                 DrJsonHashIndex hi = oldhi[i];
@@ -949,8 +971,8 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, const char* key, size_
     }
     uint32_t capacity = object->capacity;
     uint32_t idx = fast_reduce32(hash, capacity);
-    DrJsonHashIndex* his = object->object_items;
-    DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*capacity);
+    DrJsonHashIndex* his; DrJsonObjectPair* pairs;
+    drj_get_obj_ptrs(object->object_items, object->capacity, &his, &pairs);
     for(;;){
         DrJsonHashIndex hi = his[idx];
         if(!hi.hash){
@@ -1003,8 +1025,8 @@ drjson_object_get_item(const DrJsonContext* ctx, DrJsonValue o, const char* key,
         return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "not an object");
     uint32_t capacity = object->capacity;
     uint32_t idx = fast_reduce32(hash, capacity);
-    const DrJsonHashIndex* his = object->object_items;
-    const DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*capacity);
+    DrJsonHashIndex* his; DrJsonObjectPair* pairs;
+    drj_get_obj_ptrs(object->object_items, object->capacity, &his, &pairs);
     for(;;){
         DrJsonHashIndex hi = his[idx];
         if(!hi.hash) return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "key is not valid for object");
@@ -1266,7 +1288,7 @@ drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx){
             if(object->count <= index)
                 return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "out of bounds indexing");
             size_t capacity = object->capacity;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             return pairs[index].key;
         }
         case DRJSON_OBJECT_VALUES:{
@@ -1275,7 +1297,7 @@ drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx){
             if(object->count <= index)
                 return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "out of bounds indexing");
             size_t capacity = object->capacity;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             return pairs[index].value;
         }
         case DRJSON_OBJECT_ITEMS:{
@@ -1285,7 +1307,7 @@ drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx){
             if(object->count <= pidx)
                 return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "out of bounds indexing");
             size_t capacity = object->capacity;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             if(index & 1)
                 return pairs[pidx].value;
             else
@@ -1585,7 +1607,7 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
             const DrJsonObject* odata = ctx->objects.data;
             const DrJsonObject* object = &odata[v.object_idx];
             int newlined = 0;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
                 if(newlined)
@@ -1605,7 +1627,7 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
             const DrJsonObject* odata = ctx->objects.data;
             const DrJsonObject* object = &odata[v.object_idx];
             int newlined = 0;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
                 if(newlined)
@@ -1623,7 +1645,7 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
             const DrJsonObject* odata = ctx->objects.data;
             const DrJsonObject* object = &odata[v.object_idx];
             int newlined = 0;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
                 if(newlined)
@@ -1638,7 +1660,7 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
             const DrJsonObject* odata = ctx->objects.data;
             const DrJsonObject* object = &odata[v.object_idx];
             int newlined = 0;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
                 if(newlined)
@@ -1728,7 +1750,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
             const DrJsonObject* odata = ctx->objects.data;
             const DrJsonObject* object = &odata[v.object_idx];
             int newlined = 0;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
                 if(newlined)
@@ -1758,7 +1780,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
             const DrJsonObject* odata = ctx->objects.data;
             const DrJsonObject* object = &odata[v.object_idx];
             int newlined = 0;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
                 if(newlined)
@@ -1785,7 +1807,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
             const DrJsonObject* odata = ctx->objects.data;
             const DrJsonObject* object = &odata[v.object_idx];
             int newlined = 0;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
                 if(newlined)
@@ -1808,7 +1830,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
             const DrJsonObject* odata = ctx->objects.data;
             const DrJsonObject* object = &odata[v.object_idx];
             int newlined = 0;
-            DrJsonObjectPair* pairs = (DrJsonObjectPair*)(((char*)object->object_items)+sizeof(DrJsonHashIndex)*object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
                 if(newlined)
