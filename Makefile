@@ -52,10 +52,10 @@ Bin/demo$(EXE): Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
 Bin/test$(EXE): DrJson/test_drjson.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test.dep Bin/libdrjson.$(DRJSONVERSION).$(DYLINK) -fvisibility=hidden -I. -g
 
-Bin/test_static$(EXE): DrJson/test_drjson.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
+Bin/test_static$(EXE): DrJson/test_drjson.c | Bin Deps
 	$(CC) $< DrJson/drjson.c -o $@ -MT $@ -MD -MP -MF Deps/test_static.dep -fvisibility=hidden -I. -g -DDRJSON_STATIC_LIB=1
 
-Bin/test_unity$(EXE): DrJson/test_drjson.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
+Bin/test_unity$(EXE): DrJson/test_drjson.c | Bin Deps
 	$(CC) $< -include DrJson/drjson.c -o $@ -MT $@ -MD -MP -MF Deps/test_unity.dep -fvisibility=hidden -I. -g -DDRJSON_API=static
 
 

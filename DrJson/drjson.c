@@ -116,14 +116,14 @@ struct DrJsonHashIndex {
 
 typedef struct DrJsonObject DrJsonObject;
 struct DrJsonObject {
-    void* object_items;
+    void*_Nullable object_items;
     uint32_t count;
     uint32_t capacity;
 };
 
 typedef struct DrJsonArray DrJsonArray;
 struct DrJsonArray {
-    DrJsonValue* array_items;
+    DrJsonValue*_Nullable array_items;
     uint32_t count;
     uint32_t capacity;
 };
@@ -180,7 +180,7 @@ static inline
 size_t
 drj_atom_table_size_for(size_t cap){
     // XXX: alignment
-    return cap * (sizeof(DrjAtomStr)+ sizeof(uint32_t));
+    return cap * sizeof(DrjAtomStr)+ 2 * cap*sizeof(uint32_t);
 }
 
 static inline
@@ -210,7 +210,7 @@ drj_grow_atom_table(DrjAtomTable* table, const DrJsonAllocator* allocator){
     if(!p) return 1;
     DrjAtomStr* strs; uint32_t* idxes;
     drj_atom_table_get_ptrs(p, new_cap, &strs, &idxes);
-    drj_memset(idxes, 0xff, new_cap * sizeof *idxes);
+    drj_memset(idxes, 0xff, 2*new_cap * sizeof *idxes);
     for(uint32_t i = 0; i < count; i++){
         const DrjAtomStr* s = &strs[i];
         uint32_t hash = s->hash;
@@ -231,7 +231,7 @@ int
 drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const char* str, uint32_t len, _Bool copy, DrJsonAtom* outatom){
     if(!len) str = "";
     uint32_t hash = drj_hash_str(str, len);
-    if(!table->count){
+    if(unlikely(!table->count)){
         assert(!table->capacity);
         assert(!table->data);
         enum {capacity = 32};
@@ -239,7 +239,7 @@ drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const cha
         if(!p) return 1;
         DrjAtomStr* strs; uint32_t* idxes;
         drj_atom_table_get_ptrs(p, capacity, &strs, &idxes);
-        drj_memset(idxes, 0xff, capacity * sizeof*idxes);
+        drj_memset(idxes, 0xff, 2*capacity * sizeof*idxes);
         table->data = p;
         table->capacity = capacity;
         uint32_t idx = fast_reduce32(hash, 2*capacity);
@@ -267,16 +267,16 @@ drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const cha
         idxes[idx] = table->count++;
         return 0;
     }
-    if(table->count * 2 >= table->capacity){
+    if(unlikely(table->count >= table->capacity)){
         int err = drj_grow_atom_table(table, allocator);
-        if(err) return err;
+        if(unlikely(err)) return err;
     }
     uint32_t capacity = table->capacity;
-    uint32_t idx = fast_reduce32(hash, 2*capacity);
+    uint32_t bounds = 2*capacity;
+    uint32_t idx = fast_reduce32(hash, bounds);
     DrjAtomStr* strs; uint32_t* idxes;
     drj_atom_table_get_ptrs(table->data, capacity, &strs, &idxes);
-    for(;;idx++){
-        if(idx >= 2*capacity) idx = 0;
+    for(;;){
         uint32_t i = idxes[idx];
         if(i == UINT32_MAX){ // unset
             _Bool copied = 0;
@@ -299,17 +299,12 @@ drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const cha
             return 0;
         }
         DrjAtomStr a = strs[i];
-        assert(a.pointer);
-        // if(!a.pointer)
-            // break;
-        if(a.hash != hash)
-            continue;
-        if(a.length != len)
-            continue;
-        if(memcmp(str, a.pointer, len) == 0){
+        if(a.hash == hash && a.length == len && memcmp(str, a.pointer, len) == 0){
             *outatom = drj_make_atom(i, hash);
             return 0;
         }
+        idx++;
+        if(idx >= bounds) idx = 0;
     }
 }
 
@@ -2430,7 +2425,7 @@ drjson_ctx_free_all(DrJsonContext* ctx){
 
 DRJSON_API
 DrJsonValue
-drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length){
+drjson_make_string(DrJsonContext* ctx, const char* s, size_t length){
     DrJsonAtom atom;
     int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, s, (uint32_t)length, 1, &atom);
     if(err)

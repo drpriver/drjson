@@ -12,12 +12,14 @@ static TestFunc TestSimpleParsing;
 static TestFunc TestDoubleParsing;
 static TestFunc TestSerialization;
 static TestFunc TestEscape;
+static TestFunc TestObject;
 
 int main(int argc, char** argv){
     RegisterTest(TestSimpleParsing);
     RegisterTest(TestDoubleParsing);
     RegisterTest(TestSerialization);
     RegisterTest(TestEscape);
+    RegisterTest(TestObject);
     return test_main(argc, argv, NULL);
 }
 
@@ -129,6 +131,30 @@ TestFunction(TestEscape){
         err = drjson_get_atom_str_and_length(ctx, a, &escaped.text, &escaped.length);
         TestAssertFalse(err);
         TestExpectEquals2(SV_equals, escaped, after);
+    }
+    drjson_ctx_free_all(ctx);
+    TESTEND();
+}
+
+TestFunction(TestObject){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    size_t count = 0;
+    DrJsonValue o = drjson_make_object(ctx);
+    TestAssertEquals(o.kind, DRJSON_OBJECT);
+    for(size_t x = 0; x < 256; x++){
+        for(size_t y = 0; y < 256; y++){
+            unsigned char txt[2] = {(unsigned char)x, (unsigned char)y};
+            DrJsonValue v = drjson_make_string(ctx, (char*)txt, sizeof txt);
+            TestAssertEquals(v.kind, DRJSON_STRING);
+            int err = drjson_object_set_item_atom(ctx, o, v.atom, v);
+            count++;
+            TestAssertEquals(drjson_len(ctx, o), count);
+            DrJsonValue v2 = drjson_object_get_item_atom(ctx, o, v.atom);
+            if(!drjson_eq(v2, v)){
+                TestAssert(0);
+            }
+        }
     }
     drjson_ctx_free_all(ctx);
     TESTEND();
