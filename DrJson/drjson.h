@@ -7,10 +7,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#define DRJSON_VERSION_MAJOR 2
+#define DRJSON_VERSION_MAJOR 3
 #define DRJSON_VERSION_MINOR 0
-#define DRJSON_VERSION_MICRO 1
-#define DRJSON_VERSION "2.0.1"
+#define DRJSON_VERSION_MICRO 0
+#define DRJSON_VERSION "3.0.0"
 
 #ifndef drj_memcpy
 #if !defined(__GNUC__) || defined(__IMPORTC__)
@@ -59,13 +59,116 @@
 #endif
 #endif
 
-// can fit in 4 bits
+////////////////
+// DrJsonContext
+//
+
+typedef struct DrJsonAllocator DrJsonAllocator;
+// To use a custom allocator, fill out this struct.
+// If you just want to use malloc, etc. just use `drjson_stdc_allocator`.
+struct DrJsonAllocator {
+    void*_Nullable user_pointer;
+    void*_Nullable (*_Nonnull alloc)(void*_Null_unspecified user_pointer, size_t size);
+    void*_Nullable (*_Nonnull realloc)(void*_Null_unspecified user_pointer, void*_Nullable old_pointer, size_t old_size, size_t new_size);
+    void  (*_Nonnull free)(void*_Null_unspecified user_pointer, const void*_Nullable to_free, size_t size);
+    // This function can be missing. If it is implemented and an error occurs
+    // during parsing, it will be called to quickly free what has been
+    // allocated.
+    void (*_Nullable free_all)(void*_Null_unspecified user_pointer);
+};
+
+// A default allocator that just calls malloc, free, etc.
+DRJSON_API
+DrJsonAllocator
+drjson_stdc_allocator(void);
+
+// Opaque type
+typedef struct DrJsonContext DrJsonContext;
+
+DRJSON_API
+DrJsonContext*_Nullable
+drjson_create_ctx(DrJsonAllocator allocator);
+
+// Frees the ctx and all data allocated by the ctx
+DRJSON_API
+void
+drjson_ctx_free_all(DrJsonContext* ctx);
+
+//------------------------------------------------------------
+
+
+//////////////
+// Error Codes
+//
+enum DrJsonErrorCode {
+    DRJSON_ERROR_NONE           = 0,
+    DRJSON_ERROR_UNEXPECTED_EOF = 1,
+    DRJSON_ERROR_ALLOC_FAILURE  = 2,
+    DRJSON_ERROR_MISSING_KEY    = 3,
+    DRJSON_ERROR_INDEX_ERROR    = 4,
+    DRJSON_ERROR_INVALID_CHAR   = 5,
+    DRJSON_ERROR_INVALID_VALUE  = 6,
+    DRJSON_ERROR_TOO_DEEP       = 7,
+    DRJSON_ERROR_TYPE_ERROR     = 8,
+    DRJSON_ERROR_INVALID_ERROR  = 9,
+};
+
+typedef enum DrJsonErrorCode DrJsonErrorCode;
+
+// Returns a nul-terminated string of static storage.
+// length is optional.
+DRJSON_API
+const char*
+drjson_error_name(DrJsonErrorCode code, size_t*_Nullable length);
+
+//------------------------------------------------------------
+
+/////////////
+// DrJsonAtom
+//
+
+// Opaque handle to an interned string.
+typedef struct DrJsonAtom DrJsonAtom;
+struct DrJsonAtom {
+    uint64_t bits;
+};
+
+// NOTE: duplicates the string into the atom table.
+DRJSON_API
+int // 0 on success
+drjson_atomize(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom);
+
+// NOTE: puts the string into the atom table, so only call with data guaranteed
+//       to outlive the context (like a string literal). Use the macro
+//       DRJSON_ATOMIZE for actual string literals.
+DRJSON_API
+int // 0 on success
+drjson_atomize_no_copy(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom);
+
+#define DRJSON_ATOMIZE(ctx, literal, outatom) drjson_atomize_no_copy(ctx, "" literal, sizeof literal - 1, outatom)
+
+// Retrieves the corresponding atom for the string, but if it is not
+// already atomized then an error is returned instead of atomizing.
+DRJSON_API
+int // 0 on success
+drjson_get_atom_no_intern(const DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom);
+
+DRJSON_API
+int
+drjson_get_atom_str_and_length(const DrJsonContext* ctx, DrJsonAtom atom, const char*_Nullable*_Nonnull str, size_t* length);
+
+//------------------------------------------------------------
+
+//////////////
+// DrJsonValue
+//
+
 enum DrJsonKind {
     DRJSON_ERROR         = 0x0, // error code + message
     DRJSON_NUMBER        = 0x1, // double
     DRJSON_INTEGER       = 0x2, // int64_t
     DRJSON_UINTEGER      = 0x3, // uint64_t
-    DRJSON_STRING        = 0x4, // const char* + length
+    DRJSON_STRING        = 0x4, // atom
     DRJSON_ARRAY         = 0x5, // index
     DRJSON_OBJECT        = 0x6, // index
     DRJSON_NULL          = 0x7,
@@ -75,27 +178,28 @@ enum DrJsonKind {
     DRJSON_OBJECT_VALUES = 0xb,
     DRJSON_OBJECT_ITEMS  = 0xc,
 };
+typedef enum DrJsonKind DrJsonKind;
+
+// Returns a nul-terminated string of static storage.
+// length is optional.
+DRJSON_API
+const char*
+drjson_kind_name(DrJsonKind kind, size_t*_Nullable length);
 
 
 typedef struct DrJsonValue DrJsonValue;
 struct DrJsonValue {
     union {
         uint64_t bits;
-#ifndef DRJSON_OPAQUE_BITFIELDS
         struct {
-            uint64_t kind :4;
-            uint64_t :60;
+            uint16_t kind;
+            uint16_t _pad[3];
         };
         struct {
-            uint64_t _skind:4;
-            uint64_t slen :60;
+            uint16_t _ekind;
+            uint16_t error_code;
+            uint32_t err_len;
         };
-        struct {
-            uint64_t _ekind:4;
-            uint64_t error_code :4;
-            uint64_t err_len :56;
-        };
-#endif
     };
     union {
         // DRJSON_NUMBER
@@ -108,10 +212,12 @@ struct DrJsonValue {
         uint64_t uinteger;
 
         // DRJSON_STRING
-        const char* string; // not nul-terminated, use slen.
-                            //
+        DrJsonAtom atom;
+
         // DRJSON_ERROR
-        const char* err_mess; // pointer to a c-string literal, nul terminated. Length is also given.
+        const char* err_mess; // pointer to a c-string literal, nul terminated.
+                              // Length is also given.  Be aware of shared
+                              // object lifetimes if you dynamically link.
 
         // DRJSON_BOOL
         _Bool boolean;
@@ -132,201 +238,26 @@ struct DrJsonValue {
 
 _Static_assert(sizeof(DrJsonValue) == 2*sizeof(void*), "");
 
+//------------------------------------------------------------
 
-DRJSON_API
-int
-drjson_kind(DrJsonValue v);
-// Retrieves the `kind` field from a json value.
+////////////////////////
+// DrJsonValue Utilities
 //
-// If DRJSON_OPAQUE_BITFIELDS is not defined, this is replaced with a macro.
-// This is provided for interfacing with compilers/languages that can't handle
-// bitfields.
-
-DRJSON_API
-int
-drjson_error_code(DrJsonValue v);
-// Retrieves the `error_code` field from a json value.
-// It is only valid to call this if `kind` is DRJSON_ERROR.
-//
-// If DRJSON_OPAQUE_BITFIELDS is not defined, this is replaced with a macro.
-// This is provided for interfacing with compilers/languages that can't handle
-// bitfields.
-
-DRJSON_API
-size_t
-drjson_slen(DrJsonValue v);
-// Retrieves the `slen` field from a json value.
-// It is only valid to call this if `kind` is DRJSON_STRING.
-//
-// If DRJSON_OPAQUE_BITFIELDS is not defined, this is replaced with a macro.
-// This is provided for interfacing with compilers/languages that can't handle
-// bitfields.
-
-DRJSON_API
-const char*
-drjson_error_mess(DrJsonValue v);
-// Retrieves the `err_mess` field from a json value.
-// It is only valid to call this if `kind` is DRJSON_STRING.
-//
-// If DRJSON_OPAQUE_BITFIELDS is not defined, this is replaced with a macro.
-// This is provided for interfacing with compilers/languages that can't handle
-// bitfields.
-
-#ifndef DRJSON_OPAQUE_BITFIELDS
-#define drjson_kind(v) (v).kind
-#define drjson_error_code(v) (v).error_code
-#define drjson_error_mess(v) (v).err_mess
-#define drjson_slen(v) (v).slen
-#endif
-
-typedef struct DrJsonAllocator DrJsonAllocator;
-// To use a custom allocator, fill out this struct.
-// If you just want to use malloc, etc. just use `drjson_stdc_allocator`.
-struct DrJsonAllocator {
-    void*_Nullable user_pointer;
-    void*_Nullable (*_Nonnull alloc)(void*_Null_unspecified user_pointer, size_t size);
-    void*_Nullable (*_Nonnull realloc)(void*_Null_unspecified user_pointer, void*_Nullable old_pointer, size_t old_size, size_t new_size);
-    void  (*_Nonnull free)(void*_Null_unspecified user_pointer, const void*_Nullable to_free, size_t size);
-    // This function can be missing. If it is implemented and an error occurs
-    // during parsing, it will be called to quickly free what has been
-    // allocated.
-    void (*_Nullable free_all)(void*_Null_unspecified user_pointer);
-};
-
-
-DRJSON_API
-DrJsonAllocator
-drjson_stdc_allocator(void);
-// A default allocator that just calls malloc, free, etc.
-
-typedef struct DrJsonStringNode DrJsonStringNode;
-struct DrJsonStringNode {
-    DrJsonStringNode*_Nullable next;
-    size_t data_length; // sizeof node is sizeof(DrJsonStringNode) + data_length
-    char data[];
-};
-
-// Opaque type
-typedef struct DrJsonContext DrJsonContext;
-
-DRJSON_API
-DrJsonContext*_Nullable
-drjson_create_ctx(DrJsonAllocator allocator);
-
-typedef struct DrJsonParseContext DrJsonParseContext;
-struct DrJsonParseContext {
-    const char* cursor; // initialize to string
-    const char* end; // initialize to string + length
-    const char* begin; // initialize to string
-    int depth; // initialize to 0
-    DrJsonContext* ctx; //
-};
-
-// Writer abstraction for serializing json.
-typedef struct DrJsonTextWriter DrJsonTextWriter;
-struct DrJsonTextWriter {
-    void*_Null_unspecified up; //user pointer
-    int (*write)(void*_Null_unspecified user_data, const void*, size_t);
-};
-
-static const char*_Nonnull const DrJsonKindNames[] = {
-    [DRJSON_ERROR]         = "error",
-    [DRJSON_NUMBER]        = "number",
-    [DRJSON_INTEGER]       = "integer",
-    [DRJSON_UINTEGER]      = "uinteger",
-    [DRJSON_STRING]        = "string",
-    [DRJSON_ARRAY]         = "array",
-    [DRJSON_OBJECT]        = "object",
-    [DRJSON_NULL]          = "null",
-    [DRJSON_BOOL]          = "bool",
-    [DRJSON_ARRAY_VIEW]    = "array view",
-    [DRJSON_OBJECT_KEYS]   = "object keys",
-    [DRJSON_OBJECT_VALUES] = "object values",
-    [DRJSON_OBJECT_ITEMS]  = "object items",
-};
-
-static const size_t DrJsonKindNameLengths[] = {
-    [DRJSON_ERROR]         = sizeof("error")-1,
-    [DRJSON_NUMBER]        = sizeof("number")-1,
-    [DRJSON_INTEGER]       = sizeof("integer")-1,
-    [DRJSON_UINTEGER]      = sizeof("uinteger")-1,
-    [DRJSON_STRING]        = sizeof("string")-1,
-    [DRJSON_ARRAY]         = sizeof("array")-1,
-    [DRJSON_OBJECT]        = sizeof("object")-1,
-    [DRJSON_NULL]          = sizeof("null")-1,
-    [DRJSON_BOOL]          = sizeof("bool")-1,
-    [DRJSON_ARRAY_VIEW]    = sizeof("array view")-1,
-    [DRJSON_OBJECT_KEYS]   = sizeof("object keys")-1,
-    [DRJSON_OBJECT_VALUES] = sizeof("object values")-1,
-    [DRJSON_OBJECT_ITEMS]  = sizeof("object items")-1,
-};
-
-enum DrJsonErrorCode {
-    DRJSON_ERROR_NONE           = 0,
-    DRJSON_ERROR_UNEXPECTED_EOF = 1,
-    DRJSON_ERROR_ALLOC_FAILURE  = 2,
-    DRJSON_ERROR_MISSING_KEY    = 3,
-    DRJSON_ERROR_INDEX_ERROR    = 4,
-    DRJSON_ERROR_INVALID_CHAR   = 5,
-    DRJSON_ERROR_INVALID_VALUE  = 6,
-    DRJSON_ERROR_TOO_DEEP       = 7,
-    DRJSON_ERROR_TYPE_ERROR     = 8,
-    DRJSON_ERROR_INVALID_ERROR  = 9,
-};
-
-static const char*_Nonnull const DrJsonErrorNames[] = {
-    [DRJSON_ERROR_NONE]           = "No error",
-    [DRJSON_ERROR_UNEXPECTED_EOF] = "Unexpected End of Input",
-    [DRJSON_ERROR_ALLOC_FAILURE]  = "Allocation Failure",
-    [DRJSON_ERROR_MISSING_KEY]    = "Missing Key",
-    [DRJSON_ERROR_INDEX_ERROR]    = "Index Error",
-    [DRJSON_ERROR_INVALID_CHAR]   = "Invalid Char",
-    [DRJSON_ERROR_INVALID_VALUE]  = "Invalid Value",
-    [DRJSON_ERROR_TOO_DEEP]       = "Too Many Levels of Nesting",
-    [DRJSON_ERROR_TYPE_ERROR]     = "Invalid type for operation",
-    [DRJSON_ERROR_INVALID_ERROR]  = "Error is Invalid",
-};
-
-static const size_t DrJsonErrorNameLengths[] = {
-    [DRJSON_ERROR_NONE]           = sizeof("No error")-1,
-    [DRJSON_ERROR_UNEXPECTED_EOF] = sizeof("Unexpected End of Input")-1,
-    [DRJSON_ERROR_ALLOC_FAILURE]  = sizeof("Allocation Failure")-1,
-    [DRJSON_ERROR_MISSING_KEY]    = sizeof("Missing Key")-1,
-    [DRJSON_ERROR_INDEX_ERROR]    = sizeof("Index Error")-1,
-    [DRJSON_ERROR_INVALID_CHAR]   = sizeof("Invalid Char")-1,
-    [DRJSON_ERROR_INVALID_VALUE]  = sizeof("Invalid Value")-1,
-    [DRJSON_ERROR_TOO_DEEP]       = sizeof("Too Many Levels of Nesting")-1,
-    [DRJSON_ERROR_TYPE_ERROR]     = sizeof("Invalid type for operation")-1,
-    [DRJSON_ERROR_INVALID_ERROR]  = sizeof("Error is Invalid")-1,
-};
-
-static inline
-const char*
-drjson_get_error_name(DrJsonValue v){
-    return DrJsonErrorNames[drjson_error_code(v)];
-}
-
-static inline
-size_t
-drjson_get_error_name_length(DrJsonValue v){
-    return DrJsonErrorNameLengths[drjson_error_code(v)];
-}
-
 static inline
 int
 drjson_is_numeric(DrJsonValue v){
-    return drjson_kind(v) == DRJSON_NUMBER || drjson_kind(v) == DRJSON_INTEGER || drjson_kind(v) == DRJSON_UINTEGER;
+    return v.kind == DRJSON_NUMBER || v.kind == DRJSON_INTEGER || v.kind == DRJSON_UINTEGER;
 }
 
 // shallow equality (although it does compare strings)
 static inline
 int
 drjson_eq(DrJsonValue a, DrJsonValue b){
-    if((drjson_kind(a) == DRJSON_INTEGER  || drjson_kind(a) == DRJSON_UINTEGER) && (drjson_kind(b) == DRJSON_INTEGER || drjson_kind(b) == DRJSON_UINTEGER)){
+    if((a.kind == DRJSON_INTEGER  || a.kind == DRJSON_UINTEGER) && (b.kind == DRJSON_INTEGER || b.kind == DRJSON_UINTEGER)){
         return a.uinteger == b.uinteger;
     }
-    if(drjson_kind(a) != drjson_kind(b)) return 0;
-    switch(drjson_kind(a)){
+    if(a.kind != b.kind) return 0;
+    switch(a.kind){
         case DRJSON_NUMBER:
             return a.number == b.number;
         case DRJSON_INTEGER:
@@ -334,9 +265,7 @@ drjson_eq(DrJsonValue a, DrJsonValue b){
         case DRJSON_UINTEGER:
             return a.uinteger == b.uinteger;
         case DRJSON_STRING:
-            if(drjson_slen(a) != drjson_slen(b))
-                return 0;
-            return memcmp(a.string, b.string, drjson_slen(a)) == 0;
+            return a.atom.bits == b.atom.bits;
         case DRJSON_ARRAY:
             return a.array_idx == b.array_idx;
         case DRJSON_OBJECT:
@@ -346,7 +275,7 @@ drjson_eq(DrJsonValue a, DrJsonValue b){
         case DRJSON_BOOL:
             return a.boolean == b.boolean;
         case DRJSON_ERROR:
-            return drjson_error_code(a) == drjson_error_code(b);
+            return a.error_code == b.error_code;
         case DRJSON_ARRAY_VIEW:
             return a.array_idx == b.array_idx;
         case DRJSON_OBJECT_KEYS:
@@ -358,11 +287,19 @@ drjson_eq(DrJsonValue a, DrJsonValue b){
     }
 }
 
+DRJSON_API
+int // returns 1 on error (not an atom)
+drjson_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Nullable*_Nonnull string, size_t* slen);
 
-#ifndef DRJSON_OPAQUE_BITFIELDS
+//------------------------------------------------------------
+
+//////////////////////////////
+// Helpers to make DrJsonValue
+//
+
 static inline
 DrJsonValue
-drjson_make_error(enum DrJsonErrorCode error, const char* mess){
+drjson_make_error(DrJsonErrorCode error, const char* mess){
     return (DrJsonValue){._ekind=DRJSON_ERROR, .error_code=error, .err_mess=mess, .err_len=strlen(mess)};
 }
 
@@ -395,100 +332,148 @@ DrJsonValue
 drjson_make_uint(int64_t u){
     return (DrJsonValue){.kind=DRJSON_UINTEGER, .uinteger=u};
 }
-#endif
+
+DRJSON_API
+DrJsonValue
+drjson_make_object(DrJsonContext* ctx);
+
+DRJSON_API
+DrJsonValue
+drjson_make_array(DrJsonContext* ctx);
+
+
+// Calls drjson_atomize. Make a no_copy atom and then call
+// `drjson_atom_to_value` to avoid dup'ing the string.
+DRJSON_API
+DrJsonValue
+drjson_make_string(DrJsonContext* ctx, const char* s, size_t length);
 
 static inline
-size_t
-drjson_size_for_object_of_length(size_t len){
-    return 5*sizeof(void*)*len;
+DrJsonValue
+drjson_atom_to_value(DrJsonAtom atom){
+    return (DrJsonValue){.kind=DRJSON_STRING, .atom=atom};
 }
 
-// Frees the ctx and all data allocated by the ctx
-DRJSON_API
-void
-drjson_ctx_free_all(DrJsonContext* ctx);
-
-DRJSON_API
-DrJsonValue
-drjson_make_object(DrJsonContext* ctx, size_t initial_length);
-
-DRJSON_API
-DrJsonValue
-drjson_make_array(DrJsonContext* ctx, size_t initial_cap);
-
-
-// Copies the string and tracks it in the ctx.
-DRJSON_API
-DrJsonStringNode*_Nullable
-drjson_store_string_copy(DrJsonContext* ctx, const char* s, size_t length);
-
-// NOTE:
-// The string needs to be one that does not need to be escaped.
-DRJSON_API
-DrJsonValue
-drjson_make_string_no_copy(const char* s, size_t length);
-
-DRJSON_API
-DrJsonValue
-drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length);
-
-// XXX: should these be static inline as they are trivial?
-
 // returns an object_keys (which is array-like) or error
-DRJSON_API
+static inline
 DrJsonValue
-drjson_object_keys(DrJsonValue object);
+drjson_object_keys(DrJsonValue o){
+    if(o.kind != DRJSON_OBJECT)
+        return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "call to keys for non-object");
+    o.kind = DRJSON_OBJECT_KEYS;
+    return o;
+}
 
 // returns an object_values (which is array-like) or error
-DRJSON_API
+static inline
 DrJsonValue
-drjson_object_values(DrJsonValue object);
+drjson_object_values(DrJsonValue o){
+    if(o.kind != DRJSON_OBJECT)
+        return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "call to values for non-object");
+    o.kind = DRJSON_OBJECT_VALUES;
+    return o;
+}
 
 // returns an object_items (which is array-like) or error.
 // The "array" is a flat array of alternating key value.
-DRJSON_API
+static inline
 DrJsonValue
-drjson_object_items(DrJsonValue object);
+drjson_object_items(DrJsonValue o){
+    if(o.kind != DRJSON_OBJECT)
+        return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "call to items for non-object");
+    o.kind = DRJSON_OBJECT_ITEMS;
+    return o;
+}
 
-DRJSON_API
-DrJsonValue
-drjson_parse(DrJsonParseContext* ctx);
+//------------------------------------------------------------
+
+//////////
+// Parsing
+//
+
+typedef struct DrJsonParseContext DrJsonParseContext;
+struct DrJsonParseContext {
+    const char* cursor; // initialize to string
+    const char* end; // initialize to string + length
+    const char* begin; // initialize to string
+    int depth; // initialize to 0
+    DrJsonContext* ctx; //
+    _Bool _copy_strings;
+};
 
 enum {
-    DRJSON_PARSE_STRING_NONE = 0x0,
-    // Copy the provided string into the context (so the context manages all lifetimes).
-    DRJSON_PARSE_STRING_COPY = 0x1,
+    DRJSON_PARSE_FLAG_NONE = 0x0,
+    DRJSON_PARSE_FLAG_BRACELESS_OBJECT = 0x1,
+    DRJSON_PARSE_FLAG_NO_COPY_STRINGS = 0x2,
 };
 
 DRJSON_API
 DrJsonValue
-drjson_parse_string(DrJsonContext* ctx, const char* text, size_t length, uint32_t flags);
+drjson_parse(DrJsonParseContext* ctx, unsigned flags);
+
+// If an error is returned, use ths to get the line and column.
+DRJSON_API
+void
+drjson_get_line_column(const DrJsonParseContext* ctx, size_t* line, size_t* column);
+
+// Convenience function that setups a parse context for you.
+DRJSON_API
+DrJsonValue
+drjson_parse_string(DrJsonContext* ctx, const char* text, size_t length, unsigned flags);
+
+//------------------------------------------------------------
+
+/////////////
+// Object ops
+//
 
 DRJSON_API
 DrJsonValue
-drjson_parse_braceless_object(DrJsonParseContext* ctx);
+drjson_object_get_item(const DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen);
 
 DRJSON_API
 DrJsonValue
-drjson_parse_braceless_string(DrJsonContext* ctx, const char* text, size_t length, uint32_t flags);
-
-DRJSON_API
-uint32_t
-drjson_object_key_hash(const char* key, size_t keylen);
-
-DRJSON_API
-DrJsonValue
-drjson_object_get_item(const DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, uint32_t hash); // hash can be 0, which means "calculate for me"
+drjson_object_get_item_atom(const DrJsonContext* ctx, DrJsonValue object, DrJsonAtom key);
 
 DRJSON_API
 int // 0 on success
-drjson_object_set_item_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item);
-//
-// hash can be 0 - means calculate it for me
-//
+drjson_object_set_item_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, DrJsonValue item);
+
 DRJSON_API
 int // 0 on success
-drjson_object_set_item_no_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item);
+drjson_object_set_item_no_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, DrJsonValue item);
+
+DRJSON_API
+int // 0 on success
+drjson_object_set_item_atom(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom key, DrJsonValue item);
+
+//------------------------------------------------------------
+
+////////////
+// Array ops
+//
+
+DRJSON_API
+int // 0 on success
+drjson_array_push_item(const DrJsonContext* ctx, DrJsonValue array, DrJsonValue item);
+
+DRJSON_API
+DrJsonValue // returns DRJSON_ERROR if array is empty
+drjson_array_pop_item(const DrJsonContext* ctx, DrJsonValue array);
+
+DRJSON_API
+DrJsonValue // returns DRJSON_ERROR if array is empty
+drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue array, size_t idx);
+
+DRJSON_API
+int // 0 on success
+drjson_array_insert_item(const DrJsonContext* ctx, DrJsonValue array, size_t idx, DrJsonValue item);
+
+//------------------------------------------------------------
+
+///////////////////////
+// Array and Object ops
+//
 
 // Works on both arrays and array-likes (array view, object keys view, object
 // values view, etc.)
@@ -507,21 +492,11 @@ DRJSON_API
 int
 drjson_clear(const DrJsonContext* ctx, DrJsonValue v);
 
-DRJSON_API
-int // 0 on success
-drjson_array_push_item(const DrJsonContext* ctx, DrJsonValue array, DrJsonValue item);
+//------------------------------------------------------------
 
-DRJSON_API
-DrJsonValue // returns DRJSON_ERROR if array is empty
-drjson_array_pop_item(const DrJsonContext* ctx, DrJsonValue array);
-
-DRJSON_API
-DrJsonValue // returns DRJSON_ERROR if array is empty
-drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue array, size_t idx);
-
-DRJSON_API
-int // 0 on success
-drjson_array_insert_item(const DrJsonContext* ctx, DrJsonValue array, size_t idx, DrJsonValue item);
+//////////
+// Queries
+//
 
 DRJSON_API
 DrJsonValue
@@ -531,15 +506,18 @@ DRJSON_API
 DrJsonValue
 drjson_checked_query(const DrJsonContext* ctx, DrJsonValue v, int type, const char* query, size_t query_length);
 
-DRJSON_API
-int
-drjson_escape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char *_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
+//------------------------------------------------------------
 
-#if 0
-DRJSON_API
-int
-drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
-#endif
+/////////////////////////
+// Printing/serialization
+//
+
+// Writer abstraction for serializing json.
+typedef struct DrJsonTextWriter DrJsonTextWriter;
+struct DrJsonTextWriter {
+    void*_Null_unspecified up; //user pointer
+    int (*write)(void*_Null_unspecified user_data, const void*, size_t);
+};
 
 enum {
     DRJSON_PRETTY_PRINT   = 0x1,
@@ -556,10 +534,6 @@ DRJSON_API
 int
 drjson_print_value_mem(const DrJsonContext* ctx, void* buff, size_t bufflen, DrJsonValue v, int indent, unsigned flags, size_t*_Nullable printed);
 
-DRJSON_API
-void
-drjson_get_line_column(const DrJsonParseContext* ctx, size_t* line, size_t* column);
-
 // Returns 0 on success, 1 on error.
 DRJSON_API
 int
@@ -569,7 +543,7 @@ DRJSON_API
 int
 drjson_print_error_mem(void* buff, size_t bufflen, const char* filename, size_t filename_len, size_t line, size_t column, DrJsonValue v);
 
-#ifndef DRJSON_NO_STDIO
+#if !defined(DRJSON_NO_STDIO) && !defined(DRJSON_NO_IO)
 // Like above, but for FILE*
 DRJSON_API
 int
@@ -580,8 +554,7 @@ int
 drjson_print_error_fp(FILE* fp, const char* filename, size_t filename_len, size_t line, size_t column, DrJsonValue v);
 #endif
 
-#ifndef DRJSON_NO_IO
-#ifndef _WIN32
+#if  !defined(DRJSON_NO_IO) && !defined(_WIN32) // posix
 DRJSON_API
 int
 drjson_print_value_fd(const DrJsonContext* ctx, int fd, DrJsonValue v, int indent, unsigned flags);
@@ -589,15 +562,35 @@ drjson_print_value_fd(const DrJsonContext* ctx, int fd, DrJsonValue v, int inden
 DRJSON_API
 int
 drjson_print_error_fd(int fd, const char* filename, size_t filename_len, size_t line, size_t column, DrJsonValue v);
-#else
+#elif !defined(DRJSON_NO_IO) // windows
+// To avoid needing to include <Windows.h>, we just use a `void*` for `HANDLE`,
+// but it is like what you would get from CreateFileW.
 DRJSON_API
 int
 drjson_print_value_HANDLE(const DrJsonContext* ctx, void* hnd, DrJsonValue v, int indent, unsigned flags);
 DRJSON_API
+
 int
 drjson_print_error_HANDLE(void* hnd, const char* filename, size_t filename_len, size_t line, size_t column, DrJsonValue v);
 #endif
+
+//------------------------------------------------------------
+
+////////
+// misc
+//
+
+// If mutating the json tree, use this to escape strings.
+DRJSON_API
+int
+drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t length, DrJsonAtom* outatom);
+
+#if 0 // to be implemented
+DRJSON_API
+int
+drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
 #endif
+
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

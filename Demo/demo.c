@@ -4,40 +4,42 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <assert.h>
 #include "DrJson/drjson.h"
 #include "arena_allocator.h"
 
 static inline
 char*
 read_file_streamed(FILE* fp){
-    size_t nalloced = 1024;
     size_t used = 0;
+    size_t nalloced = 1024;
     char* buff = malloc(nalloced);
+    if(!buff) goto fail;
     for(;;){
         size_t remainder = nalloced - used;
         size_t nread = fread(buff+used, 1, remainder, fp);
         if(nread == remainder){
             nalloced *= 2;
             char* newbuff = realloc(buff, nalloced);
-            if(!newbuff){
-                free(buff);
-                return NULL;
-            }
+            if(!newbuff) goto fail;
             buff = newbuff;
         }
         used += nread;
         if(nread != remainder){
             if(feof(fp)) break;
-            else{
-                free(buff);
-                return NULL;
-            }
+            else goto fail;
         }
     }
-    buff = realloc(buff, used+1);
+    {
+        char* newbuff = realloc(buff, used+1);
+        if(!newbuff) goto fail;
+        buff = newbuff;
+    }
     buff[used] = 0;
     return buff;
+
+    fail:
+    free(buff);
+    return NULL;
 }
 
 int main(int argc, char** argv){
@@ -77,8 +79,10 @@ int main(int argc, char** argv){
         .cursor = data,
         .end = data + nbytes,
     };
-    DrJsonValue v = drjson_parse(&ctx);
-    if(drjson_kind(v) == DRJSON_ERROR){
+    // We know our string lives longer than the ctx.
+    unsigned flags = DRJSON_PARSE_FLAG_NO_COPY_STRINGS;
+    DrJsonValue v = drjson_parse(&ctx, flags);
+    if(v.kind == DRJSON_ERROR){
         size_t l, c;
         drjson_get_line_column(&ctx, &l, &c);
         drjson_print_error_fp(stderr, "input", 5, l, c, v);
@@ -101,8 +105,7 @@ int main(int argc, char** argv){
             return 0;
         }
         DrJsonValue it = drjson_query(jctx, v, query, qlen);
-        if(drjson_kind(it) != DRJSON_ERROR){
-            // printf("v%s: ", query);
+        if(it.kind != DRJSON_ERROR){
             drjson_print_value_fp(jctx, stdout, it, 0, DRJSON_PRETTY_PRINT);
             putchar('\n');
         }
@@ -111,6 +114,8 @@ int main(int argc, char** argv){
             putchar('\n');
         }
     }
+    // We're returning anyway, but this is how you de-allocate memory allocated
+    // in the ctx.
     drjson_ctx_free_all(jctx);
     return 0;
 }
@@ -119,29 +124,31 @@ int main(int argc, char** argv){
 int
 write_foo_bar_baz_to_fp(const char* json, size_t length, FILE* fp){
   int result = 0;
-  DrJsonContext* jctx = drjson_create_ctx(drjson_stdc_allocator());
-  DrJsonParseContext ctx = {
+  DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+  DrJsonParseContext parsectx = {
     .begin=json,
     .cursor=json,
     .end=json+length,
-    .ctx = jctx,
+    .ctx = ctx,
   };
-  DrJsonValue v = drjson_parse(&ctx);
-  if(drjson_kind(v) == DRJSON_ERROR){
+  unsigned flags = DRJSON_PARSE_FLAG_NO_COPY_STRINGS;
+  DrJsonValue v = drjson_parse(&parsectx, flags);
+  if(v.kind == DRJSON_ERROR){
     result = 1;
     goto done;
   }
-  DrJsonValue o = drjson_query(jctx, v, "foo.bar.baz", sizeof("foo.bar.baz")-1);
-  if(drjson_kind(o) == DRJSON_ERROR){
+  DrJsonValue o = drjson_query(ctx, v, "foo.bar.baz", sizeof("foo.bar.baz")-1);
+  if(o.kind == DRJSON_ERROR){
     result = 2;
     goto done;
   }
-  int err = drjson_print_value_fp(jctx, fp, o, 0, DRJSON_PRETTY_PRINT);
+  int indent = 0;
+  int err = drjson_print_value_fp(ctx, fp, o, indent, DRJSON_PRETTY_PRINT);
   if(err){
     result = 3;
     goto done;
   }
   done:
-  drjson_ctx_free_all(jctx);
+  drjson_ctx_free_all(ctx);
   return result;
 }

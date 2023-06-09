@@ -104,15 +104,15 @@ typedef long long ssize_t;
 
 typedef struct DrJsonObjectPair DrJsonObjectPair;
 struct DrJsonObjectPair {
-    DrJsonValue key;
+    DrJsonAtom atom;
     DrJsonValue value;
 };
 
 typedef struct DrJsonHashIndex DrJsonHashIndex;
 struct DrJsonHashIndex {
-    uint32_t hash;
     uint32_t index;
 };
+
 
 typedef struct DrJsonObject DrJsonObject;
 struct DrJsonObject {
@@ -128,11 +128,221 @@ struct DrJsonArray {
     size_t capacity;
 };
 
+static inline
+force_inline
+uint32_t
+drj_atom_get_hash(DrJsonAtom a){
+    return (uint32_t)(a.bits >> 32u);
+}
+
+static inline
+force_inline
+uint32_t
+drj_atom_get_idx(DrJsonAtom a){
+    return (uint32_t)(a.bits & 0xffffffffu);
+}
+
+static inline
+DrJsonAtom
+drj_make_atom(uint32_t idx, uint32_t hash){
+    uint64_t h = hash;
+    uint64_t result = idx;
+    result |= h << 32u;
+    return (DrJsonAtom){result};
+}
+
+typedef struct DrjAtomStr DrjAtomStr;
+struct DrjAtomStr {
+    uint32_t hash;
+    uint32_t length:31;
+    uint32_t allocated: 1;
+    const char* pointer;
+};
+
+typedef struct DrjAtomTable DrjAtomTable;
+struct DrjAtomTable {
+    // layout:
+    //      cap x [DrjAtomStr]
+    //      2*cap x [uint32_t idx]
+    void* data;
+    uint32_t capacity; // in items
+    uint32_t count; // in items
+};
+
+static inline
+void
+drj_atom_table_get_ptrs(void* p, uint32_t capacity, DrjAtomStr*_Nullable*_Nonnull atomstrs, uint32_t*_Nullable*_Nonnull idxes){
+    *atomstrs = p;
+    *idxes = (uint32_t*)(((char*)p) + capacity * sizeof(DrjAtomStr));
+}
+
+static inline
+size_t
+drj_atom_table_size_for(size_t cap){
+    // XXX: alignment
+    return cap * (sizeof(DrjAtomStr)+ sizeof(uint32_t));
+}
+
+static inline
+DrjAtomStr
+drj_get_atom_str(const DrjAtomTable* table, DrJsonAtom a){
+    DrjAtomStr* strs = table->data;
+    return strs[drj_atom_get_idx(a)];
+}
+
+
+static inline
+force_inline
+uint32_t
+drj_hash_str(const char* key, size_t keylen){
+    uint32_t h = hash_align1(key, keylen);
+    if(!h) h = 1024;
+    return h;
+}
+
+static inline
+int
+drj_grow_atom_table(DrjAtomTable* table, const DrJsonAllocator* allocator){
+    size_t old_cap = table->capacity;
+    uint32_t count = table->count;
+    size_t new_cap = old_cap * 2;
+    void* p = allocator->realloc(allocator->user_pointer, table->data, drj_atom_table_size_for(old_cap), drj_atom_table_size_for(new_cap));
+    if(!p) return 1;
+    DrjAtomStr* strs; uint32_t* idxes;
+    drj_atom_table_get_ptrs(p, new_cap, &strs, &idxes);
+    drj_memset(idxes, 0xff, new_cap * sizeof *idxes);
+    for(uint32_t i = 0; i < count; i++){
+        const DrjAtomStr* s = &strs[i];
+        uint32_t hash = s->hash;
+        uint32_t idx = fast_reduce32(hash, new_cap);
+        while(idxes[idx] != UINT32_MAX){
+            idx++;
+            if(idx >= new_cap) idx = 0;
+        }
+        idxes[idx] = i;
+    }
+    table->data = p;
+    table->capacity = new_cap;
+    return 0;
+}
+
+static inline
+int
+drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const char* str, uint32_t len, _Bool copy, DrJsonAtom* outatom){
+    if(!len) str = "";
+    uint32_t hash = drj_hash_str(str, len);
+    if(!table->count){
+        assert(!table->capacity);
+        assert(!table->data);
+        enum {capacity = 32};
+        void* p = allocator->alloc(allocator->user_pointer, drj_atom_table_size_for(capacity));
+        if(!p) return 1;
+        DrjAtomStr* strs; uint32_t* idxes;
+        drj_atom_table_get_ptrs(p, capacity, &strs, &idxes);
+        drj_memset(idxes, 0xff, capacity * sizeof*idxes);
+        table->data = p;
+        table->capacity = capacity;
+        uint32_t idx = fast_reduce32(hash, capacity);
+        _Bool copied = 0;
+        if(copy && len){
+            // XXX: use a string arena
+            char* p = allocator->alloc(allocator->user_pointer, len);
+            if(!p) {
+                allocator->free(allocator->user_pointer, p,drj_atom_table_size_for(capacity) );
+                table->data = NULL;
+                table->capacity = 0;
+                return 1;
+            }
+            drj_memcpy(p, str, len);
+            str = p;
+            copied = 1;
+        }
+        strs[table->count] = (DrjAtomStr){
+            .hash = hash,
+            .length = len,
+            .allocated = copied,
+            .pointer = str,
+        };
+        *outatom = drj_make_atom(table->count, hash);
+        idxes[idx] = table->count++;
+        return 0;
+    }
+    if(table->count * 2 >= table->capacity){
+        int err = drj_grow_atom_table(table, allocator);
+        if(err) return err;
+    }
+    uint32_t capacity = table->capacity;
+    uint32_t idx = fast_reduce32(hash, capacity);
+    DrjAtomStr* strs; uint32_t* idxes;
+    drj_atom_table_get_ptrs(table->data, capacity, &strs, &idxes);
+    for(;;idx++){
+        if(idx >= capacity) idx = 0;
+        uint32_t i = idxes[idx];
+        if(i == UINT32_MAX){ // unset
+            _Bool copied = 0;
+            if(copy && len){
+                // XXX: use a string arena
+                char* p = allocator->alloc(allocator->user_pointer, len);
+                if(!p) return 1;
+                drj_memcpy(p, str, len);
+                str = p;
+                copied = 1;
+            }
+            strs[table->count] = (DrjAtomStr){
+                .hash = hash,
+                .length = len,
+                .pointer = str,
+                .allocated = copied,
+            };
+            *outatom = drj_make_atom(table->count, hash);
+            idxes[idx] = table->count++;
+            return 0;
+        }
+        DrjAtomStr a = strs[i];
+        assert(a.pointer);
+        // if(!a.pointer)
+            // break;
+        if(a.hash != hash)
+            continue;
+        if(a.length != len)
+            continue;
+        if(memcmp(str, a.pointer, len) == 0){
+            *outatom = drj_make_atom(i, hash);
+            return 0;
+        }
+    }
+}
+
+static inline
+int
+drj_get_atom_no_alloc(const DrjAtomTable* table, const char* str, uint32_t len,  DrJsonAtom* outatom){
+    if(!table->count)
+        return 1;
+    uint32_t hash = drj_hash_str(str, len);
+    uint32_t capacity = table->capacity;
+    uint32_t idx = fast_reduce32(hash, capacity);
+    DrjAtomStr* strs; uint32_t* idxes;
+    drj_atom_table_get_ptrs(table->data, capacity, &strs, &idxes);
+    for(;;idx++){
+        if(idx >= capacity) idx = 0;
+        uint32_t i = idxes[idx];
+        if(i == UINT32_MAX) // unset
+            return 1;
+        DrjAtomStr a = strs[i];
+        if(a.hash != hash)
+            continue;
+        if(a.length != len)
+            continue;
+        if(memcmp(str, a.pointer, len) == 0){
+            *outatom = drj_make_atom(i, hash);
+            return 0;
+        }
+    }
+}
+
 struct DrJsonContext {
-    // initialize with your allocator
     DrJsonAllocator allocator;
-    // initialize below to 0
-    DrJsonStringNode* strings;
+    DrjAtomTable atoms;
     struct {
         DrJsonObject* data;
         size_t count;
@@ -145,6 +355,56 @@ struct DrJsonContext {
     } arrays;
 };
 
+static inline
+int
+drj_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Nullable*_Nonnull string, size_t* slen){
+    if(v.kind != DRJSON_STRING)
+        return 1;
+    DrjAtomStr s = drj_get_atom_str(&ctx->atoms, v.atom);
+    *string = s.pointer;
+    *slen = s.length;
+    return 0;
+}
+
+DRJSON_API
+int
+drjson_get_atom_str_and_length(const DrJsonContext* ctx, DrJsonAtom atom, const char*_Nullable*_Nonnull string, size_t* slen){
+    DrjAtomStr s = drj_get_atom_str(&ctx->atoms, atom);
+    *string = s.pointer;
+    *slen = s.length;
+    return 0;
+}
+
+DRJSON_API
+int
+drjson_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Nullable*_Nonnull string, size_t* slen){
+    return drj_get_str_and_len(ctx, v, string, slen);
+}
+
+DRJSON_API
+int
+drjson_get_atom_no_intern(const DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
+    if(len >= UINT32_MAX/2) return 1;
+    if(!outatom) return 1;
+    return drj_get_atom_no_alloc(&ctx->atoms, str, (uint32_t)len, outatom);
+}
+
+DRJSON_API
+int
+drjson_atomize(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
+    if(len >= UINT32_MAX/2) return 1;
+    if(!outatom) return 1;
+    return drj_atomize_str(&ctx->atoms, &ctx->allocator, str, (uint32_t)len, 1, outatom);
+}
+
+DRJSON_API
+int
+drjson_atomize_no_copy(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
+    if(len >= UINT32_MAX/2) return 1;
+    if(!outatom) return 1;
+    return drj_atomize_str(&ctx->atoms, &ctx->allocator, str, (uint32_t)len, 0, outatom);
+}
+
 DRJSON_API
 DrJsonContext*_Nullable
 drjson_create_ctx(DrJsonAllocator allocator){
@@ -156,21 +416,32 @@ drjson_create_ctx(DrJsonAllocator allocator){
 }
 
 static inline
+size_t
+drjson_size_for_object_of_length(size_t len){
+    return len * sizeof(DrJsonObjectPair) + 2*len*sizeof(DrJsonHashIndex);
+}
+
+static inline
 force_inline
 void
 drj_get_obj_ptrs(void* p, size_t cap, DrJsonHashIndex*_Nullable*_Nonnull hi, DrJsonObjectPair*_Nullable*_Nonnull pa){
     *pa = p;
     *hi = (DrJsonHashIndex*)(((char*)p)+cap*sizeof(DrJsonObjectPair));
-    // *hi = p;
-    // *pa = (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
 }
 
 static inline
 force_inline
 DrJsonObjectPair*
 drj_obj_get_pairs(void* p, size_t cap){
+    (void)cap;
     return p;
-    // return (DrJsonObjectPair*)(((char*)p)+cap*sizeof(DrJsonHashIndex));
+}
+
+static inline
+force_inline
+DrJsonHashIndex*
+drj_obj_get_idxes(void* p, size_t cap){
+    return (DrJsonHashIndex*)(((char*)p)+cap*sizeof(DrJsonObjectPair));
 }
 
 
@@ -179,13 +450,11 @@ drj_obj_get_pairs(void* p, size_t cap){
 static inline
 force_inline
 int
-drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, const char* key, size_t keylen, uint32_t hash, DrJsonValue item, _Bool copy);
+drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJsonValue item);
 
-// check the size_for_object_of_length
-_Static_assert(sizeof(DrJsonHashIndex) + sizeof(DrJsonObjectPair) == sizeof(void*)*5,"");
 static inline
 ssize_t
-alloc_obj(DrJsonContext* ctx, size_t initial_length){
+alloc_obj(DrJsonContext* ctx){
     if(ctx->objects.capacity <= ctx->objects.count){
         size_t new_cap = ctx->objects.capacity? ctx->objects.capacity*2:8;
         DrJsonObject* p = ctx->allocator.realloc(ctx->allocator.user_pointer, ctx->objects.data, sizeof(DrJsonObject)*ctx->objects.capacity, sizeof(DrJsonObject)*new_cap);
@@ -197,21 +466,12 @@ alloc_obj(DrJsonContext* ctx, size_t initial_length){
     ssize_t result = ctx->objects.count++;
     DrJsonObject* odata = ctx->objects.data;
     odata[result] = (DrJsonObject){0};
-    if(initial_length){
-        void* p = ctx->allocator.alloc(ctx->allocator.user_pointer, drjson_size_for_object_of_length(initial_length));
-        if(!p) {
-            ctx->objects.count--;
-            return -1;
-        }
-        odata[result].object_items = p;
-        odata[result].capacity = initial_length;
-    }
     return result;
 }
 
 static inline
 ssize_t
-alloc_array(DrJsonContext* ctx, size_t initial_length){
+alloc_array(DrJsonContext* ctx){
     if(ctx->arrays.capacity <= ctx->arrays.count){
         size_t new_cap = ctx->arrays.capacity? ctx->arrays.capacity*2:8;
         DrJsonArray* p = ctx->arrays.data? ctx->allocator.realloc(ctx->allocator.user_pointer, ctx->arrays.data, sizeof(DrJsonArray)*ctx->arrays.capacity, sizeof(DrJsonArray)*new_cap) : ctx->allocator.alloc(ctx->allocator.user_pointer, sizeof(DrJsonArray)*new_cap);
@@ -223,15 +483,6 @@ alloc_array(DrJsonContext* ctx, size_t initial_length){
     ssize_t result = ctx->arrays.count++;
     DrJsonArray* adata = ctx->arrays.data;
     adata[result] = (DrJsonArray){0};
-    if(initial_length){
-        void* p = ctx->allocator.alloc(ctx->allocator.user_pointer, sizeof(DrJsonValue)*initial_length);
-        if(!p) {
-            ctx->arrays.count--;
-            return -1;
-        }
-        adata[result].array_items = p;
-        adata[result].capacity = initial_length;
-    }
     return result;
 }
 
@@ -239,8 +490,8 @@ alloc_array(DrJsonContext* ctx, size_t initial_length){
 
 DRJSON_API
 DrJsonValue
-drjson_make_object(DrJsonContext* ctx, size_t initial_length){
-    ssize_t idx = alloc_obj(ctx, initial_length);
+drjson_make_object(DrJsonContext* ctx){
+    ssize_t idx = alloc_obj(ctx);
     if(idx < 0) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom");
     return (DrJsonValue){.kind=DRJSON_OBJECT, .object_idx=idx};
 }
@@ -277,8 +528,8 @@ drjson_make_array_view(DrJsonValue o){
 
 DRJSON_API
 DrJsonValue
-drjson_make_array(DrJsonContext* ctx, size_t initial_length){
-    ssize_t idx = alloc_array(ctx, initial_length);
+drjson_make_array(DrJsonContext* ctx){
+    ssize_t idx = alloc_array(ctx);
     if(idx < 0) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom");
     return (DrJsonValue){.kind=DRJSON_ARRAY, .array_idx=idx};
 }
@@ -387,13 +638,22 @@ skip_whitespace(DrJsonParseContext* ctx){
 force_inline
 static inline
 _Bool
-match(DrJsonParseContext* ctx, char c){
+drj_match(DrJsonParseContext* ctx, char c){
     if(ctx->cursor == ctx->end)
         return 0;
     if(*ctx->cursor != c)
         return 0;
     ctx->cursor++;
     return 1;
+}
+
+static inline
+DrJsonValue
+drj_make_atom_val(DrJsonParseContext* ctx, const char* str, size_t len){
+    DrJsonAtom atom;
+    int err = drj_atomize_str(&ctx->ctx->atoms, &ctx->ctx->allocator, str, (uint32_t)len, ctx->_copy_strings, &atom);
+    if(err) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "failed to make atom");
+    return (DrJsonValue){.kind = DRJSON_STRING, .atom=atom};
 }
 
 static inline
@@ -406,7 +666,7 @@ parse_string(DrJsonParseContext* ctx){
     const char* string_end;
     const char* cursor = ctx->cursor;
     const char* end = ctx->end;
-    if(likely(match(ctx, '"'))){
+    if(likely(drj_match(ctx, '"'))){
         cursor = ctx->cursor;
         string_start = cursor;
         for(;;){
@@ -422,9 +682,9 @@ parse_string(DrJsonParseContext* ctx){
             break;
         }
         ctx->cursor = cursor;
-        return drjson_make_string_no_copy(string_start, string_end-string_start);
+        return drj_make_atom_val(ctx, string_start, string_end-string_start);
     }
-    else if(match(ctx, '\'')){
+    else if(drj_match(ctx, '\'')){
         cursor = ctx->cursor;
         string_start = cursor;
         for(;;){
@@ -440,7 +700,7 @@ parse_string(DrJsonParseContext* ctx){
             break;
         }
         ctx->cursor = cursor;
-        return drjson_make_string_no_copy(string_start, string_end-string_start);
+        return drj_make_atom_val(ctx, string_start, string_end-string_start);
     }
     else {
         string_start = cursor;
@@ -456,27 +716,32 @@ parse_string(DrJsonParseContext* ctx){
                 case '_':
                 case '-':
                 case '.':
+                case '/':
                     continue;
             }
         }
         after2:
         ctx->cursor = cursor;
         string_end = cursor;
-        return drjson_make_string_no_copy(string_start, string_end-string_start);
+        return drj_make_atom_val(ctx, string_start, string_end-string_start);
     }
 }
 
 
+static
+DrJsonValue
+drj_parse(DrJsonParseContext* ctx);
+
 static inline
 DrJsonValue
 parse_object(DrJsonParseContext* ctx){
-    if(unlikely(!match(ctx, '{'))) {
+    if(unlikely(!drj_match(ctx, '{'))) {
         return drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "Expected a '{' to begin an object");
     }
-    DrJsonValue result = drjson_make_object(ctx->ctx, 0);
+    DrJsonValue result = drjson_make_object(ctx->ctx);
     DrJsonValue error = {0};
     skip_whitespace(ctx);
-    while(!match(ctx, '}')){
+    while(!drj_match(ctx, '}')){
         if(unlikely(ctx->cursor == ctx->end)){
             error = drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "Eof before closing '}'");
             goto cleanup;
@@ -487,12 +752,12 @@ parse_object(DrJsonParseContext* ctx){
             error = key;
             goto cleanup;
         }
-        DrJsonValue item = drjson_parse(ctx);
+        DrJsonValue item = drj_parse(ctx);
         if(unlikely(item.kind == DRJSON_ERROR)){
             error = item;
             goto cleanup;
         }
-        int err = drjson_object_set_item_no_copy_key(ctx->ctx, result, key.string, key.slen, 0, item);
+        int err = drjson_object_set_item_atom(ctx->ctx, result, key.atom, item);
         if(unlikely(err)){
             error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate space for an item while setting member of an object");
             goto cleanup;
@@ -507,16 +772,16 @@ parse_object(DrJsonParseContext* ctx){
 static inline
 DrJsonValue
 parse_array(DrJsonParseContext* ctx){
-    if(!match(ctx, '[')) return drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "Expected a '[' to begin an array");
-    DrJsonValue result = drjson_make_array(ctx->ctx, 0);
+    if(!drj_match(ctx, '[')) return drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "Expected a '[' to begin an array");
+    DrJsonValue result = drjson_make_array(ctx->ctx);
     DrJsonValue error = {0};
     skip_whitespace(ctx);
-    while(!match(ctx, ']')){
+    while(!drj_match(ctx, ']')){
         if(unlikely(ctx->cursor == ctx->end)){
             error = drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "Eof before closing ']'");
             goto cleanup;
         }
-        DrJsonValue item = drjson_parse(ctx);
+        DrJsonValue item = drj_parse(ctx);
         if(unlikely(item.kind == DRJSON_ERROR)){
             error = item;
             goto cleanup;
@@ -705,9 +970,24 @@ drj_parse_hex(DrJsonParseContext* ctx){
     return drjson_make_uint(value);
 }
 
+static
+DrJsonValue
+drjson_parse_braceless_object(DrJsonParseContext* ctx);
+
+
 DRJSON_API
 DrJsonValue
-drjson_parse(DrJsonParseContext* ctx){
+drjson_parse(DrJsonParseContext* ctx, unsigned flags){
+    if(!(flags & DRJSON_PARSE_FLAG_NO_COPY_STRINGS))
+        ctx->_copy_strings = 1;
+    if(flags & DRJSON_PARSE_FLAG_BRACELESS_OBJECT)
+        return drjson_parse_braceless_object(ctx);
+    return drj_parse(ctx);
+}
+
+static
+DrJsonValue
+drj_parse(DrJsonParseContext* ctx){
     ctx->depth++;
     if(unlikely(ctx->depth > 100))
         return drjson_make_error(DRJSON_ERROR_TOO_DEEP, "Too many levels of nesting.");
@@ -770,12 +1050,7 @@ drjson_parse(DrJsonParseContext* ctx){
 
 DRJSON_API
 DrJsonValue
-drjson_parse_string(DrJsonContext* jctx, const char* text, size_t length, uint32_t flags){
-    if(flags & DRJSON_PARSE_STRING_COPY){
-        DrJsonStringNode* node = drjson_store_string_copy(jctx, text, length);
-        if(!node) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom");
-        text = node->data;
-    }
+drjson_parse_string(DrJsonContext* jctx, const char* text, size_t length, unsigned flags){
     DrJsonParseContext ctx = {
         .ctx = jctx,
         .begin = text,
@@ -783,31 +1058,14 @@ drjson_parse_string(DrJsonContext* jctx, const char* text, size_t length, uint32
         .end = text+length,
         .depth = 0,
     };
-    return drjson_parse(&ctx);
+    return drjson_parse(&ctx, flags);
 }
 
-DRJSON_API
-DrJsonValue
-drjson_parse_braceless_string(DrJsonContext* jctx, const char* text, size_t length, uint32_t flags){
-    if(flags & DRJSON_PARSE_STRING_COPY){
-        DrJsonStringNode* node = drjson_store_string_copy(jctx, text, length);
-        if(!node) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom");
-        text = node->data;
-    }
-    DrJsonParseContext ctx = {
-        .ctx = jctx,
-        .begin = text,
-        .cursor = text,
-        .end = text+length,
-        .depth = 0,
-    };
-    return drjson_parse_braceless_object(&ctx);
-}
 
-DRJSON_API
+static
 DrJsonValue
 drjson_parse_braceless_object(DrJsonParseContext* ctx){
-    DrJsonValue result = drjson_make_object(ctx->ctx, 0);
+    DrJsonValue result = drjson_make_object(ctx->ctx);
     DrJsonValue error = {0};
     ctx->depth++;
     skip_whitespace(ctx);
@@ -817,12 +1075,12 @@ drjson_parse_braceless_object(DrJsonParseContext* ctx){
             error = key;
             goto cleanup;
         }
-        DrJsonValue item = drjson_parse(ctx);
+        DrJsonValue item = drj_parse(ctx);
         if(unlikely(item.kind == DRJSON_ERROR)){
             error = item;
             goto cleanup;
         }
-        int err = drjson_object_set_item_no_copy_key(ctx->ctx, result, key.string, key.slen, 0, item);
+        int err = drjson_object_set_item_atom(ctx->ctx, result, key.atom, item);
         if(unlikely(err)){
             error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate space for an item while setting member of an object");
             goto cleanup;
@@ -936,43 +1194,22 @@ drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx){
     return result;
 }
 
-DRJSON_API
-uint32_t
-drjson_object_key_hash(const char* key, size_t keylen){
-    uint32_t h = hash_align1(key, keylen);
-    if(!h) h = 1024;
-    return h;
-}
-
-static inline
-force_inline
-uint32_t
-object_key_hash(const char* key, size_t keylen){
-    uint32_t h = hash_align1(key, keylen);
-    if(!h) h = 1024;
-    return h;
-}
-
 
 static inline
 force_inline
 int
-drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, const char* key, size_t keylen, uint32_t hash, DrJsonValue item, _Bool copy){
+drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJsonValue item){
     if(o.kind != DRJSON_OBJECT) return 1;
-    DrJsonObject* odata = ctx->objects.data;
-    DrJsonObject* object = &odata[o.object_idx];
+    DrJsonObject* object = &ctx->objects.data[o.object_idx];
     const DrJsonAllocator* allocator = &ctx->allocator;
-    enum {KEY_MAX = 0x7fffffff};
     enum {OBJECT_MAX = 0x1fffffff};
-    if(keylen > KEY_MAX) return 1;
-    if(!hash) hash = object_key_hash(key, keylen);
-    if(unlikely(object->count *2 >= object->capacity)){
+    if(unlikely(object->count >= object->capacity)){
         if(!object->capacity){
             size_t new_cap = 4;
             size_t size = drjson_size_for_object_of_length(new_cap);
             void* p = allocator->alloc(allocator->user_pointer, size);
             if(!p) return 1;
-            drj_memset(p, 0, size);
+            drj_memset(drj_obj_get_idxes(p, new_cap), 0xff, 2*new_cap*sizeof(DrJsonHashIndex));
             object->object_items = p;
             object->capacity = new_cap;
         }
@@ -980,123 +1217,132 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, const char* key, size_
             size_t old_cap = object->capacity;
             size_t new_cap = old_cap * 2;
             if(new_cap > OBJECT_MAX) return 1;
-            size_t size = drjson_size_for_object_of_length(new_cap);
-            void* p = allocator->alloc(allocator->user_pointer, size);
-            drj_memset(p, 0, size);
-            DrJsonHashIndex* oldhi; DrJsonObjectPair* oldpairs;
-            drj_get_obj_ptrs(object->object_items, old_cap, &oldhi, &oldpairs);
-            DrJsonHashIndex* newhi; DrJsonObjectPair* newpairs;
-            drj_get_obj_ptrs(p, new_cap, &newhi, &newpairs);
-            drj_memcpy(newpairs, oldpairs, object->count*sizeof(*oldpairs));
-            for(size_t i = 0; i < old_cap; i++){
-                DrJsonHashIndex hi = oldhi[i];
-                if(!hi.hash) continue;
-                uint32_t idx = fast_reduce32(hi.hash, new_cap);
-                while(newhi[idx].hash){
+            void* p = allocator->realloc(allocator->user_pointer, object->object_items, drjson_size_for_object_of_length(old_cap), drjson_size_for_object_of_length(new_cap));
+            if(!p) return 1;
+            DrJsonHashIndex* idxes; DrJsonObjectPair* pairs;
+            drj_get_obj_ptrs(p, new_cap, &idxes, &pairs);
+            drj_memset(idxes, 0xff, 2*new_cap * sizeof *idxes);
+            for(size_t i = 0; i < object->count; i++){
+                const DrJsonObjectPair* p = &pairs[i];
+                uint32_t hash = drj_atom_get_hash(p->atom);
+                uint32_t idx = fast_reduce32(hash, 2*new_cap);
+                while(idxes[idx].index != UINT32_MAX){
                     idx++;
-                    if(idx >= new_cap) idx = 0;
+                    if(idx >= 2*new_cap) idx = 0;
                 }
-                newhi[idx] = hi;
+                idxes[idx].index = i;
             }
-            allocator->free(allocator->user_pointer, object->object_items, drjson_size_for_object_of_length(old_cap));
             object->object_items = p;
             object->capacity = new_cap;
         }
+        if(0 && object->capacity <= 32){
+            DrJsonHashIndex* idxes = drj_obj_get_idxes(object->object_items, object->capacity);
+            uint64_t seent = 0;
+            for(size_t i = 0; i < object->capacity*2; i++){
+                if(idxes[i].index == UINT32_MAX) continue;
+                uint64_t mask = 1llu << idxes[i].index;
+                if(mask & seent){
+                    __builtin_debugtrap();
+                }
+                seent |= mask;
+            }
+        }
+    }
+    if(0 && object->capacity <= 32){
+        DrJsonHashIndex* idxes = drj_obj_get_idxes(object->object_items, object->capacity);
+        uint64_t seent = 0;
+        for(size_t i = 0; i < object->capacity*2; i++){
+            if(idxes[i].index == UINT32_MAX) continue;
+            uint64_t mask = 1llu << idxes[i].index;
+            if(mask & seent){
+                __builtin_debugtrap();
+            }
+            seent |= mask;
+        }
     }
     uint32_t capacity = object->capacity;
-    uint32_t idx = fast_reduce32(hash, capacity);
-    DrJsonHashIndex* his; DrJsonObjectPair* pairs;
-    drj_get_obj_ptrs(object->object_items, object->capacity, &his, &pairs);
+    uint32_t hash = drj_atom_get_hash(atom);
+    uint32_t idx = fast_reduce32(hash, 2*capacity);
+    DrJsonHashIndex* idxes; DrJsonObjectPair* pairs;
+    drj_get_obj_ptrs(object->object_items, object->capacity, &idxes, &pairs);
     for(;;){
-        DrJsonHashIndex hi = his[idx];
-        if(!hi.hash){
-            if(copy){
-                char* newkey = allocator->alloc(allocator->user_pointer, keylen);
-                if(!newkey) return 1;
-                drj_memcpy(newkey, key, keylen);
-                key = newkey;
-            }
+        DrJsonHashIndex hi = idxes[idx];
+        if(hi.index == UINT32_MAX){
             size_t pidx = object->count++;
             DrJsonObjectPair* o = &pairs[pidx];
             *o = (DrJsonObjectPair){
-                .key = copy?drjson_make_string_copy(ctx, key, keylen):drjson_make_string_no_copy(key, keylen),
+                .atom=atom,
                 .value=item,
             };
-            his[idx].hash = hash;
-            his[idx].index = pidx;
+            idxes[idx].index = pidx;
             return 0;
         }
-        if(hi.hash == hash){
-            DrJsonObjectPair* o = &pairs[hi.index];
-            if(o->key.slen == keylen && memcmp(o->key.string, key, keylen) == 0){
-                o->value = item;
-                return 0;
-            }
+        DrJsonObjectPair* o = &pairs[hi.index];
+        if(o->atom.bits == atom.bits){
+            o->value = item;
+            return 0;
         }
         idx++;
-        if(idx >= capacity)
+        if(idx >= 2*capacity)
             idx = 0;
     }
 }
+
 DRJSON_API
 int // 0 on success
-drjson_object_set_item_no_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item){
-    return drjson_object_set_item(ctx, object, key, keylen, hash, item, 0);
+drjson_object_set_item_no_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, DrJsonValue item){
+    DrJsonAtom atom;
+    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, key, keylen, 1, &atom);
+    if(err) return err;
+    return drjson_object_set_item(ctx, object, atom, item);
 }
+
 DRJSON_API
 int // 0 on success
-drjson_object_set_item_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, uint32_t hash, DrJsonValue item){
-    return drjson_object_set_item(ctx, object, key, keylen, hash, item, 1);
+drjson_object_set_item_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, DrJsonValue item){
+    DrJsonAtom atom;
+    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, key, keylen, 1, &atom);
+    if(err) return err;
+    return drjson_object_set_item(ctx, object, atom, item);
 }
+
+DRJSON_API
+int // 0 on success
+drjson_object_set_item_atom(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom atom, DrJsonValue item){
+    return drjson_object_set_item(ctx, object, atom, item);
+}
+
 DRJSON_API
 DrJsonValue
-drjson_object_get_item(const DrJsonContext* ctx, DrJsonValue o, const char* key, size_t keylen, uint32_t hash){
-    if(!hash) hash = object_key_hash(key, keylen);
+drjson_object_get_item_atom(const DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom){
     if(o.kind != DRJSON_OBJECT) return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "not an object");
-    const DrJsonObject* odata = ctx->objects.data;
-    const DrJsonObject* object = &odata[o.object_idx];
+    uint32_t hash = drj_atom_get_hash(atom);
+    const DrJsonObject* object = &ctx->objects.data[o.object_idx];
     if(!object->capacity)
-        return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "not an object");
+        return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "key is not valid for object");
     uint32_t capacity = object->capacity;
-    uint32_t idx = fast_reduce32(hash, capacity);
+    uint32_t idx = fast_reduce32(hash, 2*capacity);
     DrJsonHashIndex* his; DrJsonObjectPair* pairs;
     drj_get_obj_ptrs(object->object_items, object->capacity, &his, &pairs);
     for(;;){
         DrJsonHashIndex hi = his[idx];
-        if(!hi.hash) return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "key is not valid for object");
-        if(hi.hash == hash){
-            const DrJsonObjectPair* o = &pairs[hi.index];
-            if(o->key.slen == keylen && memcmp(o->key.string, key, keylen) == 0){
-                return o->value;
-            }
-        }
+        if(hi.index == UINT32_MAX) return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "key is not valid for object");
+        const DrJsonObjectPair* o = &pairs[hi.index];
+        if(o->atom.bits == atom.bits)
+            return o->value;
         idx++;
-        if(idx >= object->capacity)
+        if(idx >= 2*capacity)
             idx = 0;
     }
 }
-DRJSON_API
-DrJsonValue
-drjson_object_keys(DrJsonValue o){
-    if(o.kind != DRJSON_OBJECT)
-        return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "call to keys for non-object");
-    return drjson_make_obj_keys(o);
-}
 
 DRJSON_API
 DrJsonValue
-drjson_object_values(DrJsonValue o){
-    if(o.kind != DRJSON_OBJECT)
-        return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "call to values for non-object");
-    return drjson_make_obj_values(o);
-}
-
-DRJSON_API
-DrJsonValue
-drjson_object_items(DrJsonValue o){
-    if(o.kind != DRJSON_OBJECT)
-        return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "call to items for non-object");
-    return drjson_make_obj_items(o);
+drjson_object_get_item(const DrJsonContext* ctx, DrJsonValue o, const char* key, size_t keylen){
+    DrJsonAtom atom;
+    int err = drj_get_atom_no_alloc(&ctx->atoms, key, keylen, &atom);
+    if(err) return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "key is not valid for object");
+    return drjson_object_get_item_atom(ctx, o, atom);
 }
 
 DRJSON_API
@@ -1122,13 +1368,9 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
     };
     size_t begin = 0;
     size_t i = 0;
-    DrJsonValue result = drjson_make_error(DRJSON_ERROR_INVALID_ERROR, "whoops");
     DrJsonValue o = v;
     // This macro is vestigial, could just be replaced by returning the error.
-    #define RETERROR(code, mess) do { \
-        result = drjson_make_error(code, mess); \
-        return result; \
-    }while(0)
+    #define RETERROR(code, mess) return drjson_make_error(code, mess)
     if(i == length) RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Query is 0 length");
     Ldispatch:
     for(;i != length; i++){
@@ -1168,6 +1410,7 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
                     case CASE_0_9:
                     case CASE_a_z:
                     case CASE_A_Z:
+                    case '/':
                     case '_':
                         goto Lgetitem;
                     default:
@@ -1193,6 +1436,7 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
                 case CASE_a_z:
                 case CASE_A_Z:
                 case CASE_0_9:
+                case '/':
                 case '_':
                 case '-':
                     continue;
@@ -1203,7 +1447,7 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
         // fall-through
     Ldo_getitem:
         if(i == begin) RETERROR(DRJSON_ERROR_INVALID_CHAR, "0 length query after '.'");
-        o = drjson_object_get_item(ctx, o, query+begin, i-begin, 0);
+        o = drjson_object_get_item(ctx, o, query+begin, i-begin);
         if(o.kind == DRJSON_ERROR) RETERROR(DRJSON_ERROR_MISSING_KEY, "Key not found");
         goto Ldispatch;
     Lsubscript:
@@ -1244,7 +1488,7 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
                     nbackslash++;
                 }
                 if(nbackslash & 1) continue;
-                o = drjson_object_get_item(ctx, o, query+begin, i-begin, 0);
+                o = drjson_object_get_item(ctx, o, query+begin, i-begin);
                 if(o.kind == DRJSON_ERROR) RETERROR(DRJSON_ERROR_MISSING_KEY, "Key not found");
                 i++;
                 goto Ldispatch;
@@ -1295,8 +1539,10 @@ drjson_len(const DrJsonContext* ctx, DrJsonValue v){
             const DrJsonObject* object = &odata[v.object_idx];
             return 2*object->count;
         }
-        case DRJSON_STRING:
-            return v.slen;
+        case DRJSON_STRING:{
+            DrjAtomStr s = drj_get_atom_str(&ctx->atoms, v.atom);
+            return s.length;
+        }
         default:
             return -1;
     }
@@ -1322,8 +1568,8 @@ drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx){
             if(object->count <= index)
                 return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "out of bounds indexing");
             size_t capacity = object->capacity;
-            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
-            return pairs[index].key;
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, capacity);
+            return drjson_atom_to_value(pairs[index].atom);
         }
         case DRJSON_OBJECT_VALUES:{
             const DrJsonObject* odata = ctx->objects.data;
@@ -1331,7 +1577,7 @@ drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx){
             if(object->count <= index)
                 return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "out of bounds indexing");
             size_t capacity = object->capacity;
-            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, capacity);
             return pairs[index].value;
         }
         case DRJSON_OBJECT_ITEMS:{
@@ -1341,14 +1587,12 @@ drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx){
             if(object->count <= pidx)
                 return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "out of bounds indexing");
             size_t capacity = object->capacity;
-            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, capacity);
             if(index & 1)
                 return pairs[pidx].value;
             else
-                return pairs[pidx].key;
+                return drjson_atom_to_value(pairs[pidx].atom);
         }
-        case DRJSON_STRING:
-            return drjson_make_string_no_copy(v.string+index, 1);
         default:
             return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "object does not support indexing by integer");
     }
@@ -1600,6 +1844,13 @@ drjson_print_error(const DrJsonTextWriter* restrict writer, const char* filename
         drjson_buff_flush(&buffer);
     return buffer.errored;
 }
+static inline
+const char*
+drjson_get_error_name(DrJsonValue);
+
+static inline
+size_t
+drjson_get_error_name_length(DrJsonValue);
 
 static inline
 void
@@ -1619,11 +1870,14 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
             drjson_buff_ensure_n(buffer, 20);
             buffer->cursor += drjson_uint64_to_ascii(buffer->buff+buffer->cursor, v.uinteger);
             break;
-        case DRJSON_STRING:
+        case DRJSON_STRING:{
             drjson_buff_putc(buffer, '"');
-            drjson_buff_write(buffer, v.string, v.slen);
+            const char* string = ""; size_t slen = 0;
+            int err = drj_get_str_and_len(ctx, v, &string, &slen);
+            (void)err;
+            drjson_buff_write(buffer, string, slen);
             drjson_buff_putc(buffer, '"');
-            break;
+        }break;
         case DRJSON_ARRAY_VIEW:
         case DRJSON_ARRAY:{
             drjson_buff_putc(buffer, '[');
@@ -1647,9 +1901,9 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
                 if(newlined)
                     drjson_buff_putc(buffer, ',');
                 newlined = 1;
-                assert(o->key.kind == DRJSON_STRING);
+                DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
                 drjson_buff_putc(buffer, '"');
-                drjson_buff_write(buffer, o->key.string, o->key.slen);
+                drjson_buff_write(buffer, s.pointer, s.length);
                 drjson_buff_putc(buffer, '"');
                 drjson_buff_putc(buffer, ':');
                 drjson_print_value_inner(ctx, buffer, o->value);
@@ -1667,9 +1921,9 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
                 if(newlined)
                     drjson_buff_putc(buffer, ',');
                 newlined = 1;
-                assert(o->key.kind == DRJSON_STRING);
+                DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
                 drjson_buff_putc(buffer, '"');
-                drjson_buff_write(buffer, o->key.string, o->key.slen);
+                drjson_buff_write(buffer, s.pointer, s.length);
                 drjson_buff_putc(buffer, '"');
             }
             drjson_buff_putc(buffer, ']');
@@ -1700,9 +1954,9 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
                 if(newlined)
                     drjson_buff_putc(buffer, ',');
                 newlined = 1;
-                assert(o->key.kind == DRJSON_STRING);
+                DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
                 drjson_buff_putc(buffer, '"');
-                drjson_buff_write(buffer, o->key.string, o->key.slen);
+                drjson_buff_write(buffer, s.pointer, s.length);
                 drjson_buff_putc(buffer, '"');
                 drjson_buff_putc(buffer, ',');
                 drjson_print_value_inner(ctx, buffer, o->value);
@@ -1748,11 +2002,14 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
             drjson_buff_ensure_n(buffer, 20);
             buffer->cursor += drjson_uint64_to_ascii(buffer->buff+buffer->cursor, v.uinteger);
             break;
-        case DRJSON_STRING:
+        case DRJSON_STRING:{
             drjson_buff_putc(buffer, '"');
-            drjson_buff_write(buffer, v.string, v.slen);
+            const char* string = ""; size_t slen = 0;
+            int err = drj_get_str_and_len(ctx, v, &string, &slen);
+            (void)err;
+            drjson_buff_write(buffer, string, slen);
             drjson_buff_putc(buffer, '"');
-            break;
+        }break;
         case DRJSON_ARRAY_VIEW:
         case DRJSON_ARRAY:{
             drjson_buff_putc(buffer, '[');
@@ -1794,9 +2051,9 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
                 for(int ind = 0; ind < indent+2; ind++)
                     drjson_buff_putc(buffer, ' ');
 
-                assert(o->key.kind == DRJSON_STRING);
+                DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
                 drjson_buff_putc(buffer, '"');
-                drjson_buff_write(buffer, o->key.string, o->key.slen);
+                drjson_buff_write(buffer, s.pointer, s.length);
                 drjson_buff_putc(buffer, '"');
                 drjson_buff_putc(buffer, ':');
                 drjson_buff_putc(buffer, ' ');
@@ -1824,9 +2081,9 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
                 for(int ind = 0; ind < indent+2; ind++)
                     drjson_buff_putc(buffer, ' ');
 
-                assert(o->key.kind == DRJSON_STRING);
+                DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
                 drjson_buff_putc(buffer, '"');
-                drjson_buff_write(buffer, o->key.string, o->key.slen);
+                drjson_buff_write(buffer, s.pointer, s.length);
                 drjson_buff_putc(buffer, '"');
             }
             if(newlined) {
@@ -1874,9 +2131,9 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
                 for(int ind = 0; ind < indent+2; ind++)
                     drjson_buff_putc(buffer, ' ');
 
-                assert(o->key.kind == DRJSON_STRING);
+                DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
                 drjson_buff_putc(buffer, '"');
-                drjson_buff_write(buffer, o->key.string, o->key.slen);
+                drjson_buff_write(buffer, s.pointer, s.length);
                 drjson_buff_putc(buffer, '"');
                 drjson_buff_putc(buffer, ',');
                 drjson_buff_putc(buffer, ' ');
@@ -1910,10 +2167,48 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
     }
 }
 
-DRJSON_API
+// return 1 - error
+// return 2 - no need to escape
+static
 int
-drjson_escape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char *_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength){
+drjson_escape_string2(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char *_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength){
     if(!length) return 1;
+    const char* const hex = "0123456789abcdef";
+    size_t i = 0;
+    for(; i < length; i++){
+        switch(unescaped[i]){
+            // 0x0 through 0x1f (0 through 31) have to all be
+            // escaped with the 6 character sequence of \u00xx
+            // Why on god's green earth did they force utf16 escapes?
+
+            // gnu case ranges are nicer, but nonstandard
+            // just spell them all out.
+            case  0: case  1: case  2: case  3: case  4:
+            // 8 is '\b', 9 is '\t'
+            case  5: case  6: case  7:
+            // 10 is '\n', 12 is '\f', 13 is '\r'
+                     case 11:                   case 14:
+            case 15: case 16: case 17: case 18: case 19:
+            case 20: case 21: case 22: case 23: case 24:
+            case 25: case 26: case 27: case 28: case 29:
+            case 30: case 31:
+            case '"':
+            case '\\':
+            case '\b':
+            case '\f':
+            case '\n':
+            case '\r':
+            case '\t':
+                goto needs_alloc;
+            // Other characters are allowed through as is
+            // (presumably utf-8).
+            default:
+                continue;
+        }
+    }
+    return 2; // no escape
+    needs_alloc:;
+
     // reserve 2 characters of output for every 2 characters of input.
     // This is enough space for all common json strings (the bytes that must
     // be escaped are rare).
@@ -1921,9 +2216,9 @@ drjson_escape_string(const DrJsonAllocator* restrict allocator, const char* rest
     size_t allocated_size = length * 2;
     char* s = allocator->alloc(allocator->user_pointer, allocated_size);
     if(!s) return 1;
-    const char* const hex = "0123456789abcdef";
-    size_t cursor = 0;
-    for(size_t i = 0; i < length; i++){
+    if(i) drj_memcpy(s, unescaped, i);
+    size_t cursor = i;
+    for(; i < length; i++){
         switch(unescaped[i]){
             // 0x0 through 0x1f (0 through 31) have to all be
             // escaped with the 6 character sequence of \u00xx
@@ -2004,6 +2299,34 @@ drjson_escape_string(const DrJsonAllocator* restrict allocator, const char* rest
     return 0;
 }
 
+DRJSON_API
+int
+drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t length, DrJsonAtom* outatom){
+    if(!outatom) return 1;
+    if(length >= UINT32_MAX/2)
+        return 1;
+    if(!length){
+        int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, "", 0, 0, outatom);
+        return err;
+    }
+    char* tmp;
+    size_t tmp_length;
+    int err = drjson_escape_string2(&ctx->allocator, unescaped, length, &tmp, &tmp_length);
+    if(err == 1) return err;
+    // String doesn't need to be escaped, make a copy in the atom table.
+    if(err == 2) return drj_atomize_str(&ctx->atoms, &ctx->allocator, unescaped, length, 1, outatom);
+    if(tmp_length >= UINT32_MAX/2)
+        err = 1;
+    else {
+        // Always copy as we'd otherwise have to add a function that tells if it was interned or not.
+        // so we know whether to free.
+        // We could do that.
+        err = drj_atomize_str(&ctx->atoms, &ctx->allocator, tmp, tmp_length, 1, outatom);
+    }
+    ctx->allocator.free(ctx->allocator.user_pointer, tmp, tmp_length);
+    return err;
+}
+
 #if 0
 DRJSON_API
 int
@@ -2053,12 +2376,6 @@ drjson_error_code(DrJsonValue v){
 }
 
 DRJSON_API
-size_t
-drjson_slen(DrJsonValue v){
-    return v.slen;
-}
-
-DRJSON_API
 const char*
 drjson_error_mess(DrJsonValue v){
     return v.err_mess;
@@ -2073,12 +2390,17 @@ drjson_ctx_free_all(DrJsonContext* ctx){
     }
     if(!ctx->allocator.free)
         return;
-    // Release strings
-    for(DrJsonStringNode* node = ctx->strings; node;){
-        DrJsonStringNode* next = node->next;
-        ctx->allocator.free(ctx->allocator.user_pointer, node, node->data_length+sizeof *node);
-        node = next;
+    for(size_t i = 0; i < ctx->atoms.count; i++){
+        DrjAtomStr* astrs = ctx->atoms.data;
+        DrjAtomStr* a = &astrs[i];
+        if(!a->allocated) continue;
+        ctx->allocator.free(ctx->allocator.user_pointer, a->pointer, a->length);
     }
+    ctx->allocator.free(ctx->allocator.user_pointer, ctx->atoms.data, drj_atom_table_size_for(ctx->atoms.capacity));
+    // XXX
+    //  We don't free the atom table or the atoms!
+    // Release strings
+
     // Free each object
     for(size_t i = 0; i < ctx->objects.count; i++){
         DrJsonObject* odata = ctx->objects.data;
@@ -2099,40 +2421,111 @@ drjson_ctx_free_all(DrJsonContext* ctx){
     // Free arrays array
     if(ctx->arrays.data)
         ctx->allocator.free(ctx->allocator.user_pointer, ctx->arrays.data, ctx->arrays.capacity*sizeof(DrJsonArray));
-    ctx->allocator.free(ctx->allocator.user_pointer, ctx, sizeof *ctx);
+
+    #ifndef DRJ_DONT_FREE_CTX
+        ctx->allocator.free(ctx->allocator.user_pointer, ctx, sizeof *ctx);
+    #endif
 }
 
-DRJSON_API
-DrJsonStringNode*_Nullable
-drjson_store_string_copy(DrJsonContext* ctx, const char* s, size_t length){
-    if(!s || !length) return NULL;
-    DrJsonStringNode* node = ctx->allocator.alloc(ctx->allocator.user_pointer, length + sizeof *node);
-    if(!node) return NULL;
-    drj_memcpy(node->data, s, length);
-    node->data_length = length;
-    node->next = ctx->strings;
-    ctx->strings = node;
-    return node;
-}
-
-// NOTE:
-// The string needs to be one that does not need to be escaped.
-DRJSON_API
-DrJsonValue
-drjson_make_string_no_copy(const char* s, size_t length){
-    return (DrJsonValue){._skind=DRJSON_STRING, .slen=length, .string=s};
-}
 
 DRJSON_API
 DrJsonValue
 drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length){
-    if(!length){
-        return drjson_make_string_no_copy("", 0);
-    }
-    DrJsonStringNode* node = drjson_store_string_copy(ctx, s, length);
-    if(!node) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate storage for string");
-    return drjson_make_string_no_copy(node->data, length);
+    DrJsonAtom atom;
+    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, s, length, 1, &atom);
+    if(err)
+        return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom");
+    return drjson_atom_to_value(atom);
 }
+
+static const char*_Nonnull const DrJsonKindNames[] = {
+    [DRJSON_ERROR]         = "error",
+    [DRJSON_NUMBER]        = "number",
+    [DRJSON_INTEGER]       = "integer",
+    [DRJSON_UINTEGER]      = "uinteger",
+    [DRJSON_STRING]        = "string",
+    [DRJSON_ARRAY]         = "array",
+    [DRJSON_OBJECT]        = "object",
+    [DRJSON_NULL]          = "null",
+    [DRJSON_BOOL]          = "bool",
+    [DRJSON_ARRAY_VIEW]    = "array view",
+    [DRJSON_OBJECT_KEYS]   = "object keys",
+    [DRJSON_OBJECT_VALUES] = "object values",
+    [DRJSON_OBJECT_ITEMS]  = "object items",
+};
+
+static const size_t DrJsonKindNameLengths[] = {
+    [DRJSON_ERROR]         = sizeof("error")-1,
+    [DRJSON_NUMBER]        = sizeof("number")-1,
+    [DRJSON_INTEGER]       = sizeof("integer")-1,
+    [DRJSON_UINTEGER]      = sizeof("uinteger")-1,
+    [DRJSON_STRING]        = sizeof("string")-1,
+    [DRJSON_ARRAY]         = sizeof("array")-1,
+    [DRJSON_OBJECT]        = sizeof("object")-1,
+    [DRJSON_NULL]          = sizeof("null")-1,
+    [DRJSON_BOOL]          = sizeof("bool")-1,
+    [DRJSON_ARRAY_VIEW]    = sizeof("array view")-1,
+    [DRJSON_OBJECT_KEYS]   = sizeof("object keys")-1,
+    [DRJSON_OBJECT_VALUES] = sizeof("object values")-1,
+    [DRJSON_OBJECT_ITEMS]  = sizeof("object items")-1,
+};
+
+static const char*_Nonnull const DrJsonErrorNames[] = {
+    [DRJSON_ERROR_NONE]           = "No error",
+    [DRJSON_ERROR_UNEXPECTED_EOF] = "Unexpected End of Input",
+    [DRJSON_ERROR_ALLOC_FAILURE]  = "Allocation Failure",
+    [DRJSON_ERROR_MISSING_KEY]    = "Missing Key",
+    [DRJSON_ERROR_INDEX_ERROR]    = "Index Error",
+    [DRJSON_ERROR_INVALID_CHAR]   = "Invalid Char",
+    [DRJSON_ERROR_INVALID_VALUE]  = "Invalid Value",
+    [DRJSON_ERROR_TOO_DEEP]       = "Too Many Levels of Nesting",
+    [DRJSON_ERROR_TYPE_ERROR]     = "Invalid type for operation",
+    [DRJSON_ERROR_INVALID_ERROR]  = "Error is Invalid",
+};
+
+static const size_t DrJsonErrorNameLengths[] = {
+    [DRJSON_ERROR_NONE]           = sizeof("No error")-1,
+    [DRJSON_ERROR_UNEXPECTED_EOF] = sizeof("Unexpected End of Input")-1,
+    [DRJSON_ERROR_ALLOC_FAILURE]  = sizeof("Allocation Failure")-1,
+    [DRJSON_ERROR_MISSING_KEY]    = sizeof("Missing Key")-1,
+    [DRJSON_ERROR_INDEX_ERROR]    = sizeof("Index Error")-1,
+    [DRJSON_ERROR_INVALID_CHAR]   = sizeof("Invalid Char")-1,
+    [DRJSON_ERROR_INVALID_VALUE]  = sizeof("Invalid Value")-1,
+    [DRJSON_ERROR_TOO_DEEP]       = sizeof("Too Many Levels of Nesting")-1,
+    [DRJSON_ERROR_TYPE_ERROR]     = sizeof("Invalid type for operation")-1,
+    [DRJSON_ERROR_INVALID_ERROR]  = sizeof("Error is Invalid")-1,
+};
+
+static inline
+const char*
+drjson_get_error_name(DrJsonValue v){
+    return DrJsonErrorNames[v.error_code];
+}
+
+static inline
+size_t
+drjson_get_error_name_length(DrJsonValue v){
+    return DrJsonErrorNameLengths[v.error_code];
+}
+
+DRJSON_API
+const char*
+drjson_error_name(DrJsonErrorCode code, size_t*_Nullable length){
+    if(code < 0  || code > DRJSON_ERROR_INVALID_ERROR)
+        code = DRJSON_ERROR_INVALID_ERROR;
+    if(length) *length = DrJsonErrorNameLengths[code];
+    return DrJsonErrorNames[code];
+}
+
+DRJSON_API
+const char*
+drjson_kind_name(DrJsonKind kind, size_t*_Nullable length){
+    if(kind < 0 || kind > DRJSON_OBJECT_ITEMS)
+        kind = DRJSON_ERROR;
+    if(length) *length = DrJsonKindNameLengths[kind];
+    return DrJsonKindNames[kind];
+}
+
 
 
 #ifdef __clang__

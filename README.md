@@ -104,29 +104,34 @@ $ drjson Examples/settings.drjson --braceless --pretty
 static
 int
 write_foo_bar_baz_to_fp(const char* json, size_t length, FILE* fp){
-  DrJsonContext ctx = {.allocator=drjson_stdc_allocator()};
-  DrJsonValue v = drjson_parse_string(&ctx, json, length, 0);
   int result = 0;
+  DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+  DrJsonParseContext parsectx = {
+    .begin=json,
+    .cursor=json,
+    .end=json+length,
+    .ctx = ctx,
+  };
+  // ctx doesn't outlive our json string
+  unsigned flags = DRJSON_PARSE_FLAG_NO_COPY_STRINGS;
+  DrJsonValue v = drjson_parse(&parsectx, flags);
   if(v.kind == DRJSON_ERROR){
     result = 1;
     goto done;
   }
-  const char* query = ".foo.bar.baz";
-  size_t qlen = strlen(query);
-  DrJsonValue o = drjson_query(&ctx, v, query, qlen);
+  DrJsonValue o = drjson_query(ctx, v, "foo.bar.baz", sizeof("foo.bar.baz")-1);
   if(o.kind == DRJSON_ERROR){
     result = 2;
     goto done;
   }
-  const int indent = 0;
-  const unsigned flags = DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE;
-  int err = drjson_print_value_fp(&ctx, fp, o, indent, flags);
+  int indent = 0;
+  int err = drjson_print_value_fp(ctx, fp, o, indent, DRJSON_PRETTY_PRINT);
   if(err){
     result = 3;
     goto done;
   }
   done:
-  drjson_ctx_free_all(&ctx);
+  drjson_ctx_free_all(ctx);
   return result;
 }
 

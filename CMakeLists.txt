@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14) # This is a guess
-project(DrJson VERSION 2.0.1)
+project(DrJson VERSION 3.0.0)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED True)

@@ -238,9 +238,9 @@ main(int argc, const char* const* argv){
         .end = jsonstr.text+jsonstr.length,
         .depth = 0,
     };
-    DrJsonValue document = braceless?
-        drjson_parse_braceless_object(&ctx):
-        drjson_parse(&ctx);
+    unsigned flags = braceless?DRJSON_PARSE_FLAG_BRACELESS_OBJECT:DRJSON_PARSE_FLAG_NONE;
+    flags |= DRJSON_PARSE_FLAG_NO_COPY_STRINGS;
+    DrJsonValue document = drjson_parse(&ctx, flags);
     if(document.kind == DRJSON_ERROR){
         size_t l, c;
         drjson_get_line_column(&ctx, &l, &c);
@@ -269,7 +269,7 @@ main(int argc, const char* const* argv){
             .tab_completion_user_data = &dj,
         };
         for(;;){
-            int n = snprintf(prompt, sizeof prompt, "%s %zu) ", DrJsonKindNames[this.kind], top);
+            int n = snprintf(prompt, sizeof prompt, "%s %zu) ", drjson_kind_name(this.kind, NULL), top);
             gi.prompt = (StringView){n, prompt};
             ssize_t len = gi_get_input(&gi);
             if(len < 0) break;
@@ -337,6 +337,12 @@ main(int argc, const char* const* argv){
             if(sv.length > 3 && SV_equals((StringView){3, cmd}, SV("cd "))){
                 sv = (StringView){len-3, cmd+3};
                 push = 1;
+            }
+            if(sv.length > 6 && SV_equals((StringView){6, cmd}, SV("print "))){
+                sv = (StringView){len-6, cmd+6};
+            }
+            if(sv.length > 2 && SV_equals((StringView){2, cmd}, SV("p "))){
+                sv = (StringView){len-2, cmd+2};
             }
             DrJsonValue v = drjson_query(jctx, this, sv.text, sv.length);
             if(v.kind == DRJSON_ERROR){
@@ -420,7 +426,9 @@ drj_completer(GetInputCtx* ctx, size_t original_curr_pos, size_t original_used_l
             DrJsonValue k = drjson_get_by_index(dj->ctx, keys, i);
             if(k.kind == DRJSON_ERROR) return 0;
             if(k.kind != DRJSON_STRING) return 0;
-            StringView sv = { k.slen, k.string };
+            StringView sv = SV("");;
+            int err = drjson_get_str_and_len(dj->ctx, k, &sv.text, &sv.length);
+            (void)err;
             if(!SV_startswith(sv, buffview)) continue;
             key_svs[n_strs++] = sv;
         }

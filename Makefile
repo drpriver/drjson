@@ -4,12 +4,13 @@ Fuzz: ; mkdir $@
 DEBUG=-g
 OPT=-O3
 
-DRJSONVERSION=2.0.0
+DRJSONVERSION=3.0.0
 
 DEPFILES:= $(wildcard Deps/*.dep)
 include $(DEPFILES)
 
 
+.PHONY: clean
 ifeq ($(OS),Windows_NT)
 CC=clang
 DYLIB=dll
@@ -18,11 +19,11 @@ EXE=.exe
 Bin/libdrjson.$(DRJSONVERSION).dll: DrJson/drjson.c | Bin Deps
 	clang $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dll.dep -shared
 clean:
-	del /q Bin\*
+	del /q Bin\* TestResults\*
 else
 UNAME := $(shell uname)
 clean:
-	rm -rf Bin/*
+	rm -rf Bin/* TestResults/*
 
 Bin/libdrjson.a: Bin/drjson.o | Bin
 	ar crs $@ $^
@@ -51,13 +52,18 @@ Bin/demo$(EXE): Demo/demo.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
 Bin/test$(EXE): DrJson/test_drjson.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test.dep Bin/libdrjson.$(DRJSONVERSION).$(DYLINK) -fvisibility=hidden -I. -g
 
+Bin/test_static$(EXE): DrJson/test_drjson.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
+	$(CC) $< DrJson/drjson.c -o $@ -MT $@ -MD -MP -MF Deps/test_static.dep -fvisibility=hidden -I. -g -DDRJSON_STATIC_LIB=1
+
+Bin/test_unity$(EXE): DrJson/test_drjson.c Bin/libdrjson.$(DRJSONVERSION).$(DYLIB) | Bin Deps
+	$(CC) $< -include DrJson/drjson.c -o $@ -MT $@ -MD -MP -MF Deps/test_unity.dep -fvisibility=hidden -I. -g -DDRJSON_API=static
+
 
 README.html: README.md README.css
 	pandoc README.md README.css -f markdown -o $@ -s --toc
 
 Bin/drjson$(EXE): DrJson/drjson_cli.c | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_cli.dep $(OPT) $(DEBUG) -fvisibility=hidden -I.
-.PHONY: clean
 
 
 Bin/drjson_fuzz$(EXE): DrJson/drjson_fuzz.c | Bin Deps
@@ -73,6 +79,17 @@ all: Bin/drjson$(EXE)
 all: Bin/drjson.o
 all: Bin/demo$(EXE)
 all: Bin/test$(EXE)
+all: Bin/test_static$(EXE)
+all: Bin/test_unity$(EXE)
+
+TestResults/%: Bin/%$(EXE) | TestResults
+	$< --tee $@
+TestResults: ; mkdir -p $@
+.PHONY: tests
+tests: TestResults/test
+tests: TestResults/test_static
+tests: TestResults/test_unity
+
 
 .DEFAULT_GOAL:=all
 

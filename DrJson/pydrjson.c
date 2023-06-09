@@ -4,6 +4,7 @@
 #define DRJSON_NO_STDIO
 #define DRJSON_NO_IO
 #include "drjson.h"
+#define DRJ_DONT_FREE_CTX 1
 #include "drjson.c"
 #include "long_string.h"
 
@@ -139,7 +140,7 @@ PyInit_drjson(void){
     return mod;
 }
 
-static 
+static
 PyModuleDef drjson = {
     .m_base = PyModuleDef_HEAD_INIT,
     .m_name="drjson",
@@ -153,12 +154,12 @@ PyModuleDef drjson = {
     .m_free=NULL,
 };
 
-static 
+static
 PyMethodDef drjson_methods[] = {
     {NULL, NULL, 0, NULL}
 };
 
-static 
+static
 PyTypeObject DrjPyCtxType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "drjson.Ctx",
@@ -232,6 +233,7 @@ static
 PyObject* _Nullable
 DrjPyCtx_mem(PyObject* s){
     DrjPyCtx* self = (DrjPyCtx*)s;
+    Py_ssize_t atom_size = drj_atom_table_size_for(self->ctx.atoms.capacity);
     Py_ssize_t object_array = sizeof(DrJsonObject)*self->ctx.objects.capacity;
     DrJsonObject* odata = self->ctx.objects.data;
     Py_ssize_t objects = 0;
@@ -250,8 +252,8 @@ DrjPyCtx_mem(PyObject* s){
         arrays += array->capacity * sizeof *array->array_items;
         arr_slop += (array->capacity * sizeof *array->array_items) - (array->count * sizeof *array->array_items);
     }
-    Py_ssize_t usage = object_array + objects + array_array + arrays;
-    return Py_BuildValue("nnnnnnn", usage, object_array, objects, obj_slop, array_array, arrays, arr_slop);
+    Py_ssize_t usage = atom_size + object_array + objects + array_array + arrays;
+    return Py_BuildValue("nnnnnnnn", usage, object_array, objects, obj_slop, array_array, arrays, arr_slop, atom_size);
     return PyLong_FromSsize_t(usage);
 }
 
@@ -265,7 +267,8 @@ DrjPyCtx_parse(PyObject* s, PyObject* args, PyObject* kwargs){
     if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O!|p:parse", (char**)keywords, &PyUnicode_Type, &txt, &braceless))
         return NULL;
     StringView sv = pystring_borrow_stringview(txt);
-    DrJsonValue v = (braceless?drjson_parse_braceless_string:drjson_parse_string)(&self->ctx, sv.text, sv.length, 0);
+    unsigned flags = braceless?DRJSON_PARSE_FLAG_BRACELESS_OBJECT: DRJSON_PARSE_FLAG_NONE;
+    DrJsonValue v = drjson_parse_string(&self->ctx, sv.text, sv.length, flags);
     if(v.kind == DRJSON_ERROR){
         if(PyErr_Occurred())
             return NULL;
@@ -356,7 +359,7 @@ python_to_drj(DrJsonContext* ctx, PyObject* arg, int depth){
         return val;
     }
     if(PyDict_Check(arg)){
-        DrJsonValue val = drjson_make_object(ctx, PyDict_Size(arg));
+        DrJsonValue val = drjson_make_object(ctx);
         PyObject* key = NULL;
         PyObject* value = NULL;
         for(Py_ssize_t pos = 0;PyDict_Next(arg, &pos, &key, &value);){
@@ -366,7 +369,7 @@ python_to_drj(DrJsonContext* ctx, PyObject* arg, int depth){
             StringView k = pystring_borrow_stringview(key);
             DrJsonValue v = python_to_drj(ctx, value, depth);
             if(v.kind == DRJSON_ERROR) return v;
-            if(drjson_object_set_item_copy_key(ctx, val, k.text, k.length, 0, v))
+            if(drjson_object_set_item_copy_key(ctx, val, k.text, k.length, v))
                 return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to set object item");
         }
         return val;
@@ -377,7 +380,7 @@ python_to_drj(DrJsonContext* ctx, PyObject* arg, int depth){
             return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Not a fast sequence");
         }
         Py_ssize_t len = PySequence_Fast_GET_SIZE(seq);
-        DrJsonValue val = drjson_make_array(ctx, len);
+        DrJsonValue val = drjson_make_array(ctx);
         if(val.kind == DRJSON_ERROR){
             Py_DECREF(seq);
             return val;
@@ -563,8 +566,8 @@ make_drjval(DrjPyCtx* ctx, DrJsonValue v){
     return o;
 }
 
-static 
-PyObject*_Nullable 
+static
+PyObject*_Nullable
 DrjVal_repr(PyObject*s){
     DrjValue* self = (DrjValue*)s;
     // char buff[512];
@@ -581,15 +584,15 @@ DrjVal_repr(PyObject*s){
     return PyUnicode_FromStringAndSize(buff, printed);
 }
 
-static 
-PyObject*_Nullable 
+static
+PyObject*_Nullable
 DrjVal_py(PyObject*s){
     DrjValue* self = (DrjValue*)s;
     return drj_to_python(&self->ctx->ctx, self->value);
 }
 
-static 
-PyObject*_Nullable 
+static
+PyObject*_Nullable
 DrjVal_clear(PyObject*s){
     DrjValue* self = (DrjValue*)s;
     int err = drjson_clear(&self->ctx->ctx, self->value);
@@ -600,8 +603,8 @@ DrjVal_clear(PyObject*s){
     Py_RETURN_NONE;
 }
 
-static 
-PyObject*_Nullable 
+static
+PyObject*_Nullable
 DrjVal_pop(PyObject*s){
     DrjValue* self = (DrjValue*)s;
     DrJsonValue v = drjson_array_pop_item(&self->ctx->ctx, self->value);
@@ -625,8 +628,8 @@ DrjVal_append(PyObject* s, PyObject* arg){
     Py_RETURN_NONE;
 }
 
-static 
-PyObject*_Nullable 
+static
+PyObject*_Nullable
 DrjVal_insert(PyObject*s, PyObject* args, PyObject* kwargs){
     DrjValue* self = (DrjValue*)s;
     const char* keywords[] = {
@@ -648,7 +651,7 @@ DrjVal_insert(PyObject*s, PyObject* args, PyObject* kwargs){
     Py_RETURN_NONE;
 }
 
-static 
+static
 int
 pywrite(void*_Null_unspecified ud, const void* mem, size_t len){
     PyObject* p = ud;
@@ -663,7 +666,7 @@ struct MemBuff {
     size_t cap;
     size_t used;
 };
-static 
+static
 int
 memwrite(void*_Null_unspecified ud, const void* mem, size_t len){
     struct MemBuff* mb = ud;
@@ -775,8 +778,8 @@ DrjVal_mem(PyObject* s){
     return PyLong_FromSsize_t(usage);
 }
 
-static 
-PyObject*_Nullable 
+static
+PyObject*_Nullable
 DrjVal_query(PyObject*s, PyObject* args, PyObject* kwargs){
     DrjValue* self = (DrjValue*)s;
     const char* txt;
@@ -798,8 +801,8 @@ DrjVal_query(PyObject*s, PyObject* args, PyObject* kwargs){
     return (PyObject*)make_drjval(self->ctx, val);
 }
 
-static 
-PyObject *_Nullable 
+static
+PyObject *_Nullable
 DrjVal_get_kind(PyObject *s, void *_Nullable p){
     DrjValue* self = (DrjValue*)s;
     (void)p;
@@ -817,8 +820,8 @@ static PySequenceMethods DrjVal_sequence_methods = {
 
 };
 
-static 
-Py_ssize_t 
+static
+Py_ssize_t
 DrjVal_len(PyObject*s){
     DrjValue* self = (DrjValue*)s;
     int64_t len = drjson_len(&self->ctx->ctx, self->value);
@@ -827,8 +830,8 @@ DrjVal_len(PyObject*s){
     return len;
 }
 
-static 
-PyObject*_Nullable 
+static
+PyObject*_Nullable
 DrjVal_subscript(PyObject* s, PyObject* k){
     DrjValue* self = (DrjValue*)s;
     if(PyLong_Check(k)){
@@ -858,7 +861,7 @@ DrjVal_subscript(PyObject* s, PyObject* k){
     }
     else if(PyUnicode_Check(k)){
         StringView sv = pystring_borrow_stringview(k);
-        DrJsonValue val = drjson_object_get_item(&self->ctx->ctx, self->value, sv.text, sv.length, 0);
+        DrJsonValue val = drjson_object_get_item(&self->ctx->ctx, self->value, sv.text, sv.length);
         if(val.kind == DRJSON_ERROR)
             return exception_from_error(val);
         return (PyObject*)make_drjval(self->ctx, val);
@@ -869,8 +872,8 @@ DrjVal_subscript(PyObject* s, PyObject* k){
     }
 }
 
-static 
-int 
+static
+int
 DrjVal_ass_subscript(PyObject* s, PyObject* key, PyObject* v){
     DrjValue* self = (DrjValue*)s;
     // NULL v means del item
@@ -901,7 +904,7 @@ DrjVal_ass_subscript(PyObject* s, PyObject* key, PyObject* v){
         return -1;
     }
     StringView sv = pystring_borrow_stringview(key);
-    int err = drjson_object_set_item_copy_key(&self->ctx->ctx, self->value, sv.text, sv.length, 0, val);
+    int err = drjson_object_set_item_copy_key(&self->ctx->ctx, self->value, sv.text, sv.length, val);
     if(err){
         PyErr_SetString(PyExc_Exception, "error when setting (oom?)");
         return -1;
@@ -909,8 +912,8 @@ DrjVal_ass_subscript(PyObject* s, PyObject* key, PyObject* v){
     return 0;
 }
 
-static 
-PyObject*_Nullable 
+static
+PyObject*_Nullable
 DrjVal_seqitem(PyObject* s, Py_ssize_t idx){
     // fprintf(stderr, "%s %zd\n", __func__, idx);
     DrjValue* self = (DrjValue*)s;
@@ -942,8 +945,8 @@ DrjVal_seqitem(PyObject* s, Py_ssize_t idx){
 
 }
 
-static 
-Py_hash_t 
+static
+Py_hash_t
 DrjVal_hash(PyObject* s){
     DrjValue* self = (DrjValue*)s;
     switch(self->value.kind){
@@ -959,14 +962,16 @@ DrjVal_hash(PyObject* s){
             return 0;
         case DRJSON_BOOL:
             return self->value.boolean?1:2;
-        case DRJSON_STRING:
-            return drjson_object_key_hash(self->value.string, self->value.slen);
+        case DRJSON_STRING:{
+            DrJsonAtom atom = self->value.atom;
+            return atom.bits >> 32u;
+        }
         default:
             return PyObject_HashNotImplemented(s);
     }
 }
 
-static 
+static
 PyObject*
 DrjVal_richcmp(PyObject *s, PyObject *o, int op){
     if(Py_TYPE(o) != &DrjValType)
@@ -1006,8 +1011,12 @@ drj_to_python(DrJsonContext* ctx, DrJsonValue v){
             return PyLong_FromLongLong(v.integer);
         case DRJSON_UINTEGER:
             return PyLong_FromUnsignedLongLong(v.uinteger);
-        case DRJSON_STRING:
-            return PyUnicode_FromStringAndSize(v.string, v.slen);
+        case DRJSON_STRING:{
+            const char* string = ""; size_t len = 0;
+            int err = drjson_get_str_and_len(ctx, v, &string, &len);
+            (void)err;
+            return PyUnicode_FromStringAndSize(string, len);
+        }break;
         case DRJSON_ARRAY_VIEW:
         case DRJSON_OBJECT_KEYS:
         case DRJSON_OBJECT_VALUES:
