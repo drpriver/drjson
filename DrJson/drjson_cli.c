@@ -3,6 +3,9 @@
 //
 #ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS 1
+#ifdef __clang__
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #endif
 #include <stdio.h>
 #include <string.h>

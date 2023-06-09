@@ -18,7 +18,7 @@ DYLINK=lib
 EXE=.exe
 Bin/libdrjson.$(DRJSONVERSION).dll: DrJson/drjson.c | Bin Deps
 	clang $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dll.dep -shared
-clean:
+clean: | Bin TestResults
 	del /q Bin\* TestResults\*
 else
 UNAME := $(shell uname)
@@ -56,7 +56,7 @@ Bin/test_static$(EXE): DrJson/test_drjson.c | Bin Deps
 	$(CC) $< DrJson/drjson.c -o $@ -MT $@ -MD -MP -MF Deps/test_static.dep -fvisibility=hidden -I. -g -DDRJSON_STATIC_LIB=1
 
 Bin/test_unity$(EXE): DrJson/test_drjson.c | Bin Deps
-	$(CC) $< -include DrJson/drjson.c -o $@ -MT $@ -MD -MP -MF Deps/test_unity.dep -fvisibility=hidden -I. -g -DDRJSON_API=static
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_unity.dep -fvisibility=hidden -I. -g -DDRJSON_UNITY=1
 
 
 README.html: README.md README.css

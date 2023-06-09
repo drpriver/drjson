@@ -6,6 +6,9 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 #endif
+#ifdef DRJSON_UNITY
+#define DRJSON_API static
+#endif
 #include "drjson.h"
 #include "testing.h"
 static TestFunc TestSimpleParsing;
@@ -159,3 +162,6 @@ TestFunction(TestObject){
     drjson_ctx_free_all(ctx);
     TESTEND();
 }
+#ifdef DRJSON_UNITY
+#include "drjson.c"
+#endif
