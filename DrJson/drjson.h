@@ -516,6 +516,7 @@ drjson_checked_query(const DrJsonContext* ctx, DrJsonValue v, int type, const ch
 typedef struct DrJsonTextWriter DrJsonTextWriter;
 struct DrJsonTextWriter {
     void*_Null_unspecified up; //user pointer
+    // return non-zero on error.
     int (*write)(void*_Null_unspecified user_data, const void*, size_t);
 };
 

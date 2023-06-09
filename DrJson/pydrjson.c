@@ -10,6 +10,10 @@
 
 static PyModuleDef drjson;
 static PyMethodDef drjson_methods[];
+
+static PyObject* _Nullable pydrj_parse(PyObject*, PyObject*, PyObject*);
+static PyObject* _Nullable pydrj_load(PyObject*, PyObject*, PyObject*);
+
 static PyTypeObject DrjPyCtxType;
 static PyMethodDef DrjPyCtx_methods[];
 
@@ -27,12 +31,12 @@ typedef struct DrjPyCtx DrjPyCtx;
 struct DrjPyCtx {
     PyObject_HEAD
     DrJsonContext ctx;
-    PyObject* slist;
 };
 static PyObject* _Nullable DrjPyCtx_new(PyTypeObject* type, PyObject* args, PyObject* kwargs);
 static void DrjPyCtx_dealloc(PyObject* o);
 static PyObject*_Nullable DrjPyCtx_mem(PyObject* o);
 static PyObject* _Nullable DrjPyCtx_parse(PyObject* s, PyObject* args, PyObject* kwargs);
+static PyObject* _Nullable DrjPyCtx_load(PyObject* s, PyObject* args, PyObject* kwargs);
 static PyObject* _Nullable DrjPyCtx_make_value(PyObject* s, PyObject* arg);
 
 
@@ -110,9 +114,6 @@ PyInit_drjson(void){
     PyModule_AddIntConstant(mod, "OBJECT_VALUES",   DRJSON_OBJECT_VALUES);
     PyModule_AddIntConstant(mod, "OBJECT_ITEMS",    DRJSON_OBJECT_ITEMS);
 
-    PyModule_AddIntConstant(mod, "APPEND_NEWLINE", DRJSON_APPEND_NEWLINE);
-    PyModule_AddIntConstant(mod, "PRETTY_PRINT", DRJSON_PRETTY_PRINT);
-
     if(PyType_Ready(&DrjPyCtxType) < 0)
         goto fail;
     Py_INCREF(&DrjPyCtxType);
@@ -156,6 +157,37 @@ PyModuleDef drjson = {
 
 static
 PyMethodDef drjson_methods[] = {
+    {
+        .ml_name = "parse",
+        .ml_meth = (PyCFunction)pydrj_parse,
+        .ml_flags = METH_VARARGS|METH_KEYWORDS,
+        .ml_doc = "parse(text, braceless=False)\n"
+            "--\n"
+            "\n"
+            "Convenience function, implicitly creates a context and calls\n"
+            "`parse` on it with the given arguments.\n"
+    },
+    {
+        .ml_name = "loads",
+        .ml_meth = (PyCFunction)pydrj_parse,
+        .ml_flags = METH_VARARGS|METH_KEYWORDS,
+        .ml_doc = "loads(text, braceless=False)\n"
+            "--\n"
+            "\n"
+            "Convenience function, implicitly creates a context and calls\n"
+            "`parse` on it with the given arguments.\n"
+    },
+    {
+        .ml_name = "load",
+        .ml_meth = (PyCFunction)pydrj_load,
+        .ml_flags = METH_VARARGS|METH_KEYWORDS,
+        .ml_doc = "load(file, braceless=False)\n"
+            "--\n"
+            "\n"
+            "Convenience function, calls .read() on the file,\n"
+            "implicitly creates a context and calls `parse` on it with\n"
+            "the given arguments.\n"
+    },
     {NULL, NULL, 0, NULL}
 };
 
@@ -181,6 +213,24 @@ static PyMethodDef DrjPyCtx_methods[] = {
             "--\n"
             "\n"
             "Parse a json string.\n",
+    },
+    {
+        .ml_name = "loads",
+        .ml_meth = (PyCFunction)DrjPyCtx_parse,
+        .ml_flags = METH_VARARGS|METH_KEYWORDS,
+        .ml_doc = "loads(self, text, braceless=False)\n"
+            "--\n"
+            "\n"
+            "Parse a json string.\n",
+    },
+    {
+        .ml_name = "load",
+        .ml_meth = (PyCFunction)DrjPyCtx_load,
+        .ml_flags = METH_VARARGS|METH_KEYWORDS,
+        .ml_doc = "load(self, file, braceless=False)\n"
+            "--\n"
+            "\n"
+            "Calls .read() on the file, then parses as a json string.\n",
     },
     {
         .ml_name = "make",
@@ -209,14 +259,11 @@ DrjPyCtx_new(PyTypeObject* type, PyObject* args, PyObject* kwargs){
     const char* const keywords[] = {NULL};
     if(!PyArg_ParseTupleAndKeywords(args, kwargs, ":Context", (char**)keywords))
         return NULL;
-    PyObject* slist = PyList_New(0);
-    if(!slist) return NULL;
     DrjPyCtx* self = (DrjPyCtx*)type->tp_alloc(type, 0);
-    if(!self) {Py_XDECREF(slist); return NULL;}
+    if(!self) return NULL;
     self->ctx = (DrJsonContext){
         .allocator = drjson_stdc_allocator(),
     };
-    self->slist = slist;
     return (PyObject*)self;
 }
 
@@ -225,7 +272,6 @@ void
 DrjPyCtx_dealloc(PyObject* o){
     DrjPyCtx* self = (DrjPyCtx*)o;
     drjson_ctx_free_all(&self->ctx);
-    Py_CLEAR(self->slist);
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
@@ -274,8 +320,60 @@ DrjPyCtx_parse(PyObject* s, PyObject* args, PyObject* kwargs){
             return NULL;
         return exception_from_error(v);
     }
-    if(PyList_Append(self->slist, txt) < 0)
+    return (PyObject*)make_drjval(self, v);
+}
+
+static
+PyObject* _Nullable
+DrjPyCtx_load(PyObject* s, PyObject* args, PyObject* kwargs){
+    DrjPyCtx* self = (DrjPyCtx*)s;
+    int braceless = 0;
+    PyObject* file_arg = NULL;
+    const char* const keywords[] = {"file", "braceless", NULL};
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|p:load", (char**)keywords, &file_arg, &braceless))
         return NULL;
+    PyObject* txt;
+    {
+        PyObject* file;
+        if(PyUnicode_Check(file_arg)){
+            file = PyFile_FromUnicode(file_arg, "rb");
+            if(!file) return NULL;
+        }
+        else {
+            file = file_arg;
+        }
+        txt = PyObject_CallMethod(file, "read", NULL);
+        if(file != file_arg) Py_DECREF(file);
+        if(!txt) return NULL;
+    }
+    StringView sv;
+    if(PyUnicode_Check(txt)){
+        sv = pystring_borrow_stringview(txt);
+    }
+    else if(PyBytes_Check(txt)){
+        char* buffer; Py_ssize_t length;
+        int err = PyBytes_AsStringAndSize(txt, &buffer, &length);
+        if(err) {
+            Py_DECREF(txt);
+            return NULL;
+        }
+        sv.text = buffer;
+        sv.length = length;
+    }
+    else {
+        PyErr_SetString(PyExc_TypeError, "read() returned neither bytes nor a string");
+        Py_DECREF(txt);
+        return NULL;
+    }
+    unsigned flags = DRJSON_PARSE_FLAG_NONE;
+    if(braceless) flags |= DRJSON_PARSE_FLAG_BRACELESS_OBJECT;
+    DrJsonValue v = drjson_parse_string(&self->ctx, sv.text, sv.length, flags);
+    Py_DECREF(txt);
+    if(v.kind == DRJSON_ERROR){
+        if(PyErr_Occurred())
+            return NULL;
+        return exception_from_error(v);
+    }
     return (PyObject*)make_drjval(self, v);
 }
 
@@ -325,7 +423,7 @@ python_to_drj(DrJsonContext* ctx, PyObject* arg, int depth){
         return drjson_make_bool(0);
     if(PyUnicode_Check(arg)){
         StringView sv = pystring_borrow_stringview(arg);
-        DrJsonValue val = drjson_make_string_copy(ctx, sv.text, sv.length);
+        DrJsonValue val = drjson_make_string(ctx, sv.text, sv.length);
         return val;
     }
     if(PyLong_Check(arg)){
@@ -497,7 +595,7 @@ static PyMethodDef DrjVal_methods[] = {
         .ml_name = "dump",
         .ml_meth = (PyCFunction)DrjVal_dump,
         .ml_flags = METH_VARARGS|METH_KEYWORDS,
-        .ml_doc = "dump(self, writer=None, flags=0)\n"
+        .ml_doc = "dump(self, writer=None, pretty=False, newline=False)\n"
             "--\n"
             "\n"
             "Serializes to a json string.\n"
@@ -672,6 +770,8 @@ memwrite(void*_Null_unspecified ud, const void* mem, size_t len){
     struct MemBuff* mb = ud;
     if(len + mb->used >= mb->cap){
         size_t new_cap = mb->cap?mb->cap*2:128;
+        while(new_cap < len)
+            new_cap *= 2;
         void* p = realloc(mb->p, new_cap);
         if(!p){
             free(mb->p);
@@ -692,9 +792,10 @@ DrjVal_dump(PyObject* s, PyObject* args, PyObject* kwargs){
     DrjValue* self = (DrjValue*)s;
     PyObject* pywriter = NULL;
     PyObject* meth = NULL;
-    unsigned flags  = 0;
-    char* keywords[] = {"writer", "flags", NULL};
-    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "|OI:dump", (char**)keywords, &pywriter, &flags))
+    int pretty = 0;
+    int newline = 0;
+    char* keywords[] = {"writer", "pretty", "newline", NULL};
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "|Opp:dump", (char**)keywords, &pywriter, &pretty, &newline))
         return NULL;
     if(pywriter == Py_None)
         pywriter = NULL;
@@ -711,6 +812,9 @@ DrjVal_dump(PyObject* s, PyObject* args, PyObject* kwargs){
         writer.up = meth?meth:pywriter;
         writer.write = pywrite;
     }
+    unsigned flags = 0;
+    if(pretty) flags |= DRJSON_PRETTY_PRINT;
+    if(newline) flags |= DRJSON_APPEND_NEWLINE;
     int err = drjson_print_value(&self->ctx->ctx, &writer, self->value, 0, flags);
     Py_XDECREF(meth);
     if(err){
@@ -1066,3 +1170,32 @@ drj_to_python(DrJsonContext* ctx, DrJsonValue v){
     Py_RETURN_NONE;
 }
 
+static
+PyObject* _Nullable
+pydrj_parse(PyObject* mod, PyObject* args, PyObject* kwargs){
+    (void)mod;
+    PyTypeObject* type = (PyTypeObject*)&DrjPyCtxType;
+    DrjPyCtx* self = (DrjPyCtx*)type->tp_alloc(type, 0);
+    if(!self) return NULL;
+    self->ctx = (DrJsonContext){
+        .allocator = drjson_stdc_allocator(),
+    };
+    PyObject* ret = DrjPyCtx_parse((PyObject*)self, args, kwargs);
+    Py_DECREF(self);
+    return ret;
+}
+
+static
+PyObject* _Nullable
+pydrj_load(PyObject* mod, PyObject* args, PyObject* kwargs){
+    (void)mod;
+    PyTypeObject* type = (PyTypeObject*)&DrjPyCtxType;
+    DrjPyCtx* self = (DrjPyCtx*)type->tp_alloc(type, 0);
+    if(!self) return NULL;
+    self->ctx = (DrJsonContext){
+        .allocator = drjson_stdc_allocator(),
+    };
+    PyObject* ret = DrjPyCtx_load((PyObject*)self, args, kwargs);
+    Py_DECREF(self);
+    return ret;
+}

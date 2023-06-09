@@ -6,11 +6,10 @@
 #define PY_SSIZE_T_CLEAN
 
 // Python's pytime.h triggers a visibility warning (at least on windows). We really don't care.
-#ifdef __clang___
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wvisibility"
 #endif
-
 #define PY_LIMITED_API
 
 #if defined(_WIN32) && defined(_DEBUG)
@@ -29,8 +28,13 @@
 #include <Python.h>
 #endif
 
-#ifdef __clang___
+#if !defined(__clang__) && !defined(_Nullable)
+#define _Nullable
+#endif
+
+#ifdef __clang__
 #pragma clang diagnostic pop
+#pragma clang assume_nonnull begin
 #endif
 
 
@@ -41,12 +45,42 @@
 #error "Only python 3.6 or better is supported"
 #endif
 
+#if PY_MAJOR_VERSION >= 3
+// Idk why they made this so cumbersome.
+static
+PyObject*_Nullable
+get_iomod(void){
+    static PyObject* iomod;
+    if(!iomod)
+        iomod = PyImport_ImportModule("io");
+    return iomod;
+}
+
+static inline
+PyObject* _Nullable
+PyFile_FromString(const char* filename, const char* mode){
+    PyObject* iomod = get_iomod();
+    if(!iomod) return NULL;
+    PyObject* f = PyObject_CallMethod(iomod, "open", "ss", filename, mode);
+    return f;
+}
+
+static inline
+PyObject* _Nullable
+PyFile_FromUnicode(PyObject* filename, const char* mode){
+    PyObject* iomod = get_iomod();
+    if(!iomod) return NULL;
+    PyObject* f = PyObject_CallMethod(iomod, "open", "Os", filename, mode);
+    return f;
+}
+#endif
+
 #if PY_MINOR_VERSION <= 7
 // Python 3.7 has a bug in PyStructSequence_NewType, so just use
 // a namedtuple instead.
 //   https://bugs.python.org/issue28709
 static inline
-PyTypeObject*
+PyTypeObject*_Nullable
 my_PyStructSequence_NewType(PyStructSequence_Desc* desc){
     PyObject* collections = NULL;
     PyObject* namedtup = NULL;
@@ -87,7 +121,7 @@ fail:
 }
 #else
 static inline
-PyTypeObject*
+PyTypeObject*_Nullable
 my_PyStructSequence_NewType(PyStructSequence_Desc *desc){
     return PyStructSequence_NewType(desc);
 }
@@ -116,8 +150,8 @@ PyModule_AddObjectRef(PyObject* mod, const char* name, PyObject* value){
     return result;
 }
 static inline
-PyObject*
-Py_XNewRef(PyObject* o){
+PyObject*_Nullable
+Py_XNewRef(PyObject*_Nullable o){
     if(!o) return NULL;
     Py_INCREF(o);
     return o;
@@ -131,7 +165,7 @@ Py_NewRef(PyObject* o){
 #if PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION < 9
 // shim
 static inline
-PyObject*
+PyObject*_Nullable
 PyObject_CallOneArg(PyObject* callable, PyObject* arg){
     PyObject* tup = PyTuple_Pack(1, arg); // new ref
     if(!tup) return NULL;
@@ -146,6 +180,10 @@ Py_IS_TYPE(const PyObject* o, const PyTypeObject* type){
     return o->ob_type == type;
 }
 
+#endif
+
+#ifdef __clang__
+#pragma clang assume_nonnull end
 #endif
 
 #endif
