@@ -300,7 +300,7 @@ drjson_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Null
 static inline
 DrJsonValue
 drjson_make_error(DrJsonErrorCode error, const char* mess){
-    return (DrJsonValue){._ekind=DRJSON_ERROR, .error_code=error, .err_mess=mess, .err_len=strlen(mess)};
+    return (DrJsonValue){._ekind=DRJSON_ERROR, .error_code=error, .err_mess=mess, .err_len=(uint32_t)strlen(mess)};
 }
 
 static inline

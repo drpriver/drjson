@@ -117,15 +117,15 @@ struct DrJsonHashIndex {
 typedef struct DrJsonObject DrJsonObject;
 struct DrJsonObject {
     void* object_items;
-    size_t count;
-    size_t capacity;
+    uint32_t count;
+    uint32_t capacity;
 };
 
 typedef struct DrJsonArray DrJsonArray;
 struct DrJsonArray {
     DrJsonValue* array_items;
-    size_t count;
-    size_t capacity;
+    uint32_t count;
+    uint32_t capacity;
 };
 
 static inline
@@ -214,7 +214,7 @@ drj_grow_atom_table(DrjAtomTable* table, const DrJsonAllocator* allocator){
     for(uint32_t i = 0; i < count; i++){
         const DrjAtomStr* s = &strs[i];
         uint32_t hash = s->hash;
-        uint32_t idx = fast_reduce32(hash, (uint32_t)2*new_cap);
+        uint32_t idx = fast_reduce32(hash, (uint32_t)(2*new_cap));
         while(idxes[idx] != UINT32_MAX){
             idx++;
             if(idx >= 2*new_cap) idx = 0;
@@ -222,7 +222,7 @@ drj_grow_atom_table(DrjAtomTable* table, const DrJsonAllocator* allocator){
         idxes[idx] = i;
     }
     table->data = p;
-    table->capacity = new_cap;
+    table->capacity = (uint32_t)new_cap;
     return 0;
 }
 
@@ -1109,7 +1109,7 @@ drjson_array_push_item(const DrJsonContext* ctx, DrJsonValue a, DrJsonValue item
             : allocator->alloc(allocator->user_pointer, new_cap*sizeof(*new_items));
         if(!new_items) return 1;
         array->array_items = new_items;
-        array->capacity = new_cap;
+        array->capacity = (uint32_t)new_cap;
     }
     array->array_items[array->count++] = item;
     return 0;
@@ -1133,7 +1133,7 @@ drjson_array_insert_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx, Dr
             : allocator->alloc(allocator->user_pointer, new_cap*sizeof(*new_items));
         if(!new_items) return 1;
         array->array_items = new_items;
-        array->capacity = new_cap;
+        array->capacity = (uint32_t)new_cap;
     }
     size_t nmove = array->count - idx;
     drj_memmove(array->array_items+idx+1, array->array_items+idx, nmove * sizeof(*array->array_items));
@@ -1211,7 +1211,7 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJso
             if(!p) return 1;
             drj_memset(drj_obj_get_idxes(p, new_cap), 0xff, 2*new_cap*sizeof(DrJsonHashIndex));
             object->object_items = p;
-            object->capacity = new_cap;
+            object->capacity = (uint32_t)new_cap;
         }
         else {
             size_t old_cap = object->capacity;
@@ -1230,10 +1230,10 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJso
                     idx++;
                     if(idx >= 2*new_cap) idx = 0;
                 }
-                idxes[idx].index = i;
+                idxes[idx].index = (uint32_t)i;
             }
             object->object_items = p;
-            object->capacity = new_cap;
+            object->capacity = (uint32_t)new_cap;
         }
         if(0 && object->capacity <= 32){
             DrJsonHashIndex* idxes = drj_obj_get_idxes(object->object_items, object->capacity);
@@ -1274,7 +1274,7 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJso
                 .atom=atom,
                 .value=item,
             };
-            idxes[idx].index = pidx;
+            idxes[idx].index = (uint32_t)pidx;
             return 0;
         }
         DrJsonObjectPair* o = &pairs[hi.index];
@@ -1292,7 +1292,7 @@ DRJSON_API
 int // 0 on success
 drjson_object_set_item_no_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, DrJsonValue item){
     DrJsonAtom atom;
-    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, key, keylen, 1, &atom);
+    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, key, (uint32_t)keylen, 1, &atom);
     if(err) return err;
     return drjson_object_set_item(ctx, object, atom, item);
 }
@@ -1301,7 +1301,7 @@ DRJSON_API
 int // 0 on success
 drjson_object_set_item_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, DrJsonValue item){
     DrJsonAtom atom;
-    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, key, keylen, 1, &atom);
+    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, key, (uint32_t)keylen, 1, &atom);
     if(err) return err;
     return drjson_object_set_item(ctx, object, atom, item);
 }
@@ -1340,7 +1340,7 @@ DRJSON_API
 DrJsonValue
 drjson_object_get_item(const DrJsonContext* ctx, DrJsonValue o, const char* key, size_t keylen){
     DrJsonAtom atom;
-    int err = drj_get_atom_no_alloc(&ctx->atoms, key, keylen, &atom);
+    int err = drj_get_atom_no_alloc(&ctx->atoms, key, (uint32_t)keylen, &atom);
     if(err) return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "key is not valid for object");
     return drjson_object_get_item_atom(ctx, o, atom);
 }
@@ -2314,14 +2314,14 @@ drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t 
     int err = drjson_escape_string2(&ctx->allocator, unescaped, length, &tmp, &tmp_length);
     if(err == 1) return err;
     // String doesn't need to be escaped, make a copy in the atom table.
-    if(err == 2) return drj_atomize_str(&ctx->atoms, &ctx->allocator, unescaped, length, 1, outatom);
+    if(err == 2) return drj_atomize_str(&ctx->atoms, &ctx->allocator, unescaped, (uint32_t)length, 1, outatom);
     if(tmp_length >= UINT32_MAX/2)
         err = 1;
     else {
         // Always copy as we'd otherwise have to add a function that tells if it was interned or not.
         // so we know whether to free.
         // We could do that.
-        err = drj_atomize_str(&ctx->atoms, &ctx->allocator, tmp, tmp_length, 1, outatom);
+        err = drj_atomize_str(&ctx->atoms, &ctx->allocator, tmp, (uint32_t)tmp_length, 1, outatom);
     }
     ctx->allocator.free(ctx->allocator.user_pointer, tmp, tmp_length);
     return err;
@@ -2432,7 +2432,7 @@ DRJSON_API
 DrJsonValue
 drjson_make_string_copy(DrJsonContext* ctx, const char* s, size_t length){
     DrJsonAtom atom;
-    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, s, length, 1, &atom);
+    int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, s, (uint32_t)length, 1, &atom);
     if(err)
         return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom");
     return drjson_atom_to_value(atom);
