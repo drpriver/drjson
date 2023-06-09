@@ -171,7 +171,7 @@ struct DrjAtomTable {
 
 static inline
 void
-drj_atom_table_get_ptrs(void* p, uint32_t capacity, DrjAtomStr*_Nullable*_Nonnull atomstrs, uint32_t*_Nullable*_Nonnull idxes){
+drj_atom_table_get_ptrs(void* p, size_t capacity, DrjAtomStr*_Nullable*_Nonnull atomstrs, uint32_t*_Nullable*_Nonnull idxes){
     *atomstrs = p;
     *idxes = (uint32_t*)(((char*)p) + capacity * sizeof(DrjAtomStr));
 }
@@ -214,10 +214,10 @@ drj_grow_atom_table(DrjAtomTable* table, const DrJsonAllocator* allocator){
     for(uint32_t i = 0; i < count; i++){
         const DrjAtomStr* s = &strs[i];
         uint32_t hash = s->hash;
-        uint32_t idx = fast_reduce32(hash, new_cap);
+        uint32_t idx = fast_reduce32(hash, (uint32_t)2*new_cap);
         while(idxes[idx] != UINT32_MAX){
             idx++;
-            if(idx >= new_cap) idx = 0;
+            if(idx >= 2*new_cap) idx = 0;
         }
         idxes[idx] = i;
     }
@@ -242,7 +242,7 @@ drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const cha
         drj_memset(idxes, 0xff, capacity * sizeof*idxes);
         table->data = p;
         table->capacity = capacity;
-        uint32_t idx = fast_reduce32(hash, capacity);
+        uint32_t idx = fast_reduce32(hash, 2*capacity);
         _Bool copied = 0;
         if(copy && len){
             // XXX: use a string arena
@@ -272,11 +272,11 @@ drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const cha
         if(err) return err;
     }
     uint32_t capacity = table->capacity;
-    uint32_t idx = fast_reduce32(hash, capacity);
+    uint32_t idx = fast_reduce32(hash, 2*capacity);
     DrjAtomStr* strs; uint32_t* idxes;
     drj_atom_table_get_ptrs(table->data, capacity, &strs, &idxes);
     for(;;idx++){
-        if(idx >= capacity) idx = 0;
+        if(idx >= 2*capacity) idx = 0;
         uint32_t i = idxes[idx];
         if(i == UINT32_MAX){ // unset
             _Bool copied = 0;
@@ -320,11 +320,11 @@ drj_get_atom_no_alloc(const DrjAtomTable* table, const char* str, uint32_t len, 
         return 1;
     uint32_t hash = drj_hash_str(str, len);
     uint32_t capacity = table->capacity;
-    uint32_t idx = fast_reduce32(hash, capacity);
+    uint32_t idx = fast_reduce32(hash, 2*capacity);
     DrjAtomStr* strs; uint32_t* idxes;
     drj_atom_table_get_ptrs(table->data, capacity, &strs, &idxes);
     for(;;idx++){
-        if(idx >= capacity) idx = 0;
+        if(idx >= 2*capacity) idx = 0;
         uint32_t i = idxes[idx];
         if(i == UINT32_MAX) // unset
             return 1;
@@ -1225,7 +1225,7 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJso
             for(size_t i = 0; i < object->count; i++){
                 const DrJsonObjectPair* p = &pairs[i];
                 uint32_t hash = drj_atom_get_hash(p->atom);
-                uint32_t idx = fast_reduce32(hash, 2*new_cap);
+                uint32_t idx = fast_reduce32(hash, (uint32_t)(2*new_cap));
                 while(idxes[idx].index != UINT32_MAX){
                     idx++;
                     if(idx >= 2*new_cap) idx = 0;
