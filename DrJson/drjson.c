@@ -1230,7 +1230,8 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJso
             object->object_items = p;
             object->capacity = (uint32_t)new_cap;
         }
-        if(0 && object->capacity <= 32){
+        #if 0
+        if(object->capacity <= 32){
             DrJsonHashIndex* idxes = drj_obj_get_idxes(object->object_items, object->capacity);
             uint64_t seent = 0;
             for(size_t i = 0; i < object->capacity*2; i++){
@@ -1242,8 +1243,11 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJso
                 seent |= mask;
             }
         }
+        #endif
     }
-    if(0 && object->capacity <= 32){
+
+    #if 0
+    if(object->capacity <= 32){
         DrJsonHashIndex* idxes = drj_obj_get_idxes(object->object_items, object->capacity);
         uint64_t seent = 0;
         for(size_t i = 0; i < object->capacity*2; i++){
@@ -1255,6 +1259,7 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJso
             seent |= mask;
         }
     }
+    #endif
     uint32_t capacity = object->capacity;
     uint32_t hash = drj_atom_get_hash(atom);
     uint32_t idx = fast_reduce32(hash, 2*capacity);
