@@ -17,19 +17,43 @@ OBJECT_ITEMS: int
 APPEND_NEWLINE: int
 PRETTY_PRINT: int
 
+class Writer(Protocol):
+    def write(self, s:str) -> None:
+        ...
+
+class Reader(Protocol):
+    def read(self) -> str | bytes:
+        ...
+
+def parse(text:str, braceless:bool=False) -> Value:
+    ...
+
+def loads(text:str, braceless:bool=False) -> Value:
+    ...
+
+def load(file:str|Reader, braceless:bool=False) -> Value:
+    ...
+
+
 class Ctx:
     def parse(self, text:str, braceless:bool=False) -> Value:
+        ...
+
+    def loads(self, text:str, braceless:bool=False) -> Value:
+        ...
+
+    def load(self, file:str|Reader, braceless:bool=False) -> Value:
         ...
 
     def make(self, value: Any) -> Value:
         ...
 
-class Writer(Protocol):
-    def write(self, s:str) -> None:
+    def mem(self) -> tuple:
         ...
 
+
 class Value:
-    ctx: Ctx
+    ctx: Final[Ctx]
     kind: Final[int]
 
     def __repr__(self) -> str:
@@ -78,4 +102,13 @@ class Value:
 
     @overload
     def dump(self, writer:Union[None, Writer, Callable[[str], None]]=None, flags:int=0) -> Union[str, None]:
+        ...
+
+    def keys(self) -> list[str]:
+        ...
+
+    def values(self) -> list[Value]:
+        ...
+
+    def items(self) -> list[tuple[str, Value]]:
         ...
