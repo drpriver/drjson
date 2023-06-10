@@ -355,11 +355,6 @@ register_test(StringView test_name, TestFunc* func, enum TestCaseFlags flags){
 // These macros are for expressing the test conditions.
 // They only work within a test function.
 //
-// Each one "returns" the condition being tested. For example,
-// TestExpectEquals returns lhs == rhs.
-// This means you can use these as expressions to do conditional
-// printing or extra testing or whatever.
-//
 // See:
 // ----
 // * `TestExpectEquals`
