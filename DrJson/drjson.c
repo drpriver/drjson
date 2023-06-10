@@ -151,6 +151,8 @@ drj_make_atom(uint32_t idx, uint32_t hash){
     return (DrJsonAtom){result};
 }
 
+#define ATOM_MAX_LEN (UINT32_MAX/2)
+
 typedef struct DrjAtomStr DrjAtomStr;
 struct DrjAtomStr {
     uint32_t hash;
@@ -379,7 +381,7 @@ drjson_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Null
 DRJSON_API
 int
 drjson_get_atom_no_intern(const DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
-    if(len >= UINT32_MAX/2) return 1;
+    if(len >= ATOM_MAX_LEN) return 1;
     if(!outatom) return 1;
     return drj_get_atom_no_alloc(&ctx->atoms, str, (uint32_t)len, outatom);
 }
@@ -387,7 +389,7 @@ drjson_get_atom_no_intern(const DrJsonContext* ctx, const char* str, size_t len,
 DRJSON_API
 int
 drjson_atomize(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
-    if(len >= UINT32_MAX/2) return 1;
+    if(len >= ATOM_MAX_LEN) return 1;
     if(!outatom) return 1;
     return drj_atomize_str(&ctx->atoms, &ctx->allocator, str, (uint32_t)len, 1, outatom);
 }
@@ -395,7 +397,7 @@ drjson_atomize(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outa
 DRJSON_API
 int
 drjson_atomize_no_copy(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
-    if(len >= UINT32_MAX/2) return 1;
+    if(len >= ATOM_MAX_LEN) return 1;
     if(!outatom) return 1;
     return drj_atomize_str(&ctx->atoms, &ctx->allocator, str, (uint32_t)len, 0, outatom);
 }
@@ -2303,7 +2305,7 @@ DRJSON_API
 int
 drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t length, DrJsonAtom* outatom){
     if(!outatom) return 1;
-    if(length >= UINT32_MAX/2)
+    if(length >= ATOM_MAX_LEN)
         return 1;
     if(!length){
         int err = drj_atomize_str(&ctx->atoms, &ctx->allocator, "", 0, 0, outatom);
@@ -2315,7 +2317,7 @@ drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t 
     if(err == 1) return err;
     // String doesn't need to be escaped, make a copy in the atom table.
     if(err == 2) return drj_atomize_str(&ctx->atoms, &ctx->allocator, unescaped, (uint32_t)length, 1, outatom);
-    if(tmp_length >= UINT32_MAX/2)
+    if(tmp_length >= ATOM_MAX_LEN)
         err = 1;
     else {
         // Always copy as we'd otherwise have to add a function that tells if it was interned or not.
