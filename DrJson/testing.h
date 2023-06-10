@@ -88,7 +88,7 @@ void
 TestPrintf(const char* fmt, ...){
     va_list arg_;
     char buff[10000];
-    // Some C compiler don't support multiple va_starts, but do
+    // Some C compilers don't support multiple va_starts, but do
     // support va_copy, so just do that.
     va_start(arg_, fmt);
     for(size_t i = 0; i < TestOutFileCount; i++){

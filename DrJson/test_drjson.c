@@ -154,9 +154,8 @@ TestFunction(TestObject){
             count++;
             TestAssertEquals(drjson_len(ctx, o), count);
             DrJsonValue v2 = drjson_object_get_item_atom(ctx, o, v.atom);
-            if(!drjson_eq(v2, v)){
-                TestAssert(0);
-            }
+            TestAssertEquals(v.kind, v2.kind);
+            TestAssertEquals(v.atom.bits, v2.atom.bits);
         }
     }
     drjson_ctx_free_all(ctx);
