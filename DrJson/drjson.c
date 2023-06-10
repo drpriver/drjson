@@ -229,7 +229,7 @@ drj_grow_atom_table(DrjAtomTable* table, const DrJsonAllocator* allocator){
 static inline
 int
 drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const char* str, uint32_t len, _Bool copy, DrJsonAtom* outatom){
-    if(!len) str = "";
+    if(unlikely(!len)) str = "";
     uint32_t hash = drj_hash_str(str, len);
     if(unlikely(!table->count)){
         assert(!table->capacity);
