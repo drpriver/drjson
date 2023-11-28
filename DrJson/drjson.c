@@ -2315,14 +2315,15 @@ drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t 
     int err = drjson_escape_string2(&ctx->allocator, unescaped, length, &tmp, &tmp_length);
     if(err == 1) return err;
     // String doesn't need to be escaped, make a copy in the atom table.
-    if(err == 2) return drj_atomize_str(&ctx->atoms, &ctx->allocator, unescaped, (uint32_t)length, 1, outatom);
+    const _Bool copy = 1;
+    if(err == 2) return drj_atomize_str(&ctx->atoms, &ctx->allocator, unescaped, (uint32_t)length, copy, outatom);
     if(tmp_length >= ATOM_MAX_LEN)
         err = 1;
     else {
         // Always copy as we'd otherwise have to add a function that tells if it was interned or not.
         // so we know whether to free.
         // We could do that.
-        err = drj_atomize_str(&ctx->atoms, &ctx->allocator, tmp, (uint32_t)tmp_length, 1, outatom);
+        err = drj_atomize_str(&ctx->atoms, &ctx->allocator, tmp, (uint32_t)tmp_length, copy, outatom);
     }
     ctx->allocator.free(ctx->allocator.user_pointer, tmp, tmp_length);
     return err;
