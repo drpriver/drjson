@@ -40,7 +40,6 @@ typedef long long ssize_t;
 #include "drjson.h"
 #include "drjson_itoa.h"
 #include "hash_func.h"
-#include "bit_util.h"
 #define PARSE_NUMBER_PARSE_FLOATS 1
 #include "parse_numbers.h"
 #define FPCONV_API static inline
