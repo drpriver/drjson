@@ -149,4 +149,20 @@ archive-wheels: | ArchivedWheels
 	cp wheelhouse/*.whl ArchivedWheels
 ArchivedWheels: ; mkdir -p $@
 
+ifneq ($(OS),Windows_NT) # shells out to unix commands
+.PHONY: list
+list:
+	@LC_ALL=C $(MAKE) -npRrq : 2>/dev/null \
+		| awk -v RS= -F: '{if ($$1 !~ "^[#.]") {print $$1}}' \
+		| sort \
+		| uniq \
+		| egrep -v \
+			-e '^[^[:alnum:]]' \
+			-e '^$@$$' \
+			-e '.(dep|[ch])$$' \
+			-e '^(Bin|Deps)' \
+			-e '^(TestResults|Fuzz)' \
+			-e '^(ArchivedWheels|wheelhouse)'
+
+endif
 include $(wildcard gather.mak)
