@@ -150,6 +150,7 @@ archive-wheels: | ArchivedWheels
 ArchivedWheels: ; mkdir -p $@
 
 ifneq ($(OS),Windows_NT) # shells out to unix commands
+# lists makefile targets
 .PHONY: list
 list:
 	@LC_ALL=C $(MAKE) -npRrq : 2>/dev/null \

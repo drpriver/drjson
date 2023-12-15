@@ -9,3 +9,5 @@ wheelhouse
 civenv
 .vimrc
 TestResults
+xdir
+bdir
