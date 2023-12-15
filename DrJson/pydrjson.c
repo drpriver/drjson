@@ -90,29 +90,120 @@ static inline
 PyObject*_Nullable
 exception_from_error(DrJsonValue v);
 
+static
+PyObject* py_drjson_kinds[] = {
+    [DRJSON_ERROR] = NULL,
+    [DRJSON_NUMBER] = NULL,
+    [DRJSON_INTEGER] = NULL,
+    [DRJSON_UINTEGER] = NULL,
+    [DRJSON_STRING] = NULL,
+    [DRJSON_ARRAY] = NULL,
+    [DRJSON_OBJECT] = NULL,
+    [DRJSON_NULL] = NULL,
+    [DRJSON_BOOL] = NULL,
+    [DRJSON_ARRAY_VIEW] = NULL,
+    [DRJSON_OBJECT_KEYS] = NULL,
+    [DRJSON_OBJECT_VALUES] = NULL,
+    [DRJSON_OBJECT_ITEMS] = NULL,
+};
+
 
 PyMODINIT_FUNC _Nullable
 PyInit_drjson(void){
     PyObject* mod = PyModule_Create(&drjson);
+    PyObject* enum_mod = NULL;
+    PyObject* int_enum = NULL;
+    PyObject* enum_kwargs = NULL;
+    PyObject* enum_args = NULL;
+    PyObject* enum_name = NULL;
+    PyObject* enum_values = NULL;
+    PyObject* kind_enum = NULL;
+    PyObject* modname = NULL;
     PyObject* ctx_type = NULL;
     PyObject* val_type = NULL;
     PyObject* version = NULL;
     if(!mod) goto fail;
+    modname = PyModule_GetNameObject(mod);
+    if(!modname) goto fail;
     PyModule_AddStringConstant(mod, "__version__", DRJSON_VERSION);
+    enum_kwargs = PyDict_New();
+    if(!enum_kwargs) goto fail;
+    if(PyDict_SetItemString(enum_kwargs, "module", modname) < 0)
+        goto fail;
 
-    PyModule_AddIntConstant(mod, "ERROR",           DRJSON_ERROR);
-    PyModule_AddIntConstant(mod, "NUMBER",          DRJSON_NUMBER);
-    PyModule_AddIntConstant(mod, "INTEGER",         DRJSON_INTEGER);
-    PyModule_AddIntConstant(mod, "UINTEGER",        DRJSON_UINTEGER);
-    PyModule_AddIntConstant(mod, "STRING",          DRJSON_STRING);
-    PyModule_AddIntConstant(mod, "ARRAY",           DRJSON_ARRAY);
-    PyModule_AddIntConstant(mod, "OBJECT",          DRJSON_OBJECT);
-    PyModule_AddIntConstant(mod, "NULL",            DRJSON_NULL);
-    PyModule_AddIntConstant(mod, "BOOL",            DRJSON_BOOL);
-    PyModule_AddIntConstant(mod, "ARRAY_VIEW",      DRJSON_ARRAY_VIEW);
-    PyModule_AddIntConstant(mod, "OBJECT_KEYS",     DRJSON_OBJECT_KEYS);
-    PyModule_AddIntConstant(mod, "OBJECT_VALUES",   DRJSON_OBJECT_VALUES);
-    PyModule_AddIntConstant(mod, "OBJECT_ITEMS",    DRJSON_OBJECT_ITEMS);
+    enum_mod = PyImport_ImportModule("enum");
+    if(!enum_mod) goto fail;
+    int_enum = PyObject_GetAttrString(enum_mod, "IntEnum");
+    if(!int_enum) goto fail;
+    enum_values = PyDict_New();
+    if(!enum_values) goto fail;
+    enum_name = PyUnicode_FromString("Kind");
+    if(!enum_name) goto fail;
+    #define ADD_VALUE(x) do { \
+        PyObject* v = PyLong_FromLong(DRJSON_##x); \
+        if(!v) goto fail; \
+        if(PyDict_SetItemString(enum_values, #x, v) < 0){ \
+            Py_DECREF(v); \
+            goto fail; \
+        } \
+        Py_DECREF(v); \
+    }while(0)
+    ADD_VALUE(ERROR);
+    ADD_VALUE(NUMBER);
+    ADD_VALUE(INTEGER);
+    ADD_VALUE(UINTEGER);
+    ADD_VALUE(STRING);
+    ADD_VALUE(ARRAY);
+    ADD_VALUE(OBJECT);
+    ADD_VALUE(NULL);
+    ADD_VALUE(BOOL);
+    ADD_VALUE(ARRAY_VIEW);
+    ADD_VALUE(OBJECT_KEYS);
+    ADD_VALUE(OBJECT_VALUES);
+    ADD_VALUE(OBJECT_ITEMS);
+    #undef ADD_VALUE
+    enum_args = PyTuple_Pack(2, enum_name, enum_values);
+    if(!enum_args) goto fail;
+    kind_enum = PyObject_Call(int_enum, enum_args, enum_kwargs);
+    if(!kind_enum) goto fail;
+    {
+        PyObject* doc = PyUnicode_FromString("The kind of a drjson value");
+        if(!doc) goto fail;
+        if(PyObject_SetAttrString(int_enum, "__doc__", doc) < 0){
+            Py_DECREF(doc);
+            goto fail;
+        }
+        Py_DECREF(doc);
+    }
+    if(PyModule_AddObjectRef(mod, "Kind", kind_enum) < 0)
+        goto fail;
+
+    #define ADD_MOD_ENUM(x) do { \
+        if(py_drjson_kinds[DRJSON_##x]){ \
+            Py_DECREF(py_drjson_kinds[DRJSON_##x]); \
+            py_drjson_kinds[DRJSON_##x] = NULL; \
+        } \
+        PyObject* e = PyObject_GetAttrString(kind_enum, #x); \
+        if(!e) goto fail; \
+        if(PyModule_AddObjectRef(mod, #x, e) < 0){ \
+            Py_DECREF(e); \
+            goto fail; \
+        } \
+        py_drjson_kinds[DRJSON_##x] = e; \
+    }while(0)
+    ADD_MOD_ENUM(ERROR);
+    ADD_MOD_ENUM(NUMBER);
+    ADD_MOD_ENUM(INTEGER);
+    ADD_MOD_ENUM(UINTEGER);
+    ADD_MOD_ENUM(STRING);
+    ADD_MOD_ENUM(ARRAY);
+    ADD_MOD_ENUM(OBJECT);
+    ADD_MOD_ENUM(NULL);
+    ADD_MOD_ENUM(BOOL);
+    ADD_MOD_ENUM(ARRAY_VIEW);
+    ADD_MOD_ENUM(OBJECT_KEYS);
+    ADD_MOD_ENUM(OBJECT_VALUES);
+    ADD_MOD_ENUM(OBJECT_ITEMS);
 
     if(PyType_Ready(&DrjPyCtxType) < 0)
         goto fail;
@@ -135,6 +226,14 @@ PyInit_drjson(void){
         Py_XDECREF(mod);
         mod = NULL;
     }
+    Py_XDECREF(enum_mod);
+    Py_XDECREF(int_enum);
+    Py_XDECREF(enum_kwargs);
+    Py_XDECREF(enum_args);
+    Py_XDECREF(enum_name);
+    Py_XDECREF(enum_values);
+    Py_XDECREF(kind_enum);
+    Py_XDECREF(modname);
     Py_XDECREF(ctx_type);
     Py_XDECREF(val_type);
     Py_XDECREF(version);
@@ -910,7 +1009,9 @@ PyObject *_Nullable
 DrjVal_get_kind(PyObject *s, void *_Nullable p){
     DrjValue* self = (DrjValue*)s;
     (void)p;
-    return PyLong_FromUnsignedLong(self->value.kind);
+    PyObject* v = py_drjson_kinds[self->value.kind];
+    Py_INCREF(v);
+    return v;
 }
 
 static PyGetSetDef DrjVal_getset[] = {
