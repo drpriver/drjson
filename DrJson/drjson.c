@@ -14,8 +14,6 @@ typedef long long ssize_t;
 
 #ifndef DRJSON_NO_STDIO
 #include <stdio.h>
-// Why do I require stdarg?
-#include <stdarg.h>
 #endif
 
 #ifndef _WIN32
