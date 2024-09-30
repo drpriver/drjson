@@ -8,9 +8,9 @@
 #include <string.h>
 
 #define DRJSON_VERSION_MAJOR 3
-#define DRJSON_VERSION_MINOR 0
+#define DRJSON_VERSION_MINOR 1
 #define DRJSON_VERSION_MICRO 0
-#define DRJSON_VERSION "3.0.0"
+#define DRJSON_VERSION "3.1.0"
 
 #ifndef drj_memcpy
 #if !defined(__GNUC__) || defined(__IMPORTC__)
@@ -411,7 +411,7 @@ DRJSON_API
 DrJsonValue
 drjson_parse(DrJsonParseContext* ctx, unsigned flags);
 
-// If an error is returned, use ths to get the line and column.
+// If an error is returned, use this to get the line and column.
 DRJSON_API
 void
 drjson_get_line_column(const DrJsonParseContext* ctx, size_t* line, size_t* column);
@@ -468,6 +468,11 @@ drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue array, size_t idx);
 DRJSON_API
 int // 0 on success
 drjson_array_insert_item(const DrJsonContext* ctx, DrJsonValue array, size_t idx, DrJsonValue item);
+
+// overwrites an existing item. Errors on out of bounds.
+DRJSON_API
+int // 0 on success
+drjson_array_set_by_index(const DrJsonContext* ctx, DrJsonValue array, int64_t idx, DrJsonValue value);
 
 //------------------------------------------------------------
 

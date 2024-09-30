@@ -56,6 +56,29 @@ drjson_uint64_to_ascii(char* buff, uint64_t value){
 
 static inline
 size_t
+drjson_uint64_to_hex(char* buff, uint64_t value){
+    uint8_t* bytes = (uint8_t*)&value;
+#define HEX "0123456789abcdef"
+    char* p = buff;
+    *p++ = '0';
+    *p++ = 'x';
+    _Bool non_zero = 0;
+    for(size_t i = 7; i--;){
+        uint8_t byte = bytes[i];
+        if(!byte && !non_zero) continue;
+        uint8_t bottom = byte & 0xf;
+        uint8_t top = (byte & 0xf0)>>4;
+        *p++ = HEX[top];
+        *p++ = HEX[bottom];
+        non_zero = 1;
+    }
+    if(!non_zero)
+        *p++ = '0';
+    return p - buff;
+}
+
+static inline
+size_t
 drjson_int64_to_ascii(char* buff, int64_t value){
     if(value == INT64_MIN){
         drj_memcpy(buff, "-9223372036854775808", sizeof("-9223372036854775808")-1);

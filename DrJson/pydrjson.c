@@ -1095,26 +1095,46 @@ DrjVal_ass_subscript(PyObject* s, PyObject* key, PyObject* v){
         }
         return 0;
     }
-    if(self->value.kind != DRJSON_OBJECT){
+    if(self->value.kind == DRJSON_ARRAY){
+        if(!PyLong_Check(key)){
+            PyErr_SetString(PyExc_TypeError, "__setitem__ with this type unsupported");
+            return -1;
+        }
+        DrJsonValue val = python_to_drj(&self->ctx->ctx, v, 0);
+        if(val.kind == DRJSON_ERROR){
+            exception_from_error(val);
+            return -1;
+        }
+        long long idx = PyLong_AsLongLong(key);
+        int err = drjson_array_set_by_index(&self->ctx->ctx, self->value, idx, val);
+        if(err){
+            PyErr_SetString(PyExc_Exception, "error when setting (oom?)");
+            return -1;
+        }
+        return 0;
+    }
+    else if(self->value.kind == DRJSON_OBJECT){
+        if(!PyUnicode_Check(key)){
+            PyErr_SetString(PyExc_TypeError, "__setitem__ with this type unsupported");
+            return -1;
+        }
+        DrJsonValue val = python_to_drj(&self->ctx->ctx, v, 0);
+        if(val.kind == DRJSON_ERROR){
+            exception_from_error(val);
+            return -1;
+        }
+        StringView sv = pystring_borrow_stringview(key);
+        int err = drjson_object_set_item_copy_key(&self->ctx->ctx, self->value, sv.text, sv.length, val);
+        if(err){
+            PyErr_SetString(PyExc_Exception, "error when setting (oom?)");
+            return -1;
+        }
+        return 0;
+    }
+    else{
         PyErr_SetString(PyExc_TypeError, "__setitem__ with this type unsupported");
         return -1;
     }
-    if(!PyUnicode_Check(key)){
-        PyErr_SetString(PyExc_TypeError, "__setitem__ with this type unsupported");
-        return -1;
-    }
-    DrJsonValue val = python_to_drj(&self->ctx->ctx, v, 0);
-    if(val.kind == DRJSON_ERROR){
-        exception_from_error(val);
-        return -1;
-    }
-    StringView sv = pystring_borrow_stringview(key);
-    int err = drjson_object_set_item_copy_key(&self->ctx->ctx, self->value, sv.text, sv.length, val);
-    if(err){
-        PyErr_SetString(PyExc_Exception, "error when setting (oom?)");
-        return -1;
-    }
-    return 0;
 }
 
 static

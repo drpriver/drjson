@@ -1599,6 +1599,19 @@ drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx){
     }
 }
 
+DRJSON_API
+int
+drjson_array_set_by_index(const DrJsonContext* ctx, DrJsonValue a, int64_t idx, DrJsonValue value){
+    if(a.kind != DRJSON_ARRAY) return 1;
+    DrJsonArray* adata = ctx->arrays.data;
+    DrJsonArray* array = &adata[a.array_idx];
+    if(idx < 0) idx += array->count;
+    if(idx < 0) return 1;
+    if(idx >= array->count) return 1;
+    array->array_items[idx] = value;
+    return 0;
+}
+
 typedef struct DrJsonMemBuff DrJsonMemBuff;
 struct DrJsonMemBuff {
     char* begin;
@@ -2358,29 +2371,6 @@ drjson_get_line_column(const DrJsonParseContext* ctx, size_t* line, size_t* colu
     }
     *line = lin;
     *column = col;
-}
-
-#undef drjson_kind
-#undef drjson_error_code
-#undef drjson_error_mess
-#undef drjson_slen
-
-// getters for langs that don't support bitfields
-DRJSON_API
-int
-drjson_kind(DrJsonValue v){
-    return v.kind;
-}
-DRJSON_API
-int
-drjson_error_code(DrJsonValue v){
-    return v.error_code;
-}
-
-DRJSON_API
-const char*
-drjson_error_mess(DrJsonValue v){
-    return v.err_mess;
 }
 
 DRJSON_API
