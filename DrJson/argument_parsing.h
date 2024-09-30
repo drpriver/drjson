@@ -1,5 +1,5 @@
 //
-// Copyright © 2021-2022, David Priver
+// Copyright © 2021-2024, David Priver <david@davidpriver.com>
 //
 #ifndef ARGUMENT_PARSING_H
 #define ARGUMENT_PARSING_H

@@ -1,5 +1,5 @@
 //
-// Copyright © 2021-2022, David Priver
+// Copyright © 2021-2024, David Priver <david@davidpriver.com>
 //
 #ifndef TESTING_H
 #define TESTING_H
@@ -22,9 +22,11 @@
 
 #ifndef force_inline
 #if defined(__GNUC__) || defined(__clang__)
-#define force_inline __attribute__((always_inline))
+#define force_inline static inline __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define force_inline static inline __forceinline
 #else
-#define force_inline
+#define force_inline static inline
 #endif
 #endif
 
@@ -186,7 +188,7 @@ TestPrintf(const char* fmt, ...){
     struct{int foo;}: 0)(__FILE__, __func__, __LINE__, str, val)
 
 #define TestPrintImpl_(suffix, type, fmt, ...) \
-    static inline force_inline void \
+    force_inline void \
     TestPrintImpl_##suffix(const char* file, const char* func, int line, const char* str, type x){ \
         TestPrintf("%s%s:%s:%d%s %s = " fmt "\n",\
                 _test_color_gray, file, func, line, _test_color_reset, str, __VA_ARGS__); \

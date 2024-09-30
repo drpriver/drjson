@@ -1,5 +1,5 @@
 //
-// Copyright © 2022, David Priver
+// Copyright © 2022-2024, David Priver <david@davidpriver.com>
 //
 #ifndef DRJSON_C
 #define DRJSON_C
@@ -51,6 +51,16 @@ typedef long long ssize_t;
 #endif
 #ifndef _Null_unspecified
 #define _Null_unspecified
+#endif
+#endif
+
+#ifndef force_inline
+#if defined(__GNUC__) || defined(__clang__)
+#define force_inline static inline __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define force_inline static inline __forceinline
+#else
+#define force_inline static inline
 #endif
 #endif
 
@@ -125,14 +135,12 @@ struct DrJsonArray {
     uint32_t capacity;
 };
 
-static inline
 force_inline
 uint32_t
 drj_atom_get_hash(DrJsonAtom a){
     return (uint32_t)(a.bits >> 32u);
 }
 
-static inline
 force_inline
 uint32_t
 drj_atom_get_idx(DrJsonAtom a){
@@ -190,7 +198,6 @@ drj_get_atom_str(const DrjAtomTable* table, DrJsonAtom a){
 }
 
 
-static inline
 force_inline
 uint32_t
 drj_hash_str(const char* key, size_t keylen){
@@ -415,7 +422,6 @@ drjson_size_for_object_of_length(size_t len){
     return len * sizeof(DrJsonObjectPair) + 2*len*sizeof(DrJsonHashIndex);
 }
 
-static inline
 force_inline
 void
 drj_get_obj_ptrs(void* p, size_t cap, DrJsonHashIndex*_Nullable*_Nonnull hi, DrJsonObjectPair*_Nullable*_Nonnull pa){
@@ -423,7 +429,6 @@ drj_get_obj_ptrs(void* p, size_t cap, DrJsonHashIndex*_Nullable*_Nonnull hi, DrJ
     *hi = (DrJsonHashIndex*)(((char*)p)+cap*sizeof(DrJsonObjectPair));
 }
 
-static inline
 force_inline
 DrJsonObjectPair*
 drj_obj_get_pairs(void* p, size_t cap){
@@ -431,7 +436,6 @@ drj_obj_get_pairs(void* p, size_t cap){
     return p;
 }
 
-static inline
 force_inline
 DrJsonHashIndex*
 drj_obj_get_idxes(void* p, size_t cap){
@@ -441,7 +445,6 @@ drj_obj_get_idxes(void* p, size_t cap){
 
 
 
-static inline
 force_inline
 int
 drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJsonValue item);
@@ -571,8 +574,6 @@ drjson_stdc_allocator(void){
 
 // NOTE: we consider commas and colons to be whitespace ;)
 force_inline
-static inline
-// __attribute__((__noinline__))
 void
 skip_whitespace(DrJsonParseContext* ctx){
     const char* cursor = ctx->cursor;
@@ -630,7 +631,6 @@ skip_whitespace(DrJsonParseContext* ctx){
 }
 
 force_inline
-static inline
 _Bool
 drj_match(DrJsonParseContext* ctx, char c){
     if(ctx->cursor == ctx->end)
@@ -866,7 +866,7 @@ parse_number(DrJsonParseContext* ctx){
     return result;
 }
 
-static inline force_inline
+force_inline
 unsigned
 hexchar_to_value(char c){
     unsigned value = (uint8_t)c;
@@ -1189,7 +1189,6 @@ drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx){
 }
 
 
-static inline
 force_inline
 int
 drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJsonValue item){

@@ -1,5 +1,5 @@
 //
-// Copyright © 2021-2022, David Priver
+// Copyright © 2021-2024, David Priver <david@davidpriver.com>
 //
 #ifndef ARENA_ALLOCATOR_H
 #define ARENA_ALLOCATOR_H
@@ -21,11 +21,11 @@
 
 #ifndef force_inline
 #if defined(__GNUC__) || defined(__clang__)
-#define force_inline __attribute__((always_inline))
+#define force_inline static inline __attribute__((always_inline))
 #elif defined(_MSC_VER)
-#define force_inline __forceinline
+#define force_inline static inline __forceinline
 #else
-#define force_inline
+#define force_inline static inline
 #endif
 #endif
 
@@ -82,7 +82,6 @@ struct Arena {
 //
 // Rounds up to the nearest power of 8.
 //
-static inline
 force_inline
 size_t
 ArenaAllocator_round_size_up(size_t size){

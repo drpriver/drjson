@@ -1,5 +1,5 @@
 //
-// Copyright © 2022, David Priver
+// Copyright © 2022-2024, David Priver <david@davidpriver.com>
 //
 #ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -18,9 +18,18 @@
 #include "term_util.h"
 #include "get_input.h"
 
+#ifndef force_inline
+#if defined(__GNUC__) || defined(__clang__)
+#define force_inline static inline __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define force_inline static inline __forceinline
+#else
+#define force_inline static inline
+#endif
+#endif
+
 // Chose to use libc's FILE api instead of OS APIs for portability.
 
-static inline
 force_inline
 warn_unused
 long long

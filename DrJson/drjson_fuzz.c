@@ -1,5 +1,5 @@
 //
-// Copyright © 2022, David Priver
+// Copyright © 2022-2024, David Priver <david@davidpriver.com>
 //
 #define DRJSON_API static inline
 #include "drjson.c"

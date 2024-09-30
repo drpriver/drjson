@@ -1,5 +1,5 @@
 //
-// Copyright © 2021-2022, David Priver
+// Copyright © 2021-2024, David Priver <david@davidpriver.com>
 //
 #ifndef LONG_STRING_H
 #define LONG_STRING_H
@@ -22,11 +22,11 @@
 
 #ifndef force_inline
 #if defined(__GNUC__) || defined(__clang__)
-#define force_inline __attribute__((always_inline))
+#define force_inline static inline __attribute__((always_inline))
 #elif defined(_MSC_VER)
-#define force_inline __forceinline
+#define force_inline static inline __forceinline
 #else
-#define force_inline
+#define force_inline static inline
 #endif
 #endif
 
@@ -64,14 +64,12 @@ struct StringViewUtf16 {
 
 #endif
 
-static inline
 force_inline
 StringView
 LS_to_SV(LongString ls){
     return (StringView){.length=ls.length, .text=ls.text};
 }
 
-static inline
 force_inline
 StringView
 cstr_to_SV(const char* cstr){
@@ -106,7 +104,6 @@ LS_equals(const LongString a, const LongString b){
 #define SVINIT(literal) {.length=sizeof("" literal)-1, .text="" literal}
 #define LSINIT(literal) {.length=sizeof("" literal)-1, .text="" literal}
 #define SV16INIT(literal) {.length=sizeof(u"" literal)/2-1, .text=u"" literal}
-static inline
 force_inline
 bool
 SV_equals(const StringView a, const StringView b){
@@ -147,7 +144,6 @@ LS_SV_equals(const LongString ls, const StringView sv){
 
 // Maybe it's UB (idk) but this works for LongStrings as well.
 // Although maybe I should just use strcmp for those.
-static inline
 force_inline
 int
 StringView_cmp(const void* a, const void* b){
