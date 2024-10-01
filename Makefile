@@ -4,7 +4,7 @@ Fuzz: ; mkdir $@
 DEBUG=-g
 OPT=-O3
 
-DRJSONVERSION=3.1.0
+DRJSONVERSION=3.2.0
 
 DEPFILES:= $(wildcard Deps/*.dep)
 include $(DEPFILES)
