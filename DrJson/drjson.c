@@ -124,14 +124,16 @@ struct DrJsonHashIndex {
 typedef struct DrJsonObject DrJsonObject;
 struct DrJsonObject {
     void*_Nullable object_items;
-    uint32_t count;
+    uint32_t count:31;
+    uint32_t marked:1;
     uint32_t capacity;
 };
 
 typedef struct DrJsonArray DrJsonArray;
 struct DrJsonArray {
     DrJsonValue*_Nullable array_items;
-    uint32_t count;
+    uint32_t count:31;
+    uint32_t marked:1;
     uint32_t capacity;
 };
 
@@ -348,11 +350,13 @@ struct DrJsonContext {
         DrJsonObject* data;
         size_t count;
         size_t capacity;
+        size_t free_object;
     } objects;
     struct {
         DrJsonArray* data;
         size_t count;
         size_t capacity;
+        size_t free_array;
     } arrays;
 };
 
@@ -452,6 +456,13 @@ drjson_object_set_item(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom, DrJso
 static inline
 ssize_t
 alloc_obj(DrJsonContext* ctx){
+    if(ctx->objects.free_object){
+        ssize_t result = ctx->objects.free_object;
+        DrJsonObject* p = &ctx->objects.data[result];
+        ctx->objects.free_object = p->count;
+        *p = (DrJsonObject){0};
+        return result;
+    }
     if(ctx->objects.capacity <= ctx->objects.count){
         size_t new_cap = ctx->objects.capacity? ctx->objects.capacity*2:8;
         DrJsonObject* p = ctx->allocator.realloc(ctx->allocator.user_pointer, ctx->objects.data, sizeof(DrJsonObject)*ctx->objects.capacity, sizeof(DrJsonObject)*new_cap);
@@ -469,6 +480,13 @@ alloc_obj(DrJsonContext* ctx){
 static inline
 ssize_t
 alloc_array(DrJsonContext* ctx){
+    if(ctx->arrays.free_array){
+        ssize_t result = ctx->arrays.free_array;
+        DrJsonArray* p = &ctx->arrays.data[result];
+        ctx->arrays.free_array = p->count;
+        *p = (DrJsonArray){0};
+        return result;
+    }
     if(ctx->arrays.capacity <= ctx->arrays.count){
         size_t new_cap = ctx->arrays.capacity? ctx->arrays.capacity*2:8;
         DrJsonArray* p = ctx->arrays.data? ctx->allocator.realloc(ctx->allocator.user_pointer, ctx->arrays.data, sizeof(DrJsonArray)*ctx->arrays.capacity, sizeof(DrJsonArray)*new_cap) : ctx->allocator.alloc(ctx->allocator.user_pointer, sizeof(DrJsonArray)*new_cap);
@@ -1689,7 +1707,7 @@ static
 int
 wrapped_write(void* restrict ud, const void* restrict data, size_t length){
     int fd = (int)(intptr_t)ud;
-    return write(fd, data, length) != length;
+    return write(fd, data, length) != (ssize_t)length;
 }
 DRJSON_API
 int
@@ -2394,7 +2412,7 @@ drjson_ctx_free_all(DrJsonContext* ctx){
     for(size_t i = 0; i < ctx->objects.count; i++){
         DrJsonObject* odata = ctx->objects.data;
         DrJsonObject* o = &odata[i];
-        if(o->object_items)
+        if(o->capacity)
             ctx->allocator.free(ctx->allocator.user_pointer, o->object_items, drjson_size_for_object_of_length(o->capacity));
     }
     // Then the objects array
@@ -2404,7 +2422,7 @@ drjson_ctx_free_all(DrJsonContext* ctx){
     for(size_t i = 0; i < ctx->arrays.count; i++){
         DrJsonArray* adata = ctx->arrays.data;
         DrJsonArray* a = &adata[i];
-        if(a->array_items)
+        if(a->capacity)
             ctx->allocator.free(ctx->allocator.user_pointer, a->array_items,a->capacity*sizeof *a->array_items);
     }
     // Free arrays array
@@ -2513,6 +2531,91 @@ drjson_kind_name(DrJsonKind kind, size_t*_Nullable length){
         kind = DRJSON_ERROR;
     if(length) *length = DrJsonKindNameLengths[kind];
     return DrJsonKindNames[kind];
+}
+
+static
+void
+drj_mark(DrJsonContext* ctx, DrJsonValue v){
+    switch(v.kind){
+        case DRJSON_OBJECT:
+        case DRJSON_OBJECT_KEYS:
+        case DRJSON_OBJECT_ITEMS:
+        case DRJSON_OBJECT_VALUES:{
+            DrJsonObject* odata = ctx->objects.data;
+            DrJsonObject* object = &odata[v.object_idx];
+            if(object->marked) return;
+            object->marked = 1;
+            DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
+            for(size_t i = 0; i < object->count; i++){
+                drj_mark(ctx, pairs[i].value);
+            }
+        }break;
+
+        case DRJSON_ARRAY:
+        case DRJSON_ARRAY_VIEW:{
+            DrJsonArray* adata = ctx->arrays.data;
+            DrJsonArray* array = &adata[v.array_idx];
+            if(array->marked) return;
+            array->marked = 1;
+            for(size_t i = 0; i < array->count; i++){
+                drj_mark(ctx, array->array_items[i]);
+            }
+        }break;
+        default:
+            return;
+    }
+}
+static
+void
+drj_sweep(DrJsonContext* ctx){
+    {
+        DrJsonObject* odata = ctx->objects.data;
+        for(size_t i = 0; i < ctx->objects.count; i++){
+            DrJsonObject* o = &odata[i];
+            if(o->marked){
+                o->marked = 0;
+                continue;
+            }
+
+            if(o->capacity){
+                ctx->allocator.free(ctx->allocator.user_pointer, o->object_items, drjson_size_for_object_of_length(o->capacity));
+                o->capacity = 0;
+                if(i <= UINT32_MAX/2 && i){
+                    o->count = ctx->objects.free_object;
+                    ctx->objects.free_object = i;
+                }
+            }
+        }
+    }
+    {
+        DrJsonArray* adata = ctx->arrays.data;
+        for(size_t i = 0; i < ctx->arrays.count; i++){
+            DrJsonArray* a = &adata[i];
+            if(a->marked){
+                a->marked = 0;
+                continue;
+            }
+
+            if(a->capacity){
+                ctx->allocator.free(ctx->allocator.user_pointer, a->array_items, a->capacity*sizeof *a->array_items);
+                a->capacity = 0;
+                if(i <= UINT32_MAX/2 && i){
+                    a->count = ctx->arrays.free_array;
+                    ctx->arrays.free_array = i;
+                }
+            }
+        }
+    }
+}
+
+DRJSON_API
+int
+drjson_gc(DrJsonContext* ctx, const DrJsonValue* roots, size_t rootcount){
+    for(size_t i = 0; i < rootcount; i++){
+        drj_mark(ctx, roots[i]);
+    }
+    drj_sweep(ctx);
+    return 0;
 }
 
 

@@ -597,6 +597,14 @@ int
 drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
 #endif
 
+//
+// Implements mark+sweep gc for objects and arrays in the ctx.
+// Note that strings are not gc'd.
+//
+DRJSON_API
+int
+drjson_gc(DrJsonContext* ctx, const DrJsonValue* roots, size_t rootcount);
+
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
