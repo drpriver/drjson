@@ -22,6 +22,7 @@ typedef long long ssize_t;
 #include <windows.h>
 #endif
 
+#include "../compiler_warnings.h"
 #ifndef DRJSON_API
 
 #ifndef DRJSON_STATIC_LIB
