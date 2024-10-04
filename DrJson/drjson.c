@@ -1111,7 +1111,7 @@ drjson_array_push_item(const DrJsonContext* ctx, DrJsonValue a, DrJsonValue item
     if(a.kind != DRJSON_ARRAY) return 1;
     DrJsonArray* adata = ctx->arrays.data;
     DrJsonArray* array = &adata[a.array_idx];
-    if(array->capacity < array->count+1){
+    if(array->capacity < array->count+1u){
         const DrJsonAllocator* allocator = &ctx->allocator;
         size_t old_cap = array->capacity;
         enum {ARRAY_MAX = 0x1fffffff};
@@ -1135,7 +1135,7 @@ drjson_array_insert_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx, Dr
     DrJsonArray* adata = ctx->arrays.data;
     DrJsonArray* array = &adata[a.array_idx];
     if(idx >= array->count) return 1;
-    if(array->capacity < array->count+1){
+    if(array->capacity < array->count+1u){
         const DrJsonAllocator* allocator = &ctx->allocator;
         size_t old_cap = array->capacity;
         enum {ARRAY_MAX = 0x1fffffff};
@@ -1198,7 +1198,7 @@ drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx){
     if(idx >= array->count){
         return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "Index out of bounds.");
     }
-    if(idx == array->count-1)
+    if(idx == array->count-1u)
         return drjson_array_pop_item(ctx, a);
     size_t nmove = array->count - idx-1;
     DrJsonValue result= array->array_items[idx];
@@ -1915,7 +1915,7 @@ drjson_print_value_inner(const DrJsonContext* ctx, DrJsonBuffered* restrict buff
             const DrJsonArray* array = &adata[v.array_idx];
             for(size_t i = 0; i < array->count; i++){
                 drjson_print_value_inner(ctx, buffer, array->array_items[i]);
-                if(i != array->count-1)
+                if(i != array->count-1u)
                     drjson_buff_putc(buffer, ',');
             }
             drjson_buff_putc(buffer, ']');
@@ -2055,7 +2055,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
                     for(int i = 0; i < indent+2; i++)
                         drjson_buff_putc(buffer, ' ');
                 drjson_pretty_print_value_inner(ctx, buffer, array->array_items[i], indent+2);
-                if(i != array->count-1)
+                if(i != array->count-1u)
                     drjson_buff_putc(buffer, ',');
                 if(newlined)
                     drjson_buff_putc(buffer, '\n');
