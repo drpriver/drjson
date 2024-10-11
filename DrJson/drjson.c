@@ -730,6 +730,8 @@ parse_string(DrJsonParseContext* ctx){
                 case '-':
                 case '.':
                 case '/':
+                case '+':
+                case '*':
                     continue;
             }
         }
@@ -1456,6 +1458,8 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
                 case '/':
                 case '_':
                 case '-':
+                case '+':
+                case '*':
                     continue;
                 default:
                     RETERROR(DRJSON_ERROR_INVALID_CHAR, "Invalid character in identifier query");
