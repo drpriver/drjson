@@ -1,5 +1,5 @@
-#ifndef COMPILER_WARNINGS_H
-#define COMPILER_WARNINGS_H
+#ifndef DRJSON_COMPILER_WARNINGS_H
+#define DRJSON_COMPILER_WARNINGS_H
 
 #if defined(__GNUC__) || defined(__clang__)
 // #pragma GCC diagnostic error "-Wpedantic"
