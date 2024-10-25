@@ -341,6 +341,30 @@ DRJSON_API
 DrJsonValue
 drjson_make_array(DrJsonContext* ctx);
 
+//
+// drjson_intern_value
+// -------------------
+// Returns a read-only copy of the value or an error if it fails to intern it.
+// Note that this is only needed for objects and arrays.
+// All values referenced from the value must also be read-only.
+//
+// For types other than objects and arrays, the original value is instead
+// returned.
+//
+// Args:
+//  ctx:
+//  val:
+//  consume: If true, the given value is either frozen or freed on success.
+//
+// Returns:
+//  The new interned value.
+//  If consume is true and the returned value is not an error, don't refer to
+//  the given value anymore. Only refer to the returned value.
+//  This is somewhat like realloc.
+//
+DRJSON_API
+DrJsonValue
+drjson_intern_value(DrJsonContext* ctx, DrJsonValue val, _Bool consume);
 
 // Calls drjson_atomize. Make a no_copy atom and then call
 // `drjson_atom_to_value` to avoid dup'ing the string.
@@ -399,12 +423,14 @@ struct DrJsonParseContext {
     int depth; // initialize to 0
     DrJsonContext* ctx; //
     _Bool _copy_strings;
+    _Bool _read_only_objects;
 };
 
 enum {
     DRJSON_PARSE_FLAG_NONE = 0x0,
     DRJSON_PARSE_FLAG_BRACELESS_OBJECT = 0x1,
     DRJSON_PARSE_FLAG_NO_COPY_STRINGS = 0x2,
+    DRJSON_PARSE_FLAG_INTERN_OBJECTS = 0x4,
 };
 
 DRJSON_API
@@ -604,6 +630,7 @@ drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* re
 DRJSON_API
 int
 drjson_gc(DrJsonContext* ctx, const DrJsonValue* roots, size_t rootcount);
+
 
 
 #ifdef __clang__

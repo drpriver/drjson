@@ -137,6 +137,8 @@ main(int argc, const char* const* argv){
     _Bool braceless = 0;
     _Bool pretty = 0;
     _Bool interactive = 0;
+    _Bool intern = 0;
+    _Bool gc = 0;
     int indent = 0;
     ArgToParse kw_args[] = {
         {
@@ -175,13 +177,32 @@ main(int argc, const char* const* argv){
             .help = "Enter a cli prompt",
             .dest = ARGDEST(&interactive),
         },
+        {
+            .name = SV("--intern-objects"),
+            .altname1 = SV("--intern"),
+            .help = "Reuse duplicate arrays and objects while parsing. Slower but can use less memory. Sometimes.",
+            .dest = ARGDEST(&intern),
+            .hidden = 1,
+        },
+        {
+            .name = SV("--gc"),
+            .help = "Run the gc on exit. This is for testing.",
+            .dest = ARGDEST(&gc),
+            .hidden = 1,
+        },
     };
-    enum {HELP=0, VERSION, FISH};
+    enum {HELP=0, HIDDEN_HELP, VERSION, FISH};
     ArgToParse early_args[] = {
         [HELP] = {
             .name = SV("-h"),
             .altname1 = SV("--help"),
             .help = "Print this help and exit.",
+        },
+        [HIDDEN_HELP] = {
+            .name = SV("-H"),
+            .altname1 = SV("--hidden-help"),
+            .help = "Print this help and exit.",
+            .hidden = 1,
         },
         [VERSION] = {
             .name = SV("-v"),
@@ -209,6 +230,9 @@ main(int argc, const char* const* argv){
     switch(check_for_early_out_args(&parser, &args)){
         case HELP:
             print_argparse_help(&parser, columns);
+            return 0;
+        case HIDDEN_HELP:
+            print_argparse_hidden_help(&parser, columns);
             return 0;
         case VERSION:
             puts("drjson v" DRJSON_VERSION);
@@ -250,7 +274,9 @@ main(int argc, const char* const* argv){
         .end = jsonstr.text+jsonstr.length,
         .depth = 0,
     };
-    unsigned flags = braceless?DRJSON_PARSE_FLAG_BRACELESS_OBJECT:DRJSON_PARSE_FLAG_NONE;
+    unsigned flags = DRJSON_PARSE_FLAG_NONE;
+    if(braceless) flags |= DRJSON_PARSE_FLAG_BRACELESS_OBJECT;
+    if(intern) flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
     flags |= DRJSON_PARSE_FLAG_NO_COPY_STRINGS;
     DrJsonValue document = drjson_parse(&ctx, flags);
     if(document.kind == DRJSON_ERROR){
@@ -398,6 +424,7 @@ main(int argc, const char* const* argv){
     }
     fflush(outfp);
     fclose(outfp);
+    if(gc) drjson_gc(jctx, (DrJsonValue[]){}, 0);
     return err;
 }
 
@@ -444,10 +471,10 @@ drj_completer(GetInputCtx* ctx, size_t original_curr_pos, size_t original_used_l
             if(!SV_startswith(sv, buffview)) continue;
             key_svs[n_strs++] = sv;
         }
-        if(n_strs < arrlen(key_svs) && SV_startswith(SV("@keys"), buffview)){
+        if(n_strs < (int)arrlen(key_svs) && SV_startswith(SV("@keys"), buffview)){
             key_svs[n_strs++] = SV("@keys");
         }
-        if(n_strs < arrlen(key_svs) && SV_startswith(SV("@length"), buffview)){
+        if(n_strs < (int)arrlen(key_svs) && SV_startswith(SV("@length"), buffview)){
             key_svs[n_strs++] = SV("@length");
         }
         qsort(key_svs, n_strs, sizeof key_svs[0], StringView_cmp);

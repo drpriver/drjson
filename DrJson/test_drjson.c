@@ -18,6 +18,8 @@
 #pragma clang assume_nonnull begin
 #endif
 static TestFunc TestSimpleParsing;
+static TestFunc TestSimpleParsing2;
+static TestFunc TestIntern;
 static TestFunc TestDoubleParsing;
 static TestFunc TestSerialization;
 static TestFunc TestPrettyPrint;
@@ -26,6 +28,8 @@ static TestFunc TestObject;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSimpleParsing);
+    RegisterTest(TestSimpleParsing2);
+    RegisterTest(TestIntern);
     RegisterTest(TestDoubleParsing);
     RegisterTest(TestSerialization);
     RegisterTest(TestPrettyPrint);
@@ -263,6 +267,136 @@ TestFunction(TestSimpleParsing){
     drjson_gc(ctx, (DrJsonValue[]){}, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestSimpleParsing2){
+    TESTBEGIN();
+    const char* example = "[hello world]";
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+    DrJsonParseContext pctx = {
+        .begin = example,
+        .cursor = example,
+        .end = example + strlen(example),
+        .ctx = ctx,
+    };
+    DrJsonValue v = drjson_parse(&pctx, DRJSON_PARSE_FLAG_NO_COPY_STRINGS);
+    TestAssertNotEqual((int)v.kind, DRJSON_ERROR);
+    TestAssertEquals((int)v.kind, DRJSON_ARRAY);
+
+    DrJsonValue q = drjson_query(ctx, v, "[1]", strlen("[1]"));
+    TestAssertNotEqual((int)q.kind, DRJSON_ERROR);
+    TestAssertEquals((int)q.kind, DRJSON_STRING);
+    const char* string = ""; size_t len = 0;
+    int err = drjson_get_str_and_len(ctx, q, &string, &len);
+    TestAssertFalse(err);
+    TestAssertEquals(len, sizeof("world")-1);
+    TestAssert(memcmp(string, "world", sizeof("world")-1)==0);
+
+    DrJsonValue val = drjson_get_by_index(ctx, v, 1);
+    TestAssertNotEqual((int)val.kind, DRJSON_ERROR);
+    TestAssert(drjson_eq(q, val));
+
+    drjson_gc(ctx, (DrJsonValue[]){q, val}, 2);
+    TestAssert(drjson_eq(q, val));
+    drjson_gc(ctx, (DrJsonValue[]){}, 0);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+TestFunction(TestIntern){
+    TESTBEGIN();
+    {
+        const char* example = "[{hello world} {hello world} {goodbye world} {hello world} {goodbye world} {hello world}]";
+        DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+        DrJsonParseContext pctx = {
+            .begin = example,
+            .cursor = example,
+            .end = example + strlen(example),
+            .ctx = ctx,
+        };
+        DrJsonValue v = drjson_parse(&pctx, DRJSON_PARSE_FLAG_NO_COPY_STRINGS|DRJSON_PARSE_FLAG_INTERN_OBJECTS);
+        TestAssertNotEqual((int)v.kind, DRJSON_ERROR);
+        TestAssertEquals((int)v.kind, DRJSON_ARRAY);
+
+        TestAssertEquals(drjson_len(ctx, v), 6);
+        DrJsonValue vs[6];
+        for(size_t i = 0; i < arrlen(vs); i++){
+            vs[i] = drjson_get_by_index(ctx, v, i);
+            TestAssertNotEqual((int)vs[i].kind, DRJSON_ERROR);
+        }
+        TestExpectTrue(drjson_eq(vs[0], vs[1]));
+        TestExpectTrue(drjson_eq(vs[0], vs[3]));
+        TestExpectTrue(drjson_eq(vs[0], vs[5]));
+        TestExpectTrue(drjson_eq(vs[2], vs[4]));
+        TestExpectFalse(drjson_eq(vs[0], vs[2]));
+
+        drjson_gc(ctx, (DrJsonValue[]){vs[0], vs[1]}, 2);
+        TestExpectTrue(drjson_eq(vs[0], vs[1]));
+        drjson_gc(ctx, (DrJsonValue[]){}, 0);
+        drjson_ctx_free_all(ctx);
+        assert_all_freed();
+    }
+    {
+        const char* example = "["
+            "[{hello world} {hello world} {goodbye world} {hello world} {goodbye world} {hello world}]"
+            "[{hello world} {hello world} {goodbye world} {hello world} {goodbye world} {hello world}]"
+            "[{hello world} {hello world} {goodbye world} {hello world} {goodbye world} {hello world}]"
+            "]"
+            ;
+        DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+        DrJsonParseContext pctx = {
+            .begin = example,
+            .cursor = example,
+            .end = example + strlen(example),
+            .ctx = ctx,
+        };
+        DrJsonValue v = drjson_parse(&pctx, DRJSON_PARSE_FLAG_NO_COPY_STRINGS|DRJSON_PARSE_FLAG_INTERN_OBJECTS);
+        TestAssertNotEqual((int)v.kind, DRJSON_ERROR);
+        TestAssertEquals((int)v.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, v), 3);
+        DrJsonValue outer[3] = {0};
+        DrJsonValue inner[3][6] = {0};
+        for(size_t i = 0; i < 3; i++){
+            outer[i] = drjson_get_by_index(ctx, v, i);
+            TestAssertNotEqual((int)outer[i].kind, DRJSON_ERROR);
+            TestAssertEquals((int)outer[i].kind, DRJSON_ARRAY);
+            TestAssertEquals(drjson_len(ctx, outer[i]), 6);
+            for(size_t j = 0; j < 6; j++){
+                inner[i][j] = drjson_get_by_index(ctx, outer[i], j);
+                TestAssertNotEqual((int)inner[i][j].kind, DRJSON_ERROR);
+                TestAssertEquals((int)inner[i][j].kind, DRJSON_OBJECT);
+            }
+        }
+        TestExpectTrue(drjson_eq(outer[0], outer[1]));
+        TestExpectTrue(drjson_eq(outer[0], outer[2]));
+        for(size_t i = 0; i < 3; i++){
+            TestExpectTrue(drjson_eq(inner[i][0], inner[i][1]));
+            TestExpectTrue(drjson_eq(inner[i][0], inner[i][3]));
+            TestExpectTrue(drjson_eq(inner[i][0], inner[i][5]));
+            TestExpectTrue(drjson_eq(inner[i][2], inner[i][4]));
+            TestExpectFalse(drjson_eq(inner[i][0], inner[i][2]));
+        }
+        DrJsonValue o = drjson_make_object(ctx);
+        TestAssertEquals((int)o.kind, DRJSON_OBJECT);
+        DrJsonValue world = drjson_make_string(ctx, "world", 5);
+        TestAssertEquals((int)world.kind, DRJSON_STRING);
+        int e = drjson_object_set_item_no_copy_key(ctx, o, "hello", 5, world);
+        TestAssertFalse(e);
+        DrJsonValue o2 = drjson_intern_value(ctx, o, 0);
+        TestAssertEquals((int)o2.kind, DRJSON_OBJECT);
+        TestExpectFalse(drjson_eq(o, o2));
+        TestExpectTrue(drjson_eq(inner[0][0], o2));
+        o = drjson_intern_value(ctx, o, 1);
+        TestAssertEquals((int)o.kind, DRJSON_OBJECT);
+        TestExpectTrue(drjson_eq(o, o2));
+        TestExpectTrue(drjson_eq(inner[0][0], o));
+
+        drjson_gc(ctx, outer, 3);
+        drjson_gc(ctx, (DrJsonValue[]){}, 0);
+        drjson_ctx_free_all(ctx);
+        assert_all_freed();
+    }
     TESTEND();
 }
 

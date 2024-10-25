@@ -7,6 +7,12 @@
 #include <stddef.h>
 #include <string.h>
 
+#ifndef __clang__
+#ifndef _Null_unspecified
+#define _Null_unspecified
+#endif
+#endif
+
 #ifndef force_inline
 #if defined(__GNUC__) || defined(__clang__)
 #define force_inline static inline __attribute__((always_inline))
@@ -121,7 +127,7 @@ read_unaligned1(const void* p){
 
 static inline
 uint32_t
-hash_align1(const void* key, size_t len){
+hash_align1(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -136,7 +142,7 @@ hash_align1(const void* key, size_t len){
 }
 static inline
 uint32_t
-hash_align2(const void* key, size_t len){
+hash_align2(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -149,7 +155,7 @@ hash_align2(const void* key, size_t len){
 }
 static inline
 uint32_t
-hash_align4(const void* key, size_t len){
+hash_align4(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -160,7 +166,7 @@ hash_align4(const void* key, size_t len){
 }
 static inline
 uint32_t
-hash_align8(const void* key, size_t len){
+hash_align8(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -170,7 +176,7 @@ hash_align8(const void* key, size_t len){
 
 static inline
 uint32_t
-ascii_insensitive_hash_align1(const void* key, size_t len){
+ascii_insensitive_hash_align1(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -196,7 +202,7 @@ ascii_insensitive_hash_align1(const void* key, size_t len){
 
 static inline
 uint32_t
-hash_align1(const void* key, size_t len){
+hash_align1(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -211,7 +217,7 @@ hash_align1(const void* key, size_t len){
 }
 static inline
 uint32_t
-hash_align2(const void* key, size_t len){
+hash_align2(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -224,7 +230,7 @@ hash_align2(const void* key, size_t len){
 }
 static inline
 uint32_t
-hash_align4(const void* key, size_t len){
+hash_align4(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -235,7 +241,7 @@ hash_align4(const void* key, size_t len){
 }
 static inline
 uint32_t
-hash_align8(const void* key, size_t len){
+hash_align8(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -245,7 +251,7 @@ hash_align8(const void* key, size_t len){
 
 static inline
 uint32_t
-ascii_insensitive_hash_align1(const void* key, size_t len){
+ascii_insensitive_hash_align1(const void*_Null_unspecified key, size_t len){
     const unsigned char* k = key;
     uint32_t h = 0;
     for(;len >= 8; k+=8, len-=8)
@@ -271,7 +277,7 @@ murmur_32_scramble(uint32_t k) {
 }
 force_inline
 uint32_t
-hash_align1(const void* key_, size_t len){
+hash_align1(const void*_Null_unspecified key_, size_t len){
     const uint8_t* key = key_;
     uint32_t seed = 4253307714;
 	uint32_t h = seed;
@@ -302,23 +308,23 @@ hash_align1(const void* key_, size_t len){
 }
 force_inline
 uint32_t
-hash_align2(const void* key, size_t len){
+hash_align2(const void*_Null_unspecified key, size_t len){
     return hash_align1(key, len);
 }
 force_inline
 uint32_t
-hash_align4(const void* key, size_t len){
+hash_align4(const void*_Null_unspecified key, size_t len){
     return hash_align1(key, len);
 }
 force_inline
 uint32_t
-hash_align8(const void* key, size_t len){
+hash_align8(const void*_Null_unspecified key, size_t len){
     return hash_align1(key, len);
 }
 
 force_inline
 uint32_t
-ascii_insensitive_hash_align1(const void* key_, size_t len){
+ascii_insensitive_hash_align1(const void*_Null_unspecified key_, size_t len){
     const uint8_t* key = key_;
     uint32_t seed = 4253307714;
 	uint32_t h = seed;
