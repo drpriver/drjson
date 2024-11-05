@@ -531,10 +531,16 @@ alloc_obj(DrJsonContext* ctx){
             return -1;
         ctx->objects.data = p;
         ctx->objects.capacity = new_cap;
+        #ifdef DRJ_DEBUG
+        fprintf(stderr, "reallocing object array\n");
+        #endif
     }
     ssize_t result = ctx->objects.count++;
     DrJsonObject* odata = ctx->objects.data;
     odata[result] = (DrJsonObject){0};
+    #ifdef DRJ_DEBUG
+    fprintf(stderr, "allocated object %p (%zu)\n", (void*)&odata[result], (size_t)result);
+    #endif
     return result;
 }
 
@@ -2867,6 +2873,7 @@ drj_intern_array(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
                 idx++;
                 if(idx == new_cap*2) idx = 0;
             }
+            if(i != count) hi[count] = hi[i];
             idxes[idx] = (uint32_t)count;
             count++;
         }
@@ -2980,6 +2987,7 @@ drj_intern_object(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
                 idx++;
                 if(idx == new_cap*2) idx = 0;
             }
+            if(i != count) hi[count] = hi[i];
             idxes[idx] = (uint32_t)count;
             count++;
         }
