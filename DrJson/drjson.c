@@ -132,6 +132,8 @@ struct DrJsonHashIndex {
     uint32_t index;
 };
 
+// #define DRJ_DEBUG
+
 
 typedef struct DrJsonObject DrJsonObject;
 struct DrJsonObject {
@@ -140,6 +142,9 @@ struct DrJsonObject {
     uint32_t marked:1;
     uint32_t capacity:31;
     uint32_t read_only:1;
+#ifdef DRJ_DEBUG
+    _Bool freed:1;
+#endif
 };
 
 typedef struct DrJsonArray DrJsonArray;
@@ -149,6 +154,9 @@ struct DrJsonArray {
     uint32_t marked:1;
     uint32_t capacity:31;
     uint32_t read_only:1;
+#ifdef DRJ_DEBUG
+    _Bool freed:1;
+#endif
 };
 
 force_inline
@@ -511,6 +519,9 @@ alloc_obj(DrJsonContext* ctx){
         DrJsonObject* p = &ctx->objects.data[result];
         ctx->objects.free_object = p->count;
         *p = (DrJsonObject){0};
+        #ifdef DRJ_DEBUG
+        fprintf(stderr, "Recycling object %p (%zu)\n", (void*)p, (size_t)result);
+        #endif
         return result;
     }
     if(ctx->objects.capacity <= ctx->objects.count){
@@ -535,6 +546,9 @@ alloc_array(DrJsonContext* ctx){
         DrJsonArray* p = &ctx->arrays.data[result];
         ctx->arrays.free_array = p->count;
         *p = (DrJsonArray){0};
+        #ifdef DRJ_DEBUG
+        fprintf(stderr, "Recycling array %p (%zu)\n", (void*)p, (size_t)result);
+        #endif
         return result;
     }
     if(ctx->arrays.capacity <= ctx->arrays.count){
@@ -2607,6 +2621,9 @@ drjson_kind_name(DrJsonKind kind, size_t*_Nullable length){
 static
 void
 drj_mark(DrJsonContext* ctx, DrJsonValue v){
+#ifdef DRJ_DEBUG
+    fprintf(stderr, "mark\n");
+#endif
     switch(v.kind){
         case DRJSON_OBJECT:
         case DRJSON_OBJECT_KEYS:
@@ -2614,47 +2631,64 @@ drj_mark(DrJsonContext* ctx, DrJsonValue v){
         case DRJSON_OBJECT_VALUES:{
             DrJsonObject* odata = ctx->objects.data;
             DrJsonObject* object = &odata[v.object_idx];
+            if(!object->capacity) return;
             if(object->marked) return;
             object->marked = 1;
             DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
-            for(size_t i = 0; i < object->count; i++){
+            for(size_t i = 0; i < object->count; i++)
                 drj_mark(ctx, pairs[i].value);
-            }
         }break;
 
         case DRJSON_ARRAY:
         case DRJSON_ARRAY_VIEW:{
             DrJsonArray* adata = ctx->arrays.data;
             DrJsonArray* array = &adata[v.array_idx];
+            if(!array->capacity) return;
             if(array->marked) return;
             array->marked = 1;
-            for(size_t i = 0; i < array->count; i++){
+            for(size_t i = 0; i < array->count; i++)
                 drj_mark(ctx, array->array_items[i]);
-            }
         }break;
         default:
             return;
     }
 }
+
+#define DRJ_FREE_IDX (UINT32_MAX-1)
 static
 void
 drj_free_obj(DrJsonContext* ctx, DrJsonObject* o){
     size_t o_idx = o - ctx->objects.data;
+    #ifdef DRJ_DEBUG
+    fprintf(stderr, "Freeing object: %p (%zu)\n", (void*)o, o_idx);
+    assert(!o->freed);
+    o->freed = 1;
+    #endif
     if(o->read_only){
-        // fprintf(stderr, "Freeing interned object: %p (%zu)\n", o, o_idx);
         o->read_only = 0;
         uint32_t hash = hash_align8(o->object_items, o->count*sizeof(DrJsonObjectPair));
         uint32_t idx = fast_reduce32(hash, (uint32_t)ctx->interned_objects.capacity*2);
         uint32_t* idxes = (uint32_t*)(ctx->interned_objects.data+ctx->interned_objects.capacity);
         DrjHashIdx* hi = ctx->interned_objects.data;
+        #ifdef DRJ_DEBUG
+        uint32_t found_idx = -1;
+        for(size_t i = 0; i < 2*ctx->interned_objects.capacity; i++){
+            if(hi[i].idx == (uint32_t)o_idx){
+                found_idx = (uint32_t)i;
+                break;
+            }
+        }
+        assert(found_idx != (uint32_t)-1);
+        #endif
         for(;;){
             uint32_t i = idxes[idx];
             assert(i != UINT32_MAX);
-            if(i == UINT32_MAX -1){
-            }
-            else if(hi[i].idx == (uint32_t)o_idx){
+            if(i != UINT32_MAX && hi[i].idx == (uint32_t)o_idx){
+                #ifdef DRJ_DEBUG
+                assert(i == found_idx);
+                #endif
                 assert(hi[i].hash == hash);
-                hi[i].idx = UINT32_MAX-1;
+                hi[i].idx = DRJ_FREE_IDX;
                 break;
             }
             idx++;
@@ -2663,6 +2697,7 @@ drj_free_obj(DrJsonContext* ctx, DrJsonObject* o){
     }
     if(o->capacity){
         drj_free(ctx, o->object_items, drjson_size_for_object_of_length(o->capacity));
+        o->object_items = NULL;
         o->capacity = 0;
     }
     if(o_idx == ctx->objects.count-1){
@@ -2680,6 +2715,11 @@ static
 void
 drj_free_array(DrJsonContext* ctx, DrJsonArray* a){
     size_t a_idx = a - ctx->arrays.data;
+#ifdef DRJ_DEBUG
+    fprintf(stderr, "Freeing array: %p (%zu)\n", (void*)a, a_idx);
+    assert(!a->freed);
+    a->freed = 1;
+#endif
     if(a->read_only){
         a->read_only = 0;
         // fprintf(stderr, "Freeing interned array: %p (%zu)\n", a, a_idx);
@@ -2687,14 +2727,25 @@ drj_free_array(DrJsonContext* ctx, DrJsonArray* a){
         uint32_t idx = fast_reduce32(hash, (uint32_t)ctx->interned_arrays.capacity*2);
         uint32_t* idxes = (uint32_t*)(ctx->interned_arrays.data+ctx->interned_arrays.capacity);
         DrjHashIdx* hi = ctx->interned_arrays.data;
+        #ifdef DRJ_DEBUG
+        uint32_t found_idx = -1;
+        for(size_t i = 0; i < 2*ctx->interned_arrays.capacity; i++){
+            if(hi[i].idx == (uint32_t)a_idx){
+                found_idx = (uint32_t)i;
+                break;
+            }
+        }
+        assert(found_idx != (uint32_t)-1);
+        #endif
         for(;;){
             uint32_t i = idxes[idx];
             assert(i != UINT32_MAX);
-            if(i == UINT32_MAX -1){
-            }
-            else if(hi[i].idx == (uint32_t)a_idx){
+            if(i != UINT32_MAX && hi[i].idx == (uint32_t)a_idx){
+                #ifdef DRJ_DEBUG
+                assert(i == found_idx);
+                #endif
                 assert(hi[i].hash == hash);
-                hi[i].idx = UINT32_MAX-1;
+                hi[i].idx = DRJ_FREE_IDX;
                 break;
             }
             idx++;
@@ -2703,6 +2754,7 @@ drj_free_array(DrJsonContext* ctx, DrJsonArray* a){
     }
     if(a->capacity){
         drj_free(ctx, a->array_items, a->capacity*sizeof *a->array_items);
+        a->array_items = NULL;
         a->capacity = 0;
     }
     if(a_idx == ctx->arrays.count-1){
@@ -2718,10 +2770,14 @@ drj_free_array(DrJsonContext* ctx, DrJsonArray* a){
 static
 void
 drj_sweep(DrJsonContext* ctx){
+#ifdef DRJ_DEBUG
+    fprintf(stderr, "sweep\n");
+#endif
     {
         DrJsonObject* odata = ctx->objects.data;
-        for(size_t i = 0; i < ctx->objects.count; i++){
+        for(size_t i = ctx->objects.count; i--;){
             DrJsonObject* o = &odata[i];
+            if(!o->capacity) continue;
             if(o->marked){
                 o->marked = 0;
                 continue;
@@ -2731,8 +2787,9 @@ drj_sweep(DrJsonContext* ctx){
     }
     {
         DrJsonArray* adata = ctx->arrays.data;
-        for(size_t i = 0; i < ctx->arrays.count; i++){
+        for(size_t i = ctx->arrays.count; i--;){
             DrJsonArray* a = &adata[i];
+            if(!a->capacity) continue;
             if(a->marked){
                 a->marked = 0;
                 continue;
@@ -2746,9 +2803,11 @@ drj_sweep(DrJsonContext* ctx){
 DRJSON_API
 int
 drjson_gc(DrJsonContext* ctx, const DrJsonValue* roots, size_t rootcount){
-    for(size_t i = 0; i < rootcount; i++){
+#ifdef DRJ_DEBUG
+    fprintf(stderr, "gc\n");
+#endif
+    for(size_t i = 0; i < rootcount; i++)
         drj_mark(ctx, roots[i]);
-    }
     drj_sweep(ctx);
     return 0;
 }
@@ -2801,7 +2860,7 @@ drj_intern_array(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
         drj_memset(idxes, 0xff, sizeof(uint32_t)*2*new_cap);
         size_t count = 0;
         for(size_t i = 0; i < ctx->interned_arrays.count; i++){
-            if(hi[i].idx == UINT32_MAX-1) continue;
+            if(hi[i].idx == DRJ_FREE_IDX) continue;
             uint32_t hash = hi[i].hash;
             uint32_t idx = fast_reduce32(hash, (uint32_t)new_cap*2);
             while(idxes[idx] != UINT32_MAX){
@@ -2823,7 +2882,7 @@ drj_intern_array(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
     for(;;){
         uint32_t i = idxes[idx];
         if(i == UINT32_MAX){
-            if(found_free) i = first_free;
+            if(found_free) idx = first_free;
             DrJsonValue cpy_val = consume?val:drj_dupe_array_ronly(ctx, val);
             if(consume)array->read_only = 1;
             if(cpy_val.kind == DRJSON_ERROR) return cpy_val;
@@ -2832,9 +2891,9 @@ drj_intern_array(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
             ctx->interned_arrays.count++;
             return cpy_val;
         }
-        else if(i == UINT32_MAX -1){
+        else if((hi[i].hash == hash && hi[i].idx == DRJ_FREE_IDX)){
             found_free = 1;
-            first_free = i;
+            first_free = idx;
         }
         else if(hi[i].hash == hash){
             uint32_t a_idx = hi[i].idx;
@@ -2914,7 +2973,7 @@ drj_intern_object(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
         drj_memset(idxes, 0xff, sizeof(uint32_t)*2*new_cap);
         size_t count = 0;
         for(size_t i = 0; i < ctx->interned_objects.count; i++){
-            if(hi[i].idx == UINT32_MAX-1) continue;
+            if(hi[i].idx == DRJ_FREE_IDX) continue;
             uint32_t hash = hi[i].hash;
             uint32_t idx = fast_reduce32(hash, (uint32_t)new_cap*2);
             while(idxes[idx] != UINT32_MAX){
@@ -2936,7 +2995,7 @@ drj_intern_object(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
     for(;;){
         uint32_t i = idxes[idx];
         if(i == UINT32_MAX){
-            if(found_free) i = first_free;
+            if(found_free) idx = first_free;
             DrJsonValue cpy = consume?val:drj_dupe_object_ronly(ctx, val);
             if(consume) object->read_only = 1;
             // DrJsonValue cpy = drj_dupe_object_ronly(ctx, val);
@@ -2946,9 +3005,10 @@ drj_intern_object(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
             ctx->interned_objects.count++;
             return cpy;
         }
-        else if(i == UINT32_MAX -1){
+        else if((hi[i].hash == hash && hi[i].idx == DRJ_FREE_IDX)){
             found_free = 1;
-            first_free = i;
+            first_free = idx;
+            // printf("Empty slot\n");
         }
         else if(hi[i].hash == hash){
             uint32_t o_idx = hi[i].idx;
