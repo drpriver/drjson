@@ -2906,7 +2906,7 @@ drj_intern_array(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
             uint32_t a_idx = hi[i].idx;
             DrJsonArray* a = &ctx->arrays.data[a_idx];
             if(a->count == array->count){
-                if(memcmp(a->array_items, array->array_items, a->count*sizeof *a->array_items) == 0){
+                if(!a->count || memcmp(a->array_items, array->array_items, a->count*sizeof *a->array_items) == 0){
                     if(consume) drj_free_array(ctx, array);
                     return (DrJsonValue){.kind=DRJSON_ARRAY, .array_idx=a_idx};
                 }
