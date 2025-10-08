@@ -368,7 +368,12 @@ main(int argc, const char* const* argv){
                     "push <query>, cd <query>: sets the current value to the result of the query (if successful)\n"
                     "pop, up: pops the stack\n"
                     "ls: print current keys\n"
+                    "gc: runs the gc\n"
                     "<query>: prints the result of the query\n");
+                continue;
+            }
+            if(SV_equals(sv, SV("gc"))){
+                drjson_gc(jctx, stack, top+1);
                 continue;
             }
             _Bool push = 0;
