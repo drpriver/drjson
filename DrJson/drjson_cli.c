@@ -424,7 +424,7 @@ main(int argc, const char* const* argv){
     }
     fflush(outfp);
     fclose(outfp);
-    if(gc) drjson_gc(jctx, (DrJsonValue[]){}, 0);
+    if(gc) drjson_gc(jctx, 0, 0);
     return err;
 }
 

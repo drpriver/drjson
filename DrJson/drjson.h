@@ -629,7 +629,7 @@ drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* re
 //
 DRJSON_API
 int
-drjson_gc(DrJsonContext* ctx, const DrJsonValue* roots, size_t rootcount);
+drjson_gc(DrJsonContext* ctx, const DrJsonValue*_Null_unspecified roots, size_t rootcount);
 
 
 

@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include <errno.h>
 
 #ifdef _WIN32
 typedef long long ssize_t;
@@ -2808,7 +2807,7 @@ drj_sweep(DrJsonContext* ctx){
 
 DRJSON_API
 int
-drjson_gc(DrJsonContext* ctx, const DrJsonValue* roots, size_t rootcount){
+drjson_gc(DrJsonContext* ctx, const DrJsonValue*_Null_unspecified roots, size_t rootcount){
 #ifdef DRJ_DEBUG
     fprintf(stderr, "gc\n");
 #endif

@@ -89,7 +89,7 @@ static
 void
 TestPrintf(const char* fmt, ...){
     va_list arg_;
-    char buff[10000];
+    static char buff[10000];
     // Some C compilers don't support multiple va_starts, but do
     // support va_copy, so just do that.
     va_start(arg_, fmt);

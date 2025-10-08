@@ -11,7 +11,7 @@
 #endif
 #include "drjson.h"
 #include "testing.h"
-#include "debugging.h"
+#include "../debugging.h"
 #include "hash_func.h"
 
 #ifdef __clang__
@@ -264,7 +264,7 @@ TestFunction(TestSimpleParsing){
 
     drjson_gc(ctx, (DrJsonValue[]){q, val2}, 2);
     TestAssert(drjson_eq(q, val2));
-    drjson_gc(ctx, (DrJsonValue[]){}, 0);
+    drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();
@@ -299,7 +299,7 @@ TestFunction(TestSimpleParsing2){
 
     drjson_gc(ctx, (DrJsonValue[]){q, val}, 2);
     TestAssert(drjson_eq(q, val));
-    drjson_gc(ctx, (DrJsonValue[]){}, 0);
+    drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();
@@ -333,7 +333,7 @@ TestFunction(TestIntern){
 
         drjson_gc(ctx, (DrJsonValue[]){vs[0], vs[1]}, 2);
         TestExpectTrue(drjson_eq(vs[0], vs[1]));
-        drjson_gc(ctx, (DrJsonValue[]){}, 0);
+        drjson_gc(ctx, 0, 0);
         drjson_ctx_free_all(ctx);
         assert_all_freed();
     }
@@ -395,7 +395,7 @@ TestFunction(TestIntern){
             TestExpectTrue(drjson_eq(inner[0][0], o));
 
             drjson_gc(ctx, outer, 3);
-            drjson_gc(ctx, (DrJsonValue[]){}, 0);
+            drjson_gc(ctx, 0, 0);
         }
         drjson_ctx_free_all(ctx);
         assert_all_freed();
@@ -454,7 +454,7 @@ TestFunction(TestSerialization){
     TestAssert(printed);
     TestAssertEquals(buff[printed-1], '\0');
     TestAssertEquals2(str_eq, buff, "{\"foo\":{\"bar\":{\"bazinga\":3}}}");
-    drjson_gc(ctx, (DrJsonValue[]){}, 0);
+    drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();
@@ -474,7 +474,7 @@ TestFunction(TestPrettyPrint){
     TestAssert(printed);
     TestAssertEquals(buff[printed-1], '\0');
     TestAssertEquals2(str_eq, buff, "{\"foo\":3}");
-    drjson_gc(ctx, (DrJsonValue[]){}, 0);
+    drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();
@@ -503,7 +503,7 @@ TestFunction(TestEscape){
         TestAssertFalse(err);
         TestExpectEquals2(SV_equals, escaped, after);
     }
-    drjson_gc(ctx, (DrJsonValue[]){}, 0);
+    drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();
@@ -529,7 +529,7 @@ TestFunction(TestObject){
             TestAssertEquals(v.atom.bits, v2.atom.bits);
         }
     }
-    drjson_gc(ctx, (DrJsonValue[]){}, 0);
+    drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();
