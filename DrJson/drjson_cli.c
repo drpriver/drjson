@@ -354,7 +354,11 @@ main(int argc, const char* const* argv){
                 continue;
             }
             if(SV_equals(sv, SV("ls"))){
-                sv = SV("@keys");
+                if(this.kind == DRJSON_ARRAY){
+                    sv = SV("@length");
+                }
+                else
+                    sv = SV("@keys");
             }
             if(SV_equals(sv, SV("h")) || SV_equals(sv, SV("help"))){
                 puts(

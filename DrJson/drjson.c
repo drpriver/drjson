@@ -1468,7 +1468,7 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
     #define RETERROR(code, mess) return drjson_make_error(code, mess)
     if(i == length) RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Query is 0 length");
     Ldispatch:
-    for(;i != length; i++){
+    for(;i < length; i++){
         char c = query[i];
         switch(c){
             case '.':
@@ -1515,6 +1515,23 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
                 i++;
                 begin = i;
                 goto Lsubscript;
+            case CASE_0_9:
+                if(o.kind == DRJSON_ARRAY){
+                    begin = i;
+                    while(++i < length){
+                        switch(query[i]){
+                            case CASE_0_9:
+                                continue;
+                            default:
+                                break;
+                        }
+                        break;
+                    }
+                    goto Ldo_subscript;
+                }
+            #ifdef __GNUC__
+                __attribute__((fallthrough));
+            #endif
             default:
                 if(i == 0)
                     goto LHack;
