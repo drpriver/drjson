@@ -55,6 +55,51 @@ typedef long long ssize_t;
 #endif
 #endif
 
+//------------------------------------------------------------
+// Navigation Data Structures
+//------------------------------------------------------------
+
+// Represents a single visible line in the TUI
+typedef struct NavItem NavItem;
+struct NavItem {
+    DrJsonValue value;        // The JSON value at this position
+    DrJsonAtom key;           // Key if this is an object member (0 if array element)
+    int depth;                // Indentation depth (for rendering)
+    _Bool has_key;            // Whether this item has a key (object member vs array element)
+};
+
+// Tracks which containers (objects/arrays) are expanded
+// Uses the unique object_idx/array_idx as identifiers
+typedef struct ExpansionSet ExpansionSet;
+struct ExpansionSet {
+    size_t* ids;              // Array of expanded container IDs
+    size_t count;             // Number of expanded containers
+    size_t capacity;          // Allocated capacity
+};
+
+// Main navigation state
+typedef struct JsonNav JsonNav;
+struct JsonNav {
+    DrJsonContext* jctx;      // DrJson context
+    DrJsonValue root;         // Root document value
+
+    // Flattened view (rebuilt when expansion state changes)
+    NavItem* items;           // Dynamic array of visible items
+    size_t item_count;        // Number of visible items
+    size_t item_capacity;     // Allocated capacity
+
+    // Expansion tracking
+    ExpansionSet expanded;    // Set of expanded container IDs
+
+    // Cursor and viewport
+    size_t cursor_pos;        // Current cursor position in items array
+    size_t scroll_offset;     // First visible line (for scrolling)
+    int viewport_height;      // Number of lines that fit on screen
+
+    // State flags
+    _Bool needs_rebuild;      // Items array needs regeneration
+};
+
 // Chose to use libc's FILE api instead of OS APIs for portability.
 
 force_inline
@@ -135,6 +180,444 @@ read_file(const char* filepath){
 finally:
     fclose(fp);
     return result;
+}
+
+//------------------------------------------------------------
+// Expansion Set Operations
+//------------------------------------------------------------
+
+static inline
+_Bool
+expansion_contains(const ExpansionSet* set, size_t id){
+    for(size_t i = 0; i < set->count; i++){
+        if(set->ids[i] == id)
+            return 1;
+    }
+    return 0;
+}
+
+static inline
+void
+expansion_add(ExpansionSet* set, size_t id){
+    if(expansion_contains(set, id))
+        return;
+
+    if(set->count >= set->capacity){
+        size_t new_cap = set->capacity ? set->capacity * 2 : 16;
+        size_t* new_ids = realloc(set->ids, new_cap * sizeof(size_t));
+        if(!new_ids) return; // allocation failed
+        set->ids = new_ids;
+        set->capacity = new_cap;
+    }
+    set->ids[set->count++] = id;
+}
+
+static inline
+void
+expansion_remove(ExpansionSet* set, size_t id){
+    for(size_t i = 0; i < set->count; i++){
+        if(set->ids[i] == id){
+            // Move last element to this position
+            set->ids[i] = set->ids[--set->count];
+            return;
+        }
+    }
+}
+
+static inline
+void
+expansion_clear(ExpansionSet* set){
+    set->count = 0;
+}
+
+static inline
+void
+expansion_free(ExpansionSet* set){
+    free(set->ids);
+    set->ids = NULL;
+    set->count = 0;
+    set->capacity = 0;
+}
+
+//------------------------------------------------------------
+// Navigation Functions
+//------------------------------------------------------------
+
+static inline
+size_t
+nav_get_container_id(DrJsonValue val){
+    // Pack the index with a bit to distinguish arrays from objects
+    // Use bit 0: 0 for arrays, 1 for objects
+    if(val.kind == DRJSON_ARRAY || val.kind == DRJSON_ARRAY_VIEW)
+        return (val.array_idx << 1) | 0;
+    if(val.kind == DRJSON_OBJECT || val.kind == DRJSON_OBJECT_KEYS ||
+       val.kind == DRJSON_OBJECT_VALUES || val.kind == DRJSON_OBJECT_ITEMS)
+        return (val.object_idx << 1) | 1;
+    return 0;
+}
+
+static inline
+_Bool
+nav_is_container(DrJsonValue val){
+    return val.kind == DRJSON_ARRAY || val.kind == DRJSON_OBJECT;
+}
+
+static inline
+_Bool
+nav_is_expanded(const JsonNav* nav, DrJsonValue val){
+    if(!nav_is_container(val))
+        return 0;
+    return expansion_contains(&nav->expanded, nav_get_container_id(val));
+}
+
+static inline
+void
+nav_append_item(JsonNav* nav, NavItem item){
+    if(nav->item_count >= nav->item_capacity){
+        size_t new_cap = nav->item_capacity ? nav->item_capacity * 2 : 256;
+        NavItem* new_items = realloc(nav->items, new_cap * sizeof(NavItem));
+        if(!new_items) return; // allocation failed
+        nav->items = new_items;
+        nav->item_capacity = new_cap;
+    }
+    nav->items[nav->item_count++] = item;
+}
+
+static void nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
+                                   DrJsonAtom key, _Bool has_key);
+
+static
+void
+nav_rebuild(JsonNav* nav){
+    nav->item_count = 0;
+    nav_rebuild_recursive(nav, nav->root, 0, (DrJsonAtom){0}, 0);
+    nav->needs_rebuild = 0;
+
+    // Clamp cursor to valid range
+    if(nav->item_count == 0)
+        nav->cursor_pos = 0;
+    else if(nav->cursor_pos >= nav->item_count)
+        nav->cursor_pos = nav->item_count - 1;
+}
+
+static
+void
+nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
+                      DrJsonAtom key, _Bool has_key){
+    // Add current item
+    NavItem item = {
+        .value = val,
+        .key = key,
+        .depth = depth,
+        .has_key = has_key
+    };
+    nav_append_item(nav, item);
+
+    // If it's a container and expanded, add children
+    if(nav_is_container(val) && nav_is_expanded(nav, val)){
+        int64_t len = drjson_len(nav->jctx, val);
+
+        if(val.kind == DRJSON_ARRAY){
+            for(int64_t i = 0; i < len; i++){
+                DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
+                nav_rebuild_recursive(nav, child, depth + 1, (DrJsonAtom){0}, 0);
+            }
+        }
+        else { // DRJSON_OBJECT
+            DrJsonValue items = drjson_object_items(val);
+            int64_t items_len = drjson_len(nav->jctx, items);
+            for(int64_t i = 0; i < items_len; i += 2){
+                DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
+                DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
+                nav_rebuild_recursive(nav, v, depth + 1, k.atom, 1);
+            }
+        }
+    }
+}
+
+static inline
+void
+nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
+    *nav = (JsonNav){
+        .jctx = jctx,
+        .root = root,
+        .items = NULL,
+        .item_count = 0,
+        .item_capacity = 0,
+        .expanded = {0},
+        .cursor_pos = 0,
+        .scroll_offset = 0,
+        .viewport_height = 24,
+        .needs_rebuild = 1,
+    };
+    nav_rebuild(nav);
+}
+
+static inline
+void
+nav_free(JsonNav* nav){
+    free(nav->items);
+    expansion_free(&nav->expanded);
+    *nav = (JsonNav){0};
+}
+
+static inline
+void
+nav_toggle_expand_at_cursor(JsonNav* nav){
+    if(nav->item_count == 0) return;
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+    if(!nav_is_container(item->value))
+        return;
+
+    size_t id = nav_get_container_id(item->value);
+    if(nav_is_expanded(nav, item->value)){
+        expansion_remove(&nav->expanded, id);
+    }
+    else {
+        expansion_add(&nav->expanded, id);
+    }
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+}
+
+static inline
+void
+nav_expand_recursive(JsonNav* nav){
+    if(nav->item_count == 0) return;
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+    if(!nav_is_container(item->value))
+        return;
+
+    // Simple approach: expand this and all descendants
+    // We'll do this by temporarily expanding everything, rebuilding,
+    // then collecting all visible containers
+    size_t saved_cursor = nav->cursor_pos;
+    expansion_add(&nav->expanded, nav_get_container_id(item->value));
+
+    // Keep expanding until no new items appear
+    size_t prev_count = 0;
+    while(prev_count != nav->item_count){
+        prev_count = nav->item_count;
+        nav_rebuild(nav);
+
+        // Find all containers in the subtree and expand them
+        for(size_t i = saved_cursor; i < nav->item_count; i++){
+            if(nav->items[i].depth <= nav->items[saved_cursor].depth && i != saved_cursor)
+                break; // left the subtree
+            if(nav_is_container(nav->items[i].value)){
+                expansion_add(&nav->expanded, nav_get_container_id(nav->items[i].value));
+            }
+        }
+    }
+
+    nav->cursor_pos = saved_cursor;
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+}
+
+static inline
+void
+nav_collapse_all(JsonNav* nav){
+    expansion_clear(&nav->expanded);
+    nav->cursor_pos = 0;
+    nav->scroll_offset = 0;
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+}
+
+static inline
+void
+nav_move_cursor(JsonNav* nav, int delta){
+    if(nav->item_count == 0) return;
+
+    int new_pos = (int)nav->cursor_pos + delta;
+    if(new_pos < 0)
+        new_pos = 0;
+    if(new_pos >= (int)nav->item_count)
+        new_pos = (int)nav->item_count - 1;
+    nav->cursor_pos = (size_t)new_pos;
+}
+
+static inline
+void
+nav_ensure_cursor_visible(JsonNav* nav){
+    if(nav->item_count == 0) return;
+
+    // Cursor is above viewport
+    if(nav->cursor_pos < nav->scroll_offset){
+        nav->scroll_offset = nav->cursor_pos;
+    }
+    // Cursor is below viewport
+    else if(nav->cursor_pos >= nav->scroll_offset + (size_t)nav->viewport_height){
+        nav->scroll_offset = nav->cursor_pos - (size_t)nav->viewport_height + 1;
+    }
+}
+
+static inline
+DrJsonValue
+nav_get_current_value(const JsonNav* nav){
+    if(nav->item_count == 0)
+        return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "no items");
+    return nav->items[nav->cursor_pos].value;
+}
+
+//------------------------------------------------------------
+// Rendering
+//------------------------------------------------------------
+
+static
+void
+nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max_width){
+    // Render a one-line summary of a value
+    switch(val.kind){
+        case DRJSON_NULL:
+            drt_puts(drt, "null", 4);
+            break;
+        case DRJSON_BOOL:
+            if(val.boolean)
+                drt_puts(drt, "true", 4);
+            else
+                drt_puts(drt, "false", 5);
+            break;
+        case DRJSON_NUMBER:
+            drt_printf(drt, "%g", val.number);
+            break;
+        case DRJSON_INTEGER:
+            drt_printf(drt, "%lld", (long long)val.integer);
+            break;
+        case DRJSON_UINTEGER:
+            drt_printf(drt, "%llu", (unsigned long long)val.uinteger);
+            break;
+        case DRJSON_STRING: {
+            const char* str = NULL;
+            size_t len = 0;
+            drjson_get_str_and_len(jctx, val, &str, &len);
+            if(str){
+                drt_putc(drt, '"');
+                // Truncate if too long
+                size_t to_print = len;
+                if(to_print > (size_t)max_width - 3)
+                    to_print = (size_t)max_width - 6; // room for "..." and quotes
+                drt_puts(drt, str, to_print);
+                if(to_print < len)
+                    drt_puts(drt, "...", 3);
+                drt_putc(drt, '"');
+            }
+            break;
+        }
+        case DRJSON_ARRAY: {
+            int64_t len = drjson_len(jctx, val);
+            drt_printf(drt, "[%lld item%s]", (long long)len, len == 1 ? "" : "s");
+            break;
+        }
+        case DRJSON_OBJECT: {
+            int64_t len = drjson_len(jctx, val);
+            drt_printf(drt, "{%lld key%s}", (long long)len, len == 1 ? "" : "s");
+            break;
+        }
+        case DRJSON_ERROR:
+            drt_puts(drt, "<error>", 7);
+            break;
+        default:
+            drt_puts(drt, "<unknown>", 9);
+            break;
+    }
+}
+
+static
+void
+nav_render(JsonNav* nav, Drt* drt){
+    if(nav->needs_rebuild)
+        nav_rebuild(nav);
+
+    drt_move(drt, 0, 0);
+    drt_clear_color(drt);
+    drt_bg_clear_color(drt);
+
+    // Render status line at top
+    drt_push_state(drt);
+    drt_bg_set_8bit_color(drt, 240);
+    drt_set_8bit_color(drt, 15);
+    drt_printf(drt, " DrJson TUI - %zu items ", nav->item_count);
+    drt_clear_to_end_of_row(drt);
+    drt_pop_state(drt);
+
+    // Render visible items
+    size_t end_idx = nav->scroll_offset + (size_t)nav->viewport_height - 1; // -1 for status line
+    if(end_idx > nav->item_count)
+        end_idx = nav->item_count;
+
+    for(size_t i = nav->scroll_offset; i < end_idx; i++){
+        NavItem* item = &nav->items[i];
+        int y = 1 + (int)(i - nav->scroll_offset);
+
+        drt_move(drt, 0, y);
+
+        // Highlight cursor line
+        if(i == nav->cursor_pos){
+            drt_push_state(drt);
+            drt_bg_set_8bit_color(drt, 236);
+            drt_set_8bit_color(drt, 15);
+            drt_set_style(drt, DRT_STYLE_BOLD);
+        }
+
+        // Indentation
+        for(int d = 0; d < item->depth; d++){
+            drt_puts(drt, "  ", 2);
+        }
+
+        // Expansion indicator for containers
+        if(nav_is_container(item->value)){
+            if(nav_is_expanded(nav, item->value)){
+                drt_putc_mb(drt, "▼", 3, 1);
+            }
+            else {
+                drt_putc_mb(drt, "▶ ", 3, 1); // UTF-8 right arrow
+            }
+            drt_putc(drt, ' ');
+        }
+        else {
+            drt_puts(drt, "  ", 2);
+        }
+
+        // Key if object member
+        if(item->has_key){
+            const char* key_str = NULL;
+            size_t key_len = 0;
+            DrJsonValue key_val = drjson_atom_to_value(item->key);
+            drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+            if(key_str){
+                drt_push_state(drt);
+                drt_set_8bit_color(drt, 45); // cyan
+                drt_puts(drt, key_str, key_len);
+                drt_pop_state(drt);
+                drt_puts(drt, ": ", 2);
+            }
+        }
+
+        // Value summary
+        int cx, cy;
+        drt_cursor(drt, &cx, &cy);
+        int remaining = nav->viewport_height > 100 ? 100 : nav->viewport_height;
+        remaining -= cx;
+        if(remaining < 10) remaining = 10;
+        nav_render_value_summary(drt, nav->jctx, item->value, remaining);
+
+        // Clear rest of line
+        drt_clear_to_end_of_row(drt);
+
+        if(i == nav->cursor_pos){
+            drt_pop_state(drt);
+        }
+    }
+
+    // Clear remaining lines
+    for(int y = 1 + (int)(end_idx - nav->scroll_offset); y < nav->viewport_height; y++){
+        drt_move(drt, 0, y);
+        drt_clear_to_end_of_row(drt);
+    }
 }
 
 enum {
@@ -679,63 +1162,19 @@ main(int argc, const char* const* argv){
         },
     };
 
-    LongString outpath = {0};
-    LongString queries[100];
-    enum {QUERY_KWARG=1};
     _Bool braceless = 0;
-    _Bool pretty = 0;
-    _Bool interactive = 0;
     _Bool intern = 0;
-    _Bool gc = 0;
-    int indent = 0;
     ArgToParse kw_args[] = {
-        {
-            .name = SV("-o"),
-            .altname1 = SV("--output"),
-            .dest = ARGDEST(&outpath),
-            .help = "Where to write the result",
-        },
-        [QUERY_KWARG] = {
-            .name = SV("-q"),
-            .altname1 = SV("--query"),
-            .min_num=0,
-            .max_num=arrlen(queries),
-            .dest = ARGDEST(&queries[0]),
-            .help = "A query to filter the data. Queries can be stacked",
-        },
         {
             .name = SV("--braceless"),
             .dest = ARGDEST(&braceless),
             .help = "Don't require opening and closing braces around the document",
         },
         {
-            .name = SV("-p"),
-            .altname1 = SV("--pretty"),
-            .dest = ARGDEST(&pretty),
-            .help = "Pretty print the output",
-        },
-        {
-            .name = SV("--indent"),
-            .dest = ARGDEST(&indent),
-            .help = "Number of leading spaces to print",
-        },
-        {
-            .name = SV("-i"),
-            .altname1 = SV("--interactive"),
-            .help = "Enter a cli prompt",
-            .dest = ARGDEST(&interactive),
-        },
-        {
             .name = SV("--intern-objects"),
             .altname1 = SV("--intern"),
             .help = "Reuse duplicate arrays and objects while parsing. Slower but can use less memory. Sometimes.",
             .dest = ARGDEST(&intern),
-            .hidden = 1,
-        },
-        {
-            .name = SV("--gc"),
-            .help = "Run the gc on exit. This is for testing.",
-            .dest = ARGDEST(&gc),
             .hidden = 1,
         },
     };
@@ -764,8 +1203,8 @@ main(int argc, const char* const* argv){
         },
     };
     ArgParser parser = {
-        .name = argc?argv[0]:"drjson",
-        .description = "CLI interface to drjson.",
+        .name = argc?argv[0]:"drj",
+        .description = "TUI interface to drjson.",
         .positional.args = pos_args,
         .positional.count = arrlen(pos_args),
         .early_out.args = early_args,
@@ -783,7 +1222,7 @@ main(int argc, const char* const* argv){
             print_argparse_hidden_help(&parser, columns);
             return 0;
         case VERSION:
-            puts("drjson v" DRJSON_VERSION);
+            puts("drj v" DRJSON_VERSION);
             return 0;
         case FISH:
             print_argparse_fish_completions(&parser);
@@ -798,12 +1237,6 @@ main(int argc, const char* const* argv){
     }
     begin_tui();
     atexit(end_tui);
-    if(indent < 0)
-        indent = 0;
-    if(indent > 80)
-        indent = 80;
-    if(indent)
-        pretty = 1;
     LongString jsonstr = {0};
     jsonstr = read_file(jsonpath.text);
     if(!jsonstr.text){
@@ -831,18 +1264,11 @@ main(int argc, const char* const* argv){
         return 1;
     }
     DrJsonValue this = document;
-    DrJsonValue stack[1024] = {this};
-    size_t top = 0;
-    for(int i = 0; i < kw_args[QUERY_KWARG].num_parsed; i++){
-        DrJsonValue v = drjson_query(jctx, this, queries[i].text, queries[i].length);
-        if(v.kind == DRJSON_ERROR){
-            fprintf(stderr, "Error when evaluating the %dth query ('%s'): ", i, queries[i].text);
-            drjson_print_value_fp(jctx, stderr, v, 0, DRJSON_PRETTY_PRINT|DRJSON_APPEND_NEWLINE);
-            return 1;
-        }
-        this = v;
-        stack[++top] = this;
-    }
+
+    // Initialize navigation
+    JsonNav nav;
+    nav_init(&nav, jctx, this);
+
     for(;;){
         if(globals.needs_rescale){
             TermSize sz = get_terminal_size();
@@ -853,23 +1279,116 @@ main(int argc, const char* const* argv){
             if(globals.screenh != sz.rows || globals.screenw != sz.columns){
                 globals.screenh = sz.rows;
                 globals.screenw = sz.columns;
+                nav.viewport_height = sz.rows;
             }
             globals.needs_rescale = 0;
         }
+
+        // Render the navigation view
+        nav_render(&nav, &globals.drt);
+        drt_paint(&globals.drt);
+
         int c = 0, cx = 0, cy = 0, magnitude = 0;
         int r = get_input(&c, &cx, &cy, &magnitude);
         if(r == -1) goto finally;
         if(!r) continue;
-        if(c == CTRL_Z){
-            #ifdef _WIN32
-            #else
-            end_tui();
-            raise(SIGTSTP);
-            begin_tui();
-            globals.needs_redisplay = 1;
-            #endif
-            continue;
+
+        // Handle input
+        _Bool handled = 1;
+        switch(c){
+            case CTRL_C:
+            case 'q':
+            case 'Q':
+                goto finally;
+
+            case CTRL_Z:
+                #ifdef _WIN32
+                #else
+                end_tui();
+                raise(SIGTSTP);
+                begin_tui();
+                globals.needs_redisplay = 1;
+                #endif
+                break;
+
+            case UP:
+            case 'k':
+            case 'K':
+                nav_move_cursor(&nav, -magnitude);
+                nav_ensure_cursor_visible(&nav);
+                break;
+
+            case DOWN:
+            case 'j':
+            case 'J':
+                nav_move_cursor(&nav, magnitude);
+                nav_ensure_cursor_visible(&nav);
+                break;
+
+            case PAGE_UP:
+            case CTRL_B:
+                nav_move_cursor(&nav, -(nav.viewport_height - 2));
+                nav_ensure_cursor_visible(&nav);
+                break;
+
+            case PAGE_DOWN:
+            case CTRL_F:
+                nav_move_cursor(&nav, nav.viewport_height - 2);
+                nav_ensure_cursor_visible(&nav);
+                break;
+
+            case HOME:
+            case 'g':
+                nav.cursor_pos = 0;
+                nav_ensure_cursor_visible(&nav);
+                break;
+
+            case END:
+            case 'G':
+                if(nav.item_count > 0)
+                    nav.cursor_pos = nav.item_count - 1;
+                nav_ensure_cursor_visible(&nav);
+                break;
+
+            case ENTER:
+            case RIGHT:
+            case 'l':
+            case 'L':
+            case ' ':
+                nav_toggle_expand_at_cursor(&nav);
+                nav_ensure_cursor_visible(&nav);
+                break;
+
+            case LEFT:
+            case 'h':
+            case 'H':
+                // Collapse current item
+                if(nav.item_count > 0){
+                    NavItem* item = &nav.items[nav.cursor_pos];
+                    if(nav_is_container(item->value) && nav_is_expanded(&nav, item->value)){
+                        nav_toggle_expand_at_cursor(&nav);
+                    }
+                }
+                break;
+
+            case 'e':
+            case 'E':
+                // Expand recursively
+                nav_expand_recursive(&nav);
+                nav_ensure_cursor_visible(&nav);
+                break;
+
+            case 'c':
+            case 'C':
+                // Collapse all
+                nav_collapse_all(&nav);
+                break;
+
+            default:
+                handled = 0;
+                break;
         }
+
         if(globals.needs_rescale){
             TermSize sz = get_terminal_size();
             drt_update_terminal_size(&globals.drt, sz.columns, sz.rows);
@@ -879,22 +1398,15 @@ main(int argc, const char* const* argv){
             if(globals.screenh != sz.rows || globals.screenw != sz.columns){
                 globals.screenh = sz.rows;
                 globals.screenw = sz.columns;
+                nav.viewport_height = sz.rows;
             }
             globals.needs_rescale = 0;
         }
-
-        return 0;
     }
     finally:;
+    nav_free(&nav);
     return 0;
 }
 
-static inline
-_Bool
-SV_startswith(StringView hay, StringView needle){
-    if(needle.length > hay.length) return 0;
-    if(!needle.length) return 1;
-    return memcmp(needle.text, hay.text, needle.length) == 0;
-}
 
 #include "drjson.c"
