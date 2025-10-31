@@ -537,7 +537,7 @@ drt_printf(Drt* drt, const char* fmt, ...){
     va_start(va, fmt);
     int n = vsnprintf(buff, sizeof buff, fmt, va);
     va_end(va);
-    drt_puts(drt, buff, n < (int)sizeof buff? n : -1+(int)sizeof buff);
+    drt_puts_utf8(drt, buff, n < (int)sizeof buff? n : -1+(int)sizeof buff);
 }
 DRT_API
 void
