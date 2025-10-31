@@ -65,6 +65,7 @@ struct NavItem {
     DrJsonValue value;        // The JSON value at this position
     DrJsonAtom key;           // Key if this is an object member (0 if array element)
     int depth;                // Indentation depth (for rendering)
+    int64_t array_index;      // Index if this is an array element (-1 if not)
     _Bool has_key;            // Whether this item has a key (object member vs array element)
 };
 
@@ -283,13 +284,13 @@ nav_append_item(JsonNav* nav, NavItem item){
 }
 
 static void nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
-                                   DrJsonAtom key, _Bool has_key);
+                                   DrJsonAtom key, _Bool has_key, int64_t array_index);
 
 static
 void
 nav_rebuild(JsonNav* nav){
     nav->item_count = 0;
-    nav_rebuild_recursive(nav, nav->root, 0, (DrJsonAtom){0}, 0);
+    nav_rebuild_recursive(nav, nav->root, 0, (DrJsonAtom){0}, 0, -1);
     nav->needs_rebuild = 0;
 
     // Clamp cursor to valid range
@@ -302,12 +303,13 @@ nav_rebuild(JsonNav* nav){
 static
 void
 nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
-                      DrJsonAtom key, _Bool has_key){
+                      DrJsonAtom key, _Bool has_key, int64_t array_index){
     // Add current item
     NavItem item = {
         .value = val,
         .key = key,
         .depth = depth,
+        .array_index = array_index,
         .has_key = has_key
     };
     nav_append_item(nav, item);
@@ -319,7 +321,7 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
         if(val.kind == DRJSON_ARRAY){
             for(int64_t i = 0; i < len; i++){
                 DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
-                nav_rebuild_recursive(nav, child, depth + 1, (DrJsonAtom){0}, 0);
+                nav_rebuild_recursive(nav, child, depth + 1, (DrJsonAtom){0}, 0, i);
             }
         }
         else { // DRJSON_OBJECT
@@ -328,7 +330,7 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
             for(int64_t i = 0; i < items_len; i += 2){
                 DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
                 DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
-                nav_rebuild_recursive(nav, v, depth + 1, k.atom, 1);
+                nav_rebuild_recursive(nav, v, depth + 1, k.atom, 1, -1);
             }
         }
     }
@@ -446,6 +448,97 @@ nav_collapse_recursive(JsonNav* nav){
 
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
+}
+
+static inline
+void
+nav_jump_to_parent(JsonNav* nav, _Bool collapse){
+    if(nav->item_count == 0) return;
+    if(nav->cursor_pos == 0) return; // Already at root
+
+    int current_depth = nav->items[nav->cursor_pos].depth;
+    if(current_depth == 0) return; // Already at root level
+
+    // Search backwards for first item with smaller depth
+    for(size_t i = nav->cursor_pos; i > 0; i--){
+        if(nav->items[i - 1].depth < current_depth){
+            nav->cursor_pos = i - 1;
+
+            // Optionally collapse the parent we just jumped to
+            if(collapse){
+                NavItem* parent = &nav->items[nav->cursor_pos];
+                if(nav_is_container(parent->value) && nav_is_expanded(nav, parent->value)){
+                    size_t id = nav_get_container_id(parent->value);
+                    expansion_remove(&nav->expanded, id);
+                    nav->needs_rebuild = 1;
+                    nav_rebuild(nav);
+                }
+            }
+            return;
+        }
+    }
+}
+
+static inline
+void
+nav_jump_into_container(JsonNav* nav){
+    if(nav->item_count == 0) return;
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+    if(!nav_is_container(item->value))
+        return; // Not a container, can't jump in
+
+    // Expand if not already expanded
+    if(!nav_is_expanded(nav, item->value)){
+        size_t id = nav_get_container_id(item->value);
+        expansion_add(&nav->expanded, id);
+        nav->needs_rebuild = 1;
+        nav_rebuild(nav);
+    }
+
+    // Move to first child (next item in list)
+    if(nav->cursor_pos + 1 < nav->item_count){
+        nav->cursor_pos++;
+    }
+}
+
+static inline
+void
+nav_jump_to_next_sibling(JsonNav* nav){
+    if(nav->item_count == 0) return;
+    if(nav->cursor_pos >= nav->item_count - 1) return; // Already at end
+
+    int current_depth = nav->items[nav->cursor_pos].depth;
+
+    // Search forward for next item at same or lesser depth
+    for(size_t i = nav->cursor_pos + 1; i < nav->item_count; i++){
+        if(nav->items[i].depth <= current_depth){
+            nav->cursor_pos = i;
+            return;
+        }
+    }
+    // If not found, we're at the last item at this depth
+}
+
+static inline
+void
+nav_jump_to_prev_sibling(JsonNav* nav){
+    if(nav->item_count == 0) return;
+    if(nav->cursor_pos == 0) return; // Already at start
+
+    int current_depth = nav->items[nav->cursor_pos].depth;
+
+    // Search backward for previous item at same depth
+    for(size_t i = nav->cursor_pos; i > 0; i--){
+        if(nav->items[i - 1].depth == current_depth){
+            nav->cursor_pos = i - 1;
+            return;
+        }
+        // If we hit a parent (lesser depth), we're the first sibling
+        if(nav->items[i - 1].depth < current_depth){
+            return;
+        }
+    }
 }
 
 static inline
@@ -842,7 +935,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
             drt_puts(drt, "  ", 2);
         }
 
-        // Key if object member
+        // Key if object member, or index if array element
         if(item->has_key){
             const char* key_str = NULL;
             size_t key_len = 0;
@@ -855,6 +948,13 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
                 drt_pop_state(drt);
                 drt_puts(drt, ": ", 2);
             }
+        }
+        else if(item->array_index >= 0){
+            drt_push_state(drt);
+            drt_set_8bit_color(drt, 220); // yellow/gold
+            drt_printf(drt, "%lld", (long long)item->array_index);
+            drt_pop_state(drt);
+            drt_puts(drt, ": ", 2);
         }
 
         // Value summary
@@ -1595,6 +1695,18 @@ main(int argc, const char* const* argv){
                 nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
+            case CTRL_U:
+                // Scroll up half page (vim-style)
+                nav_move_cursor(&nav, -(globals.screenh / 2));
+                nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
+            case CTRL_D:
+                // Scroll down half page (vim-style)
+                nav_move_cursor(&nav, globals.screenh / 2);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
             case HOME:
             case 'g':
                 nav.cursor_pos = 0;
@@ -1609,24 +1721,31 @@ main(int argc, const char* const* argv){
                 break;
 
             case ENTER:
+            case ' ':
+                // Toggle expand/collapse
+                nav_toggle_expand_at_cursor(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
             case RIGHT:
             case 'l':
             case 'L':
-            case ' ':
-                nav_toggle_expand_at_cursor(&nav);
+                // Jump into container (expand if needed)
+                nav_jump_into_container(&nav);
                 nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case LEFT:
             case 'h':
+                // Jump to parent container and collapse it
+                nav_jump_to_parent(&nav, 1);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
             case 'H':
-                // Collapse current item
-                if(nav.item_count > 0){
-                    NavItem* item = &nav.items[nav.cursor_pos];
-                    if(nav_is_container(item->value) && nav_is_expanded(&nav, item->value)){
-                        nav_toggle_expand_at_cursor(&nav);
-                    }
-                }
+                // Jump to parent container without collapsing
+                nav_jump_to_parent(&nav, 0);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case 'e':
@@ -1640,6 +1759,25 @@ main(int argc, const char* const* argv){
             case 'C':
                 // Collapse current item recursively
                 nav_collapse_recursive(&nav);
+                break;
+
+            case '-':
+            case '_':
+                // Jump to parent container without collapsing
+                nav_jump_to_parent(&nav, 0);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
+            case ']':
+                // Jump to next sibling (same depth)
+                nav_jump_to_next_sibling(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
+            case '[':
+                // Jump to previous sibling (same depth)
+                nav_jump_to_prev_sibling(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case LCLICK_UP:
