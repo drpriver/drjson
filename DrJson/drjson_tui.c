@@ -584,6 +584,33 @@ nav_ensure_cursor_visible(JsonNav* nav, int viewport_height){
 }
 
 static inline
+void
+nav_center_cursor(JsonNav* nav, int viewport_height){
+    if(nav->item_count == 0) return;
+
+    // Account for status line taking up one row
+    int visible_rows = viewport_height - 1;
+    if(visible_rows < 1) visible_rows = 1;
+
+    // Center cursor in viewport
+    int half_screen = visible_rows / 2;
+    if(nav->cursor_pos >= (size_t)half_screen){
+        nav->scroll_offset = nav->cursor_pos - (size_t)half_screen;
+    } else {
+        nav->scroll_offset = 0;
+    }
+
+    // Don't scroll past the end
+    if(nav->scroll_offset + (size_t)visible_rows > nav->item_count){
+        if(nav->item_count > (size_t)visible_rows){
+            nav->scroll_offset = nav->item_count - (size_t)visible_rows;
+        } else {
+            nav->scroll_offset = 0;
+        }
+    }
+}
+
+static inline
 DrJsonValue
 nav_get_current_value(const JsonNav* nav){
     if(nav->item_count == 0)
@@ -1650,6 +1677,38 @@ main(int argc, const char* const* argv){
         int r = get_input(&c, &cx, &cy, &magnitude);
         if(r == -1) goto finally;
         if(!r) continue;
+
+        // Handle 'z' prefix for vim-like commands
+        if(c == 'z'){
+            int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
+            int r2 = get_input(&c2, &cx2, &cy2, &magnitude2);
+            if(r2 == -1) goto finally;
+            if(r2){
+                if(c2 == 'z'){
+                    // zz - center cursor
+                    nav_center_cursor(&nav, globals.screenh);
+                    continue;
+                }
+                else if(c2 == 't'){
+                    // zt - cursor to top of screen
+                    nav.scroll_offset = nav.cursor_pos;
+                    continue;
+                }
+                else if(c2 == 'b'){
+                    // zb - cursor to bottom of screen
+                    int visible_rows = globals.screenh - 1;
+                    if(visible_rows < 1) visible_rows = 1;
+                    if(nav.cursor_pos >= (size_t)(visible_rows - 1)){
+                        nav.scroll_offset = nav.cursor_pos - (size_t)(visible_rows - 1);
+                    } else {
+                        nav.scroll_offset = 0;
+                    }
+                    continue;
+                }
+            }
+            // If not a recognized z command, ignore
+            continue;
+        }
 
         // Handle input
         _Bool handled = 1;
