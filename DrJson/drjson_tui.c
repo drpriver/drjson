@@ -1026,9 +1026,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
 
     // Render status line at top
     drt_push_state(drt);
-    drt_bg_set_8bit_color(drt, 240);
-    drt_set_8bit_color(drt, 15);
-    drt_printf(drt, " DrJson TUI - %zu items ", nav->item_count);
+    drt_printf(drt, " DrJson TUI — %zu items ", nav->item_count);
     drt_clear_to_end_of_row(drt);
     drt_pop_state(drt);
 
