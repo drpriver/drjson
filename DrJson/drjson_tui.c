@@ -348,6 +348,10 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
         .scroll_offset = 0,
         .needs_rebuild = 1,
     };
+    // Expand root document by default if it's a container
+    if(nav_is_container(root)){
+        expansion_add(&nav->expanded, nav_get_container_id(root));
+    }
     nav_rebuild(nav);
 }
 
@@ -411,6 +415,35 @@ nav_expand_recursive(JsonNav* nav){
     }
 
     nav->cursor_pos = saved_cursor;
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+}
+
+static inline
+void
+nav_collapse_recursive(JsonNav* nav){
+    if(nav->item_count == 0) return;
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+    if(!nav_is_container(item->value))
+        return;
+
+    // Remove this container and all descendants from expansion set
+    size_t saved_cursor = nav->cursor_pos;
+    int base_depth = item->depth;
+
+    // Remove current item
+    expansion_remove(&nav->expanded, nav_get_container_id(item->value));
+
+    // Remove all descendants
+    for(size_t i = saved_cursor + 1; i < nav->item_count; i++){
+        if(nav->items[i].depth <= base_depth)
+            break; // Left the subtree
+        if(nav_is_container(nav->items[i].value)){
+            expansion_remove(&nav->expanded, nav_get_container_id(nav->items[i].value));
+        }
+    }
+
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
 }
@@ -1376,8 +1409,8 @@ main(int argc, const char* const* argv){
 
             case 'c':
             case 'C':
-                // Collapse all
-                nav_collapse_all(&nav);
+                // Collapse current item recursively
+                nav_collapse_recursive(&nav);
                 break;
 
             case LCLICK_UP:
