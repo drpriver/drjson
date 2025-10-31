@@ -476,13 +476,17 @@ void
 nav_ensure_cursor_visible(JsonNav* nav, int viewport_height){
     if(nav->item_count == 0) return;
 
+    // Account for status line taking up one row
+    int visible_rows = viewport_height - 1;
+    if(visible_rows < 1) visible_rows = 1;
+
     // Cursor is above viewport
     if(nav->cursor_pos < nav->scroll_offset){
         nav->scroll_offset = nav->cursor_pos;
     }
     // Cursor is below viewport
-    else if(nav->cursor_pos >= nav->scroll_offset + (size_t)viewport_height){
-        nav->scroll_offset = nav->cursor_pos - (size_t)viewport_height + 1;
+    else if(nav->cursor_pos >= nav->scroll_offset + (size_t)visible_rows){
+        nav->scroll_offset = nav->cursor_pos - (size_t)visible_rows + 1;
     }
 }
 
