@@ -544,12 +544,177 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
         }
         case DRJSON_ARRAY: {
             int64_t len = drjson_len(jctx, val);
-            drt_printf(drt, "[%lld item%s]", (long long)len, len == 1 ? "" : "s");
+            if(len == 0){
+                drt_puts(drt, "[]", 2);
+            }
+            else {
+                drt_putc(drt, '[');
+                int shown = 0;
+                int budget = max_width - 20; // Reserve space for brackets, ", ... N more]"
+
+                for(int64_t i = 0; i < len && budget > 5; i++){
+                    DrJsonValue item = drjson_get_by_index(jctx, val, i);
+
+                    if(i > 0){
+                        drt_puts(drt, ", ", 2);
+                        budget -= 2;
+                    }
+
+                    // Render based on type
+                    switch(item.kind){
+                        case DRJSON_NULL:
+                            if(budget >= 4){
+                                drt_puts(drt, "null", 4);
+                                budget -= 4;
+                                shown++;
+                            }
+                            break;
+                        case DRJSON_BOOL:
+                            if(item.boolean){
+                                if(budget >= 4){
+                                    drt_puts(drt, "true", 4);
+                                    budget -= 4;
+                                    shown++;
+                                }
+                            } else {
+                                if(budget >= 5){
+                                    drt_puts(drt, "false", 5);
+                                    budget -= 5;
+                                    shown++;
+                                }
+                            }
+                            break;
+                        case DRJSON_NUMBER:
+                        case DRJSON_INTEGER:
+                        case DRJSON_UINTEGER: {
+                            char numbuf[32];
+                            int nlen = 0;
+                            if(item.kind == DRJSON_NUMBER)
+                                nlen = snprintf(numbuf, sizeof(numbuf), "%g", item.number);
+                            else if(item.kind == DRJSON_INTEGER)
+                                nlen = snprintf(numbuf, sizeof(numbuf), "%lld", (long long)item.integer);
+                            else
+                                nlen = snprintf(numbuf, sizeof(numbuf), "%llu", (unsigned long long)item.uinteger);
+
+                            if(nlen > 0 && nlen < budget){
+                                drt_puts(drt, numbuf, nlen);
+                                budget -= nlen;
+                                shown++;
+                            } else {
+                                goto budget_exceeded;
+                            }
+                            break;
+                        }
+                        case DRJSON_STRING: {
+                            const char* str = NULL;
+                            size_t slen = 0;
+                            drjson_get_str_and_len(jctx, item, &str, &slen);
+                            if(str && budget >= 4){ // At least room for ""
+                                drt_putc(drt, '"');
+                                budget--;
+                                size_t to_print = slen;
+                                if((int)to_print > budget - 1)
+                                    to_print = budget - 1;
+                                drt_puts(drt, str, to_print);
+                                budget -= (int)to_print;
+                                drt_putc(drt, '"');
+                                budget--;
+                                shown++;
+                            } else {
+                                goto budget_exceeded;
+                            }
+                            break;
+                        }
+                        case DRJSON_ARRAY:
+                            if(budget >= 5){
+                                drt_puts(drt, "[...]", 5);
+                                budget -= 5;
+                                shown++;
+                            } else {
+                                goto budget_exceeded;
+                            }
+                            break;
+                        case DRJSON_OBJECT:
+                            if(budget >= 5){
+                                drt_puts(drt, "{...}", 5);
+                                budget -= 5;
+                                shown++;
+                            } else {
+                                goto budget_exceeded;
+                            }
+                            break;
+                        default:
+                            goto budget_exceeded;
+                    }
+                }
+                budget_exceeded:
+
+                if(shown < len){
+                    int64_t remaining = len - shown;
+                    char buf[64];
+                    int blen = snprintf(buf, sizeof(buf), ", ... %lld more]", (long long)remaining);
+                    if(blen > 0 && blen < (int)sizeof(buf)){
+                        drt_puts(drt, buf, blen);
+                    } else {
+                        drt_puts(drt, ", ...]", 6);
+                    }
+                } else {
+                    drt_putc(drt, ']');
+                }
+            }
             break;
         }
         case DRJSON_OBJECT: {
             int64_t len = drjson_len(jctx, val);
-            drt_printf(drt, "{%lld key%s}", (long long)len, len == 1 ? "" : "s");
+            if(len == 0){
+                drt_puts(drt, "{}", 2);
+            }
+            else {
+                drt_putc(drt, '{');
+                DrJsonValue keys = drjson_object_keys(val);
+                int64_t keys_len = drjson_len(jctx, keys);
+                int shown = 0;
+                int budget = max_width - 20; // Reserve space for braces, ", ... N more}"
+
+                for(int64_t i = 0; i < keys_len && budget > 0; i++){
+                    DrJsonValue key = drjson_get_by_index(jctx, keys, i);
+                    const char* key_str = NULL;
+                    size_t key_len = 0;
+                    drjson_get_str_and_len(jctx, key, &key_str, &key_len);
+
+                    if(key_str){
+                        int needed = (int)key_len + (i > 0 ? 2 : 0); // +2 for ", "
+                        if(needed > budget && shown > 0)
+                            break;
+
+                        if(i > 0){
+                            drt_puts(drt, ", ", 2);
+                            budget -= 2;
+                        }
+
+                        size_t to_print = key_len;
+                        if((int)to_print > budget)
+                            to_print = budget;
+
+                        drt_puts(drt, key_str, to_print);
+                        budget -= (int)to_print;
+                        shown++;
+                    }
+                }
+
+                if(shown < keys_len){
+                    int64_t remaining = keys_len - shown;
+                    char buf[64];
+                    int blen = snprintf(buf, sizeof(buf), ", ... %lld more}", (long long)remaining);
+                    if(blen > 0 && blen < (int)sizeof(buf)){
+                        drt_puts(drt, buf, blen);
+                    } else {
+                        drt_puts(drt, ", ...}", 6);
+                    }
+                } else {
+                    drt_putc(drt, '}');
+                }
+            }
             break;
         }
         case DRJSON_ERROR:
