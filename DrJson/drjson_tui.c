@@ -94,7 +94,6 @@ struct JsonNav {
     // Cursor and viewport
     size_t cursor_pos;        // Current cursor position in items array
     size_t scroll_offset;     // First visible line (for scrolling)
-    int viewport_height;      // Number of lines that fit on screen
 
     // State flags
     _Bool needs_rebuild;      // Items array needs regeneration
@@ -347,7 +346,6 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
         .expanded = {0},
         .cursor_pos = 0,
         .scroll_offset = 0,
-        .viewport_height = 24,
         .needs_rebuild = 1,
     };
     nav_rebuild(nav);
@@ -442,7 +440,7 @@ nav_move_cursor(JsonNav* nav, int delta){
 
 static inline
 void
-nav_ensure_cursor_visible(JsonNav* nav){
+nav_ensure_cursor_visible(JsonNav* nav, int viewport_height){
     if(nav->item_count == 0) return;
 
     // Cursor is above viewport
@@ -450,8 +448,8 @@ nav_ensure_cursor_visible(JsonNav* nav){
         nav->scroll_offset = nav->cursor_pos;
     }
     // Cursor is below viewport
-    else if(nav->cursor_pos >= nav->scroll_offset + (size_t)nav->viewport_height){
-        nav->scroll_offset = nav->cursor_pos - (size_t)nav->viewport_height + 1;
+    else if(nav->cursor_pos >= nav->scroll_offset + (size_t)viewport_height){
+        nav->scroll_offset = nav->cursor_pos - (size_t)viewport_height + 1;
     }
 }
 
@@ -528,7 +526,7 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
 
 static
 void
-nav_render(JsonNav* nav, Drt* drt){
+nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
     if(nav->needs_rebuild)
         nav_rebuild(nav);
 
@@ -545,7 +543,7 @@ nav_render(JsonNav* nav, Drt* drt){
     drt_pop_state(drt);
 
     // Render visible items
-    size_t end_idx = nav->scroll_offset + (size_t)nav->viewport_height - 1; // -1 for status line
+    size_t end_idx = nav->scroll_offset + (size_t)screenh - 1; // -1 for status line
     if(end_idx > nav->item_count)
         end_idx = nav->item_count;
 
@@ -600,8 +598,7 @@ nav_render(JsonNav* nav, Drt* drt){
         // Value summary
         int cx, cy;
         drt_cursor(drt, &cx, &cy);
-        int remaining = nav->viewport_height > 100 ? 100 : nav->viewport_height;
-        remaining -= cx;
+        int remaining = screenw - cx;
         if(remaining < 10) remaining = 10;
         nav_render_value_summary(drt, nav->jctx, item->value, remaining);
 
@@ -614,7 +611,7 @@ nav_render(JsonNav* nav, Drt* drt){
     }
 
     // Clear remaining lines
-    for(int y = 1 + (int)(end_idx - nav->scroll_offset); y < nav->viewport_height; y++){
+    for(int y = 1 + (int)(end_idx - nav->scroll_offset); y < screenh; y++){
         drt_move(drt, 0, y);
         drt_clear_to_end_of_row(drt);
     }
@@ -1279,13 +1276,12 @@ main(int argc, const char* const* argv){
             if(globals.screenh != sz.rows || globals.screenw != sz.columns){
                 globals.screenh = sz.rows;
                 globals.screenw = sz.columns;
-                nav.viewport_height = sz.rows;
             }
             globals.needs_rescale = 0;
         }
 
         // Render the navigation view
-        nav_render(&nav, &globals.drt);
+        nav_render(&nav, &globals.drt, globals.screenw, globals.screenh);
         drt_paint(&globals.drt);
 
         int c = 0, cx = 0, cy = 0, magnitude = 0;
@@ -1315,39 +1311,39 @@ main(int argc, const char* const* argv){
             case 'k':
             case 'K':
                 nav_move_cursor(&nav, -magnitude);
-                nav_ensure_cursor_visible(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case DOWN:
             case 'j':
             case 'J':
                 nav_move_cursor(&nav, magnitude);
-                nav_ensure_cursor_visible(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case PAGE_UP:
             case CTRL_B:
-                nav_move_cursor(&nav, -(nav.viewport_height - 2));
-                nav_ensure_cursor_visible(&nav);
+                nav_move_cursor(&nav, -(globals.screenh - 2));
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case PAGE_DOWN:
             case CTRL_F:
-                nav_move_cursor(&nav, nav.viewport_height - 2);
-                nav_ensure_cursor_visible(&nav);
+                nav_move_cursor(&nav, globals.screenh - 2);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case HOME:
             case 'g':
                 nav.cursor_pos = 0;
-                nav_ensure_cursor_visible(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case END:
             case 'G':
                 if(nav.item_count > 0)
                     nav.cursor_pos = nav.item_count - 1;
-                nav_ensure_cursor_visible(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case ENTER:
@@ -1356,7 +1352,7 @@ main(int argc, const char* const* argv){
             case 'L':
             case ' ':
                 nav_toggle_expand_at_cursor(&nav);
-                nav_ensure_cursor_visible(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case LEFT:
@@ -1375,13 +1371,30 @@ main(int argc, const char* const* argv){
             case 'E':
                 // Expand recursively
                 nav_expand_recursive(&nav);
-                nav_ensure_cursor_visible(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
             case 'c':
             case 'C':
                 // Collapse all
                 nav_collapse_all(&nav);
+                break;
+
+            case LCLICK_UP:
+                // Handle mouse clicks (only on release to avoid double-toggle)
+                // Status line is at y=0, items start at y=1
+                if(cy >= 1 && cy < globals.screenh){
+                    size_t clicked_idx = (size_t)(cy - 1) + nav.scroll_offset;
+                    if(clicked_idx < nav.item_count){
+                        // Move cursor to clicked item
+                        nav.cursor_pos = clicked_idx;
+                        // Toggle expand if it's a container
+                        NavItem* item = &nav.items[clicked_idx];
+                        if(nav_is_container(item->value)){
+                            nav_toggle_expand_at_cursor(&nav);
+                        }
+                    }
+                }
                 break;
 
             default:
@@ -1398,7 +1411,6 @@ main(int argc, const char* const* argv){
             if(globals.screenh != sz.rows || globals.screenw != sz.columns){
                 globals.screenh = sz.rows;
                 globals.screenw = sz.columns;
-                nav.viewport_height = sz.rows;
             }
             globals.needs_rescale = 0;
         }
