@@ -550,10 +550,15 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
             else {
                 drt_putc(drt, '[');
                 int shown = 0;
+                int complex_shown = 0; // Count of objects/arrays shown
                 int budget = max_width - 20; // Reserve space for brackets, ", ... N more]"
 
                 for(int64_t i = 0; i < len && budget > 5; i++){
                     DrJsonValue item = drjson_get_by_index(jctx, val, i);
+
+                    // Stop after showing 1 complex type (object/array)
+                    if(complex_shown >= 1 && (item.kind == DRJSON_OBJECT || item.kind == DRJSON_ARRAY))
+                        break;
 
                     if(i > 0){
                         drt_puts(drt, ", ", 2);
@@ -625,24 +630,79 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             }
                             break;
                         }
-                        case DRJSON_ARRAY:
-                            if(budget >= 5){
-                                drt_puts(drt, "[...]", 5);
-                                budget -= 5;
-                                shown++;
-                            } else {
+                        case DRJSON_ARRAY: {
+                            // Show array preview
+                            int64_t arr_len = drjson_len(jctx, item);
+
+                            if(budget < 5){
                                 goto budget_exceeded;
                             }
+
+                            drt_putc(drt, '[');
+                            budget--;
+
+                            if(arr_len > 0){
+                                drt_puts(drt, "...", 3);
+                                budget -= 3;
+                            }
+
+                            drt_putc(drt, ']');
+                            budget--;
+                            shown++;
+                            complex_shown++;
                             break;
-                        case DRJSON_OBJECT:
-                            if(budget >= 5){
-                                drt_puts(drt, "{...}", 5);
-                                budget -= 5;
-                                shown++;
-                            } else {
+                        }
+                        case DRJSON_OBJECT: {
+                            // Show object preview with first few keys
+                            DrJsonValue obj_keys = drjson_object_keys(item);
+                            int64_t obj_keys_len = drjson_len(jctx, obj_keys);
+
+                            if(budget < 5){
                                 goto budget_exceeded;
                             }
+
+                            drt_putc(drt, '{');
+                            budget--;
+
+                            int obj_shown = 0;
+                            for(int64_t ki = 0; ki < obj_keys_len && budget > 10; ki++){
+                                DrJsonValue okey = drjson_get_by_index(jctx, obj_keys, ki);
+                                const char* okey_str = NULL;
+                                size_t okey_len = 0;
+                                drjson_get_str_and_len(jctx, okey, &okey_str, &okey_len);
+
+                                if(okey_str){
+                                    if(obj_shown > 0){
+                                        drt_puts(drt, ", ", 2);
+                                        budget -= 2;
+                                    }
+
+                                    size_t to_print = okey_len;
+                                    if((int)to_print > budget - 5)
+                                        to_print = budget - 5;
+
+                                    if(to_print > 0){
+                                        drt_puts(drt, okey_str, to_print);
+                                        budget -= (int)to_print;
+                                        obj_shown++;
+                                    }
+
+                                    if(budget < 10)
+                                        break;
+                                }
+                            }
+
+                            if(obj_shown < obj_keys_len){
+                                drt_puts(drt, ", ...", 5);
+                                budget -= 5;
+                            }
+
+                            drt_putc(drt, '}');
+                            budget--;
+                            shown++;
+                            complex_shown++;
                             break;
+                        }
                         default:
                             goto budget_exceeded;
                     }
