@@ -65,6 +65,9 @@ README.html: README.md README.css
 Bin/drjson$(EXE): DrJson/drjson_cli.c | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_cli.dep $(OPT) $(DEBUG) -fvisibility=hidden -I.
 
+Bin/drj$(EXE): DrJson/drjson_tui.c | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_tui.dep $(OPT) $(DEBUG) -fvisibility=hidden -I.
+
 
 Bin/drjson_fuzz$(EXE): DrJson/drjson_fuzz.c | Bin Deps
 	clang -O0 -g $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_fuzz.dep -fsanitize=fuzzer,address,undefined
@@ -76,6 +79,7 @@ do-fuzz: Bin/drjson_fuzz | Fuzz Deps
 .PHONY: all
 all: Bin/libdrjson.$(DRJSONVERSION).$(DYLIB)
 all: Bin/drjson$(EXE)
+all: Bin/drj$(EXE)
 all: Bin/drjson.o
 all: Bin/demo$(EXE)
 all: Bin/test$(EXE)
