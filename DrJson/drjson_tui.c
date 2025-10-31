@@ -98,6 +98,7 @@ struct JsonNav {
 
     // State flags
     _Bool needs_rebuild;      // Items array needs regeneration
+    _Bool show_help;          // Show help overlay
 };
 
 // Chose to use libc's FILE api instead of OS APIs for portability.
@@ -349,6 +350,7 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
         .cursor_pos = 0,
         .scroll_offset = 0,
         .needs_rebuild = 1,
+        .show_help = 0,
     };
     // Expand root document by default if it's a container
     if(nav_is_container(root)){
@@ -903,6 +905,120 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
         default:
             drt_puts(drt, "<unknown>", 9);
             break;
+    }
+}
+
+static
+void
+drt_puts_utf8(Drt* drt, const char* str){
+    // Render a UTF-8 string, handling multi-byte characters correctly
+    const unsigned char* s = (const unsigned char*)str;
+    while(*s){
+        if(*s < 128){
+            // ASCII character
+            drt_putc(drt, (char)*s);
+            s++;
+        }
+        else {
+            // Multi-byte UTF-8 sequence
+            int len = 0;
+            if((*s & 0xe0) == 0xc0) len = 2;
+            else if((*s & 0xf0) == 0xe0) len = 3;
+            else if((*s & 0xf8) == 0xf0) len = 4;
+            else {
+                s++; // Invalid, skip
+                continue;
+            }
+
+            // Use drt_putc_mb with render width of 1 for most chars
+            drt_putc_mb(drt, (const char*)s, len, 1);
+            s += len;
+        }
+    }
+}
+
+static
+void
+nav_render_help(Drt* drt, int screenw, int screenh){
+    const char* help_lines[] = {
+        "DrJson TUI - Keyboard Commands",
+        "",
+        "Navigation:",
+        "  j/↓         Move cursor down",
+        "  k/↑         Move cursor up",
+        "  h/←         Jump to parent (and collapse)",
+        "  H           Jump to parent (keep expanded)",
+        "  l/→         Enter container (expand if needed)",
+        "  ]           Next sibling (skip children)",
+        "  [           Previous sibling",
+        "  -           Jump to parent (no collapse)",
+        "",
+        "Scrolling:",
+        "  Ctrl-D      Scroll down half page",
+        "  Ctrl-U      Scroll up half page",
+        "  Ctrl-F/PgDn Scroll down full page",
+        "  Ctrl-B/PgUp Scroll up full page",
+        "  g/Home      Jump to top",
+        "  G/End       Jump to bottom",
+        "",
+        "Viewport:",
+        "  zz          Center cursor on screen",
+        "  zt          Cursor to top of screen",
+        "  zb          Cursor to bottom of screen",
+        "",
+        "Expand/Collapse:",
+        "  Enter/Space Toggle expand/collapse",
+        "  e           Expand recursively",
+        "  c           Collapse recursively",
+        "",
+        "Other:",
+        "  q/Ctrl-C    Quit",
+        "  ?           Toggle this help",
+        "",
+        "Press any key to close help..."
+    };
+
+    int num_lines = sizeof(help_lines) / sizeof(help_lines[0]);
+    int start_y = (screenh - num_lines) / 2;
+    if(start_y < 1) start_y = 1;
+
+    int max_width = 0;
+    for(int i = 0; i < num_lines; i++){
+        int len = strlen(help_lines[i]);
+        if(len > max_width) max_width = len;
+    }
+
+    int start_x = (screenw - max_width - 4) / 2;
+    if(start_x < 0) start_x = 0;
+
+    // Draw box background
+    for(int y = 0; y < num_lines + 2 && start_y + y < screenh; y++){
+        drt_move(drt, start_x, start_y + y);
+        drt_push_state(drt);
+        drt_bg_set_8bit_color(drt, 235);
+        drt_set_8bit_color(drt, 15);
+        for(int x = 0; x < max_width + 4; x++){
+            drt_putc(drt, ' ');
+        }
+        drt_pop_state(drt);
+    }
+
+    // Draw help text
+    for(int i = 0; i < num_lines && start_y + i + 1 < screenh; i++){
+        drt_move(drt, start_x + 2, start_y + i + 1);
+        drt_push_state(drt);
+        drt_bg_set_8bit_color(drt, 235);
+
+        // Highlight headers
+        if(help_lines[i][0] && help_lines[i][strlen(help_lines[i])-1] == ':'){
+            drt_set_8bit_color(drt, 11); // bright yellow
+            drt_set_style(drt, DRT_STYLE_BOLD);
+        } else {
+            drt_set_8bit_color(drt, 15);
+        }
+
+        drt_puts_utf8(drt, help_lines[i]);
+        drt_pop_state(drt);
     }
 }
 
@@ -1671,12 +1787,24 @@ main(int argc, const char* const* argv){
 
         // Render the navigation view
         nav_render(&nav, &globals.drt, globals.screenw, globals.screenh);
+
+        // Render help overlay if active
+        if(nav.show_help){
+            nav_render_help(&globals.drt, globals.screenw, globals.screenh);
+        }
+
         drt_paint(&globals.drt);
 
         int c = 0, cx = 0, cy = 0, magnitude = 0;
         int r = get_input(&c, &cx, &cy, &magnitude);
         if(r == -1) goto finally;
         if(!r) continue;
+
+        // If help is showing, any key closes it
+        if(nav.show_help){
+            nav.show_help = 0;
+            continue;
+        }
 
         // Handle 'z' prefix for vim-like commands
         if(c == 'z'){
@@ -1837,6 +1965,11 @@ main(int argc, const char* const* argv){
                 // Jump to previous sibling (same depth)
                 nav_jump_to_prev_sibling(&nav);
                 nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
+            case '?':
+                // Toggle help
+                nav.show_help = !nav.show_help;
                 break;
 
             case LCLICK_UP:
