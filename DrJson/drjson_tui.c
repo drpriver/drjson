@@ -178,7 +178,7 @@ read_file_streamed(FILE* fp){
 }
 
 static inline
-LongString 
+LongString
 read_file(const char* filepath){
     LongString result = {0};
     FILE* fp = fopen(filepath, "rb");
@@ -234,6 +234,15 @@ expansion_remove(ExpansionSet* set, size_t id){
     size_t idx = id / 64;
     if(idx >= set->capacity) __builtin_debugtrap();
     set->ids[idx] &= ~(1llu << bit);
+}
+
+static inline
+void
+expansion_toggle(ExpansionSet* set, size_t id){
+    size_t bit = id & 63;
+    size_t idx = id / 64;
+    if(idx >= set->capacity) __builtin_debugtrap();
+    set->ids[idx] ^= 1lu << bit;
 }
 
 static inline
@@ -394,12 +403,7 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
         return;
 
     size_t id = nav_get_container_id(item->value);
-    if(nav_is_expanded(nav, item->value)){
-        expansion_remove(&nav->expanded, id);
-    }
-    else {
-        expansion_add(&nav->expanded, id);
-    }
+    expansion_toggle(&nav->expanded, id);
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
 }
@@ -1653,7 +1657,7 @@ get_input(int* pc, int* pcx, int* pcy, int* pmagnitude){
     return 1;
 }
 
-int 
+int
 main(int argc, const char* const* argv){
     Args args = {argc?argc-1:0, argc?argv+1:NULL};
     LongString jsonpath = {0};
