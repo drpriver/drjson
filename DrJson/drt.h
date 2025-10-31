@@ -113,9 +113,6 @@ drt_setc_at(Drt* drt, int x, int y, char c);
 DRT_API
 void
 drt_putc(Drt* drt, char c);
-DRT_API
-void
-drt_putc(Drt* drt, char c);
 
 DRT_API
 void
@@ -145,10 +142,6 @@ drt_printf(Drt* drt, const char* fmt, ...);
 DRT_API
 void
 drt_clear_to_end_of_row(Drt*drt);
-
-// DRT_API
-// void
-// drt_putc_mb(Drt* drt, const char* txt, size_t length, size_t render_length);
 
 // DRT_API
 // void
