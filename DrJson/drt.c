@@ -483,8 +483,7 @@ drt_putc_mb(Drt* drt, const char* c, size_t length, size_t rend_width){
 DRT_API
 void
 drt_puts(Drt* drt, const char* txt, size_t length){
-    for(size_t i = 0; i < length; i++)
-        drt_putc(drt, txt[i]);
+    drt_puts_utf8(drt, txt, length);
 }
 
 DRT_API

@@ -56,6 +56,8 @@ typedef long long ssize_t;
 #endif
 #endif
 
+enum {ITEMS_PER_ROW=16};
+
 static const char* LOGFILE = NULL;
 static FILE* LOGFILE_FP = NULL;
 static inline
@@ -78,8 +80,321 @@ LOG(const char* fmt, ...){
 }
 
 //------------------------------------------------------------
+// Text Buffer for Editing
+//------------------------------------------------------------
+
+// History for text buffers
+typedef struct TextBufferHistory TextBufferHistory;
+struct TextBufferHistory {
+    char** entries;          // Array of history entries
+    size_t count;            // Number of entries
+    size_t capacity;         // Capacity of array
+    size_t browse_index;     // Current position when browsing (count = not browsing)
+    char saved_current[256]; // Save current unsaved text when starting to browse
+    size_t saved_length;     // Length of saved text
+    _Bool browsing;          // True if currently browsing history
+};
+
+typedef struct TextBuffer TextBuffer;
+struct TextBuffer {
+    char* data;
+    size_t length;
+    size_t capacity;
+    size_t cursor_pos;       // Cursor position (0 to length)
+    TextBufferHistory* history; // Optional history
+};
+
+static inline
+void
+textbuffer_history_init(TextBufferHistory* hist){
+    hist->entries = NULL;
+    hist->count = 0;
+    hist->capacity = 0;
+    hist->browse_index = 0;
+    hist->saved_length = 0;
+    hist->browsing = 0;
+}
+
+static inline
+void
+textbuffer_history_free(TextBufferHistory* hist){
+    for(size_t i = 0; i < hist->count; i++){
+        free(hist->entries[i]);
+    }
+    free(hist->entries);
+    hist->entries = NULL;
+    hist->count = 0;
+    hist->capacity = 0;
+}
+
+static inline
+void
+textbuffer_history_add(TextBufferHistory* hist, const char* text, size_t length){
+    if(length == 0) return; // Don't add empty entries
+
+    // Don't add if it matches the most recent entry
+    if(hist->count > 0){
+        size_t last_len = strlen(hist->entries[hist->count - 1]);
+        if(last_len == length && memcmp(hist->entries[hist->count - 1], text, length) == 0){
+            return;
+        }
+    }
+
+    // Expand array if needed
+    if(hist->count >= hist->capacity){
+        size_t new_cap = hist->capacity == 0 ? 16 : hist->capacity * 2;
+        char** new_entries = realloc(hist->entries, new_cap * sizeof(char*));
+        if(!new_entries) return;
+        hist->entries = new_entries;
+        hist->capacity = new_cap;
+    }
+
+    // Add entry
+    hist->entries[hist->count] = malloc(length + 1);
+    if(!hist->entries[hist->count]) return;
+    memcpy(hist->entries[hist->count], text, length);
+    hist->entries[hist->count][length] = '\0';
+    hist->count++;
+}
+
+static inline
+void
+textbuffer_init(TextBuffer* buf, size_t capacity){
+    buf->data = malloc(capacity);
+    buf->data[0] = '\0';
+    buf->length = 0;
+    buf->capacity = capacity;
+    buf->cursor_pos = 0;
+    buf->history = NULL;
+}
+
+static inline
+void
+textbuffer_free(TextBuffer* buf){
+    free(buf->data);
+    buf->data = NULL;
+    buf->length = 0;
+    buf->capacity = 0;
+    buf->cursor_pos = 0;
+}
+
+static inline
+void
+textbuffer_clear(TextBuffer* buf){
+    buf->length = 0;
+    buf->cursor_pos = 0;
+    if(buf->data) buf->data[0] = '\0';
+}
+
+static inline
+void
+textbuffer_append_char(TextBuffer* buf, char c){
+    if(buf->length + 1 < buf->capacity){
+        // Insert character at cursor position
+        if(buf->cursor_pos < buf->length){
+            // Shift characters to the right
+            memmove(buf->data + buf->cursor_pos + 1,
+                    buf->data + buf->cursor_pos,
+                    buf->length - buf->cursor_pos);
+        }
+        buf->data[buf->cursor_pos] = c;
+        buf->length++;
+        buf->cursor_pos++;
+        buf->data[buf->length] = '\0';
+    }
+}
+
+static inline
+void
+textbuffer_backspace(TextBuffer* buf){
+    if(buf->cursor_pos > 0 && buf->length > 0){
+        // Shift characters to the left
+        memmove(buf->data + buf->cursor_pos - 1,
+                buf->data + buf->cursor_pos,
+                buf->length - buf->cursor_pos);
+        buf->length--;
+        buf->cursor_pos--;
+        buf->data[buf->length] = '\0';
+    }
+}
+
+static inline
+void
+textbuffer_delete(TextBuffer* buf){
+    if(buf->cursor_pos < buf->length){
+        // Shift characters to the left
+        memmove(buf->data + buf->cursor_pos,
+                buf->data + buf->cursor_pos + 1,
+                buf->length - buf->cursor_pos - 1);
+        buf->length--;
+        buf->data[buf->length] = '\0';
+    }
+}
+
+static inline
+void
+textbuffer_move_left(TextBuffer* buf){
+    if(buf->cursor_pos > 0){
+        buf->cursor_pos--;
+    }
+}
+
+static inline
+void
+textbuffer_move_right(TextBuffer* buf){
+    if(buf->cursor_pos < buf->length){
+        buf->cursor_pos++;
+    }
+}
+
+static inline
+void
+textbuffer_move_home(TextBuffer* buf){
+    buf->cursor_pos = 0;
+}
+
+static inline
+void
+textbuffer_move_end(TextBuffer* buf){
+    buf->cursor_pos = buf->length;
+}
+
+// Kill (delete) from cursor to end of line (Ctrl-K)
+static inline
+void
+textbuffer_kill_line(TextBuffer* buf){
+    if(buf->cursor_pos < buf->length){
+        buf->length = buf->cursor_pos;
+        buf->data[buf->length] = '\0';
+    }
+}
+
+// Kill (delete) entire line (Ctrl-U)
+static inline
+void
+textbuffer_kill_whole_line(TextBuffer* buf){
+    buf->length = 0;
+    buf->cursor_pos = 0;
+    if(buf->data) buf->data[0] = '\0';
+}
+
+// Delete word backward (Ctrl-W)
+static inline
+void
+textbuffer_delete_word_backward(TextBuffer* buf){
+    if(buf->cursor_pos == 0) return;
+
+    size_t orig_pos = buf->cursor_pos;
+
+    // Skip trailing whitespace
+    while(buf->cursor_pos > 0 && buf->data[buf->cursor_pos - 1] == ' '){
+        buf->cursor_pos--;
+    }
+
+    // Delete word characters
+    while(buf->cursor_pos > 0 && buf->data[buf->cursor_pos - 1] != ' '){
+        buf->cursor_pos--;
+    }
+
+    // Shift remaining text left
+    if(buf->cursor_pos < orig_pos){
+        size_t delete_len = orig_pos - buf->cursor_pos;
+        memmove(buf->data + buf->cursor_pos,
+                buf->data + orig_pos,
+                buf->length - orig_pos);
+        buf->length -= delete_len;
+        buf->data[buf->length] = '\0';
+    }
+}
+
+// Navigate to previous history entry (up arrow / Ctrl-P)
+static inline
+void
+textbuffer_history_prev(TextBuffer* buf){
+    if(!buf->history || buf->history->count == 0) return;
+
+    // If not browsing yet, save current text and start from end of history
+    if(!buf->history->browsing){
+        buf->history->browsing = 1;
+        buf->history->browse_index = buf->history->count;
+        buf->history->saved_length = buf->length < 256 ? buf->length : 255;
+        memcpy(buf->history->saved_current, buf->data, buf->history->saved_length);
+        buf->history->saved_current[buf->history->saved_length] = '\0';
+    }
+
+    // Move to previous entry
+    if(buf->history->browse_index > 0){
+        buf->history->browse_index--;
+        const char* entry = buf->history->entries[buf->history->browse_index];
+        size_t entry_len = strlen(entry);
+        if(entry_len < buf->capacity){
+            memcpy(buf->data, entry, entry_len);
+            buf->data[entry_len] = '\0';
+            buf->length = entry_len;
+            buf->cursor_pos = entry_len; // Move cursor to end
+        }
+    }
+}
+
+// Navigate to next history entry (down arrow / Ctrl-N)
+static inline
+void
+textbuffer_history_next(TextBuffer* buf){
+    if(!buf->history || !buf->history->browsing) return;
+
+    buf->history->browse_index++;
+
+    // If we've gone past the end, restore saved text and stop browsing
+    if(buf->history->browse_index >= buf->history->count){
+        buf->history->browsing = 0;
+        buf->history->browse_index = buf->history->count;
+        memcpy(buf->data, buf->history->saved_current, buf->history->saved_length);
+        buf->data[buf->history->saved_length] = '\0';
+        buf->length = buf->history->saved_length;
+        buf->cursor_pos = buf->length; // Move cursor to end
+    }
+    else {
+        const char* entry = buf->history->entries[buf->history->browse_index];
+        size_t entry_len = strlen(entry);
+        if(entry_len < buf->capacity){
+            memcpy(buf->data, entry, entry_len);
+            buf->data[entry_len] = '\0';
+            buf->length = entry_len;
+            buf->cursor_pos = entry_len; // Move cursor to end
+        }
+    }
+}
+
+// Reset history browsing state
+static inline
+void
+textbuffer_history_reset(TextBuffer* buf){
+    if(!buf->history) return;
+    buf->history->browsing = 0;
+    buf->history->browse_index = buf->history->count;
+}
+
+// Render text buffer to screen (just the text, no cursor)
+// Returns the screen position after rendering
+static inline
+int
+textbuffer_render(Drt* drt, TextBuffer* buf){
+    if(buf->length > 0){
+        drt_puts(drt, buf->data, buf->length);
+    }
+    return (int)buf->length;
+}
+
+//------------------------------------------------------------
 // Navigation Data Structures
 //------------------------------------------------------------
+
+// Search modes
+enum SearchMode {
+    SEARCH_INACTIVE = 0,
+    SEARCH_NORMAL = 1,
+    SEARCH_RECURSIVE = 2,
+};
 
 // Represents a single visible line in the TUI
 typedef struct NavItem NavItem;
@@ -89,6 +404,8 @@ struct NavItem {
     int depth;                // Indentation depth (for rendering)
     int64_t array_index;      // Index if this is an array element (-1 if not)
     _Bool has_key;            // Whether this item has a key (object member vs array element)
+    _Bool is_flat_view;       // If true, this is a synthetic flat array view child
+    int flat_row_index;       // For flat view items, which row (0, 1, 2, ...)
 };
 
 // Tracks which containers (objects/arrays) are expanded
@@ -120,6 +437,15 @@ struct JsonNav {
     // State flags
     _Bool needs_rebuild;      // Items array needs regeneration
     _Bool show_help;          // Show help overlay
+
+    // Search state
+    TextBuffer search_buffer;       // Current search query
+    TextBufferHistory search_history; // Search history
+    enum SearchMode search_mode;    // Current search mode
+    size_t* search_matches;         // Array of indices of items that match
+    size_t search_match_count;
+    size_t search_match_capacity;
+    size_t current_match_idx;       // Index into search_matches array
 };
 
 // Chose to use libc's FILE api instead of OS APIs for portability.
@@ -306,6 +632,28 @@ nav_append_item(JsonNav* nav, NavItem item){
 static void nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
                                    DrJsonAtom key, _Bool has_key, int64_t array_index);
 
+// Check if an array should be rendered as a flat wrapped list
+// Returns true if all elements are numbers (or other simple primitives)
+static
+_Bool
+nav_should_render_flat(JsonNav* nav, DrJsonValue val){
+    if(val.kind != DRJSON_ARRAY) return 0;
+
+    int64_t len = drjson_len(nav->jctx, val);
+    if(len == 0) return 0; // Empty arrays render normally
+
+    // Check if all elements are numbers
+    for(int64_t i = 0; i < len; i++){
+        DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
+        if(child.kind != DRJSON_NUMBER &&
+           child.kind != DRJSON_INTEGER &&
+           child.kind != DRJSON_UINTEGER){
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static
 void
 nav_rebuild(JsonNav* nav){
@@ -324,33 +672,61 @@ static
 void
 nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
                       DrJsonAtom key, _Bool has_key, int64_t array_index){
+    // Check if this should be rendered flat
+    _Bool render_flat = 0;
+    if(val.kind == DRJSON_ARRAY && nav_is_expanded(nav, val)){
+        render_flat = nav_should_render_flat(nav, val);
+    }
+
     // Add current item
     NavItem item = {
         .value = val,
         .key = key,
         .depth = depth,
         .array_index = array_index,
-        .has_key = has_key
+        .has_key = has_key,
+        .is_flat_view = 0,
+        .flat_row_index = 0
     };
     nav_append_item(nav, item);
 
     // If it's a container and expanded, add children
     if(nav_is_container(val) && nav_is_expanded(nav, val)){
-        int64_t len = drjson_len(nav->jctx, val);
+        if(render_flat){
+            // Add multiple synthetic flat view children (one per row of 10 items)
+            int64_t len = drjson_len(nav->jctx, val);
+            int num_rows = (int)((len + ITEMS_PER_ROW - 1) / ITEMS_PER_ROW); // ceil division
 
-        if(val.kind == DRJSON_ARRAY){
-            for(int64_t i = 0; i < len; i++){
-                DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
-                nav_rebuild_recursive(nav, child, depth + 1, (DrJsonAtom){0}, 0, i);
+            for(int row = 0; row < num_rows; row++){
+                NavItem flat_item = {
+                    .value = val,  // Same array value
+                    .key = (DrJsonAtom){0},
+                    .depth = depth + 1,
+                    .array_index = -1,
+                    .has_key = 0,
+                    .is_flat_view = 1,
+                    .flat_row_index = row
+                };
+                nav_append_item(nav, flat_item);
             }
         }
-        else { // DRJSON_OBJECT
-            DrJsonValue items = drjson_object_items(val);
-            int64_t items_len = drjson_len(nav->jctx, items);
-            for(int64_t i = 0; i < items_len; i += 2){
-                DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
-                DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
-                nav_rebuild_recursive(nav, v, depth + 1, k.atom, 1, -1);
+        else {
+            int64_t len = drjson_len(nav->jctx, val);
+
+            if(val.kind == DRJSON_ARRAY){
+                for(int64_t i = 0; i < len; i++){
+                    DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
+                    nav_rebuild_recursive(nav, child, depth + 1, (DrJsonAtom){0}, 0, i);
+                }
+            }
+            else { // DRJSON_OBJECT
+                DrJsonValue items = drjson_object_items(val);
+                int64_t items_len = drjson_len(nav->jctx, items);
+                for(int64_t i = 0; i < items_len; i += 2){
+                    DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
+                    DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
+                    nav_rebuild_recursive(nav, v, depth + 1, k.atom, 1, -1);
+                }
             }
         }
     }
@@ -382,6 +758,9 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
     if(nav_is_container(root)){
         expansion_add(&nav->expanded, nav_get_container_id(root));
     }
+    textbuffer_init(&nav->search_buffer, 256);
+    textbuffer_history_init(&nav->search_history);
+    nav->search_buffer.history = &nav->search_history;
     nav_rebuild(nav);
 }
 
@@ -389,7 +768,10 @@ static inline
 void
 nav_free(JsonNav* nav){
     free(nav->items);
+    free(nav->search_matches);
     expansion_free(&nav->expanded);
+    textbuffer_free(&nav->search_buffer);
+    textbuffer_history_free(&nav->search_history);
     *nav = (JsonNav){0};
 }
 
@@ -399,13 +781,62 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
     if(nav->item_count == 0) return;
 
     NavItem* item = &nav->items[nav->cursor_pos];
-    if(!nav_is_container(item->value))
+
+    // If not a container, try to toggle parent instead
+    if(!nav_is_container(item->value)){
+        int current_depth = item->depth;
+        if(current_depth == 0) return; // No parent to toggle
+
+        // Find parent by searching backwards for item with smaller depth
+        for(size_t i = nav->cursor_pos; i > 0; i--){
+            if(nav->items[i - 1].depth < current_depth){
+                size_t parent_idx = i - 1;
+                NavItem* parent = &nav->items[parent_idx];
+                if(nav_is_container(parent->value)){
+                    size_t id = nav_get_container_id(parent->value);
+                    expansion_toggle(&nav->expanded, id);
+                    nav->needs_rebuild = 1;
+                    nav_rebuild(nav);
+                }
+                return;
+            }
+        }
         return;
+    }
 
     size_t id = nav_get_container_id(item->value);
     expansion_toggle(&nav->expanded, id);
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
+}
+
+// Helper to recursively expand a value and all its descendants
+static void
+nav_expand_recursive_helper(JsonNav* nav, DrJsonValue val){
+    if(!nav_is_container(val))
+        return;
+
+    // Add this container to expansion set
+    expansion_add(&nav->expanded, nav_get_container_id(val));
+
+    // Recursively expand children
+    int64_t len = drjson_len(nav->jctx, val);
+
+    if(val.kind == DRJSON_ARRAY || val.kind == DRJSON_ARRAY_VIEW){
+        for(int64_t i = 0; i < len; i++){
+            DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
+            nav_expand_recursive_helper(nav, child);
+        }
+    }
+    else if(val.kind == DRJSON_OBJECT || val.kind == DRJSON_OBJECT_KEYS ||
+            val.kind == DRJSON_OBJECT_VALUES || val.kind == DRJSON_OBJECT_ITEMS){
+        DrJsonValue items = drjson_object_items(val);
+        int64_t items_len = drjson_len(nav->jctx, items);
+        for(int64_t i = 0; i < items_len; i += 2){
+            DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
+            nav_expand_recursive_helper(nav, v);
+        }
+    }
 }
 
 static inline
@@ -417,31 +848,39 @@ nav_expand_recursive(JsonNav* nav){
     if(!nav_is_container(item->value))
         return;
 
-    // Simple approach: expand this and all descendants
-    // We'll do this by temporarily expanding everything, rebuilding,
-    // then collecting all visible containers
-    size_t saved_cursor = nav->cursor_pos;
-    expansion_add(&nav->expanded, nav_get_container_id(item->value));
+    nav_expand_recursive_helper(nav, item->value);
 
-    // Keep expanding until no new items appear
-    size_t prev_count = 0;
-    while(prev_count != nav->item_count){
-        prev_count = nav->item_count;
-        nav_rebuild(nav);
-
-        // Find all containers in the subtree and expand them
-        for(size_t i = saved_cursor; i < nav->item_count; i++){
-            if(nav->items[i].depth <= nav->items[saved_cursor].depth && i != saved_cursor)
-                break; // left the subtree
-            if(nav_is_container(nav->items[i].value)){
-                expansion_add(&nav->expanded, nav_get_container_id(nav->items[i].value));
-            }
-        }
-    }
-
-    nav->cursor_pos = saved_cursor;
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
+}
+
+// Helper to recursively collapse a value and all its descendants
+static void
+nav_collapse_recursive_helper(JsonNav* nav, DrJsonValue val){
+    if(!nav_is_container(val))
+        return;
+
+    // Remove this container from expansion set
+    expansion_remove(&nav->expanded, nav_get_container_id(val));
+
+    // Recursively collapse children
+    int64_t len = drjson_len(nav->jctx, val);
+
+    if(val.kind == DRJSON_ARRAY || val.kind == DRJSON_ARRAY_VIEW){
+        for(int64_t i = 0; i < len; i++){
+            DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
+            nav_collapse_recursive_helper(nav, child);
+        }
+    }
+    else if(val.kind == DRJSON_OBJECT || val.kind == DRJSON_OBJECT_KEYS ||
+            val.kind == DRJSON_OBJECT_VALUES || val.kind == DRJSON_OBJECT_ITEMS){
+        DrJsonValue items = drjson_object_items(val);
+        int64_t items_len = drjson_len(nav->jctx, items);
+        for(int64_t i = 0; i < items_len; i += 2){
+            DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
+            nav_collapse_recursive_helper(nav, v);
+        }
+    }
 }
 
 static inline
@@ -453,21 +892,7 @@ nav_collapse_recursive(JsonNav* nav){
     if(!nav_is_container(item->value))
         return;
 
-    // Remove this container and all descendants from expansion set
-    size_t saved_cursor = nav->cursor_pos;
-    int base_depth = item->depth;
-
-    // Remove current item
-    expansion_remove(&nav->expanded, nav_get_container_id(item->value));
-
-    // Remove all descendants
-    for(size_t i = saved_cursor + 1; i < nav->item_count; i++){
-        if(nav->items[i].depth <= base_depth)
-            break; // Left the subtree
-        if(nav_is_container(nav->items[i].value)){
-            expansion_remove(&nav->expanded, nav_get_container_id(nav->items[i].value));
-        }
-    }
+    nav_collapse_recursive_helper(nav, item->value);
 
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
@@ -498,6 +923,165 @@ nav_jump_to_parent(JsonNav* nav, _Bool collapse){
                 }
             }
             return;
+        }
+    }
+}
+
+// Jump to the nth child of the current item (if it's a container)
+// If current item is not an expanded container, jump to nth child of parent
+// For flat view items, jump to the row containing item n
+static inline
+void
+nav_jump_to_nth_child(JsonNav* nav, int n){
+    if(nav->item_count == 0) return;
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+
+    // If on a flat view item, jump to the row containing the nth element
+    if(item->is_flat_view){
+        int target_row = n / ITEMS_PER_ROW;
+
+        // Find the parent array item (go backwards to find non-flat-view item)
+        size_t parent_pos = nav->cursor_pos;
+        for(size_t i = nav->cursor_pos; i > 0; i--){
+            if(!nav->items[i - 1].is_flat_view && nav->items[i - 1].depth < item->depth){
+                parent_pos = i - 1;
+                break;
+            }
+        }
+
+        // Now find the target row among the flat view children
+        for(size_t i = parent_pos + 1; i < nav->item_count; i++){
+            if(nav->items[i].is_flat_view && nav->items[i].flat_row_index == target_row){
+                nav->cursor_pos = i;
+                return;
+            }
+            // Stop if we leave the flat view children
+            if(!nav->items[i].is_flat_view && i > parent_pos + 1)
+                break;
+        }
+        return;
+    }
+
+    // If current item is a container and expanded with children, jump to nth child
+    if(nav_is_container(item->value) && nav_is_expanded(nav, item->value)){
+        size_t start_pos = nav->cursor_pos + 1;
+        int target_depth = item->depth + 1;
+
+        // Check if the first child is a flat view item
+        if(start_pos < nav->item_count && nav->items[start_pos].is_flat_view){
+            // This is a flat array view, jump to the row containing item n
+            int target_row = n / ITEMS_PER_ROW;
+
+            for(size_t i = start_pos; i < nav->item_count; i++){
+                if(nav->items[i].depth < target_depth)
+                    break; // Left the container
+                if(nav->items[i].is_flat_view && nav->items[i].flat_row_index == target_row){
+                    nav->cursor_pos = i;
+                    return;
+                }
+            }
+            // If target row not found, go to last flat view row
+            for(size_t i = start_pos; i < nav->item_count; i++){
+                if(nav->items[i].depth < target_depth)
+                    break;
+                if(nav->items[i].is_flat_view){
+                    nav->cursor_pos = i;
+                }
+            }
+            return;
+        }
+
+        // Normal case: jump to nth child
+        int child_count = 0;
+        for(size_t i = start_pos; i < nav->item_count; i++){
+            if(nav->items[i].depth < target_depth)
+                break; // Left the container
+            if(nav->items[i].depth == target_depth){
+                if(child_count == n){
+                    nav->cursor_pos = i;
+                    return;
+                }
+                child_count++;
+            }
+        }
+        // If n is out of range, go to last child
+        if(child_count > 0 && n >= child_count){
+            for(size_t i = start_pos; i < nav->item_count; i++){
+                if(nav->items[i].depth < target_depth)
+                    break;
+                if(nav->items[i].depth == target_depth){
+                    nav->cursor_pos = i;
+                }
+            }
+        }
+    }
+    else {
+        // Jump to nth child of parent container
+        int current_depth = item->depth;
+        if(current_depth == 0) return; // At root, no parent
+
+        // Find parent
+        size_t parent_pos = nav->cursor_pos;
+        for(size_t i = nav->cursor_pos; i > 0; i--){
+            if(nav->items[i - 1].depth < current_depth){
+                parent_pos = i - 1;
+                break;
+            }
+        }
+
+        // Now jump to nth child of parent
+        if(parent_pos < nav->cursor_pos){
+            size_t start_pos = parent_pos + 1;
+            int target_depth = nav->items[parent_pos].depth + 1;
+
+            // Check if parent's first child is a flat view item
+            if(start_pos < nav->item_count && nav->items[start_pos].is_flat_view){
+                // This is a flat array view, jump to the row containing item n
+                int target_row = n / ITEMS_PER_ROW;
+
+                for(size_t i = start_pos; i < nav->item_count; i++){
+                    if(nav->items[i].depth < target_depth)
+                        break; // Left the container
+                    if(nav->items[i].is_flat_view && nav->items[i].flat_row_index == target_row){
+                        nav->cursor_pos = i;
+                        return;
+                    }
+                }
+                // If target row not found, go to last flat view row
+                for(size_t i = start_pos; i < nav->item_count; i++){
+                    if(nav->items[i].depth < target_depth)
+                        break;
+                    if(nav->items[i].is_flat_view){
+                        nav->cursor_pos = i;
+                    }
+                }
+                return;
+            }
+
+            // Normal case: jump to nth child of parent
+            int child_count = 0;
+            for(size_t i = start_pos; i < nav->item_count; i++){
+                if(nav->items[i].depth < target_depth)
+                    break; // Left parent's container
+                if(nav->items[i].depth == target_depth){
+                    if(child_count == n){
+                        nav->cursor_pos = i;
+                        return;
+                    }
+                    child_count++;
+                }
+            }
+            // If n is out of range, go to last child of parent
+            if(child_count > 0 && n >= child_count){
+                for(size_t i = start_pos; i < nav->item_count; i++){
+                    if(nav->items[i].depth < target_depth)
+                        break;
+                    if(nav->items[i].depth == target_depth){
+                        nav->cursor_pos = i;
+                    }
+                }
+            }
         }
     }
 }
@@ -604,6 +1188,241 @@ nav_ensure_cursor_visible(JsonNav* nav, int viewport_height){
     else if(nav->cursor_pos >= nav->scroll_offset + (size_t)visible_rows){
         nav->scroll_offset = nav->cursor_pos - (size_t)visible_rows + 1;
     }
+}
+
+// Check if a NavItem matches the search query (case-insensitive substring match)
+static
+_Bool
+nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t query_len){
+    if(query_len == 0) return 0;
+
+    // Check key if present
+    if(item->has_key){
+        const char* key_str = NULL;
+        size_t key_len = 0;
+        DrJsonValue key_val = drjson_atom_to_value(item->key);
+        drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+        if(key_str){
+            // Simple case-insensitive substring search
+            for(size_t i = 0; i + query_len <= key_len; i++){
+                _Bool match = 1;
+                for(size_t j = 0; j < query_len; j++){
+                    char c1 = key_str[i + j];
+                    char c2 = query[j];
+                    // Simple ASCII case-insensitive comparison
+                    if(c1 >= 'A' && c1 <= 'Z') c1 = c1 - 'A' + 'a';
+                    if(c2 >= 'A' && c2 <= 'Z') c2 = c2 - 'A' + 'a';
+                    if(c1 != c2){
+                        match = 0;
+                        break;
+                    }
+                }
+                if(match) return 1;
+            }
+        }
+    }
+
+    // Check value for strings
+    if(item->value.kind == DRJSON_STRING){
+        const char* str = NULL;
+        size_t len = 0;
+        drjson_get_str_and_len(nav->jctx, item->value, &str, &len);
+        if(str){
+            for(size_t i = 0; i + query_len <= len; i++){
+                _Bool match = 1;
+                for(size_t j = 0; j < query_len; j++){
+                    char c1 = str[i + j];
+                    char c2 = query[j];
+                    if(c1 >= 'A' && c1 <= 'Z') c1 = c1 - 'A' + 'a';
+                    if(c2 >= 'A' && c2 <= 'Z') c2 = c2 - 'A' + 'a';
+                    if(c1 != c2){
+                        match = 0;
+                        break;
+                    }
+                }
+                if(match) return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+// Helper to check if a DrJsonValue matches the query
+static
+_Bool
+nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, _Bool has_key,
+                         const char* query, size_t query_len){
+    // Check key if present
+    if(has_key){
+        const char* key_str = NULL;
+        size_t key_len = 0;
+        DrJsonValue key_val = drjson_atom_to_value(key);
+        drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+        if(key_str){
+            for(size_t i = 0; i + query_len <= key_len; i++){
+                _Bool match = 1;
+                for(size_t j = 0; j < query_len; j++){
+                    char c1 = key_str[i + j];
+                    char c2 = query[j];
+                    if(c1 >= 'A' && c1 <= 'Z') c1 = c1 - 'A' + 'a';
+                    if(c2 >= 'A' && c2 <= 'Z') c2 = c2 - 'A' + 'a';
+                    if(c1 != c2){
+                        match = 0;
+                        break;
+                    }
+                }
+                if(match) return 1;
+            }
+        }
+    }
+
+    // Check value for strings
+    if(val.kind == DRJSON_STRING){
+        const char* str = NULL;
+        size_t len = 0;
+        drjson_get_str_and_len(nav->jctx, val, &str, &len);
+        if(str){
+            for(size_t i = 0; i + query_len <= len; i++){
+                _Bool match = 1;
+                for(size_t j = 0; j < query_len; j++){
+                    char c1 = str[i + j];
+                    char c2 = query[j];
+                    if(c1 >= 'A' && c1 <= 'Z') c1 = c1 - 'A' + 'a';
+                    if(c2 >= 'A' && c2 <= 'Z') c2 = c2 - 'A' + 'a';
+                    if(c1 != c2){
+                        match = 0;
+                        break;
+                    }
+                }
+                if(match) return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+// Recursive helper for recursive search
+// Returns true if this value or any descendant matches the query
+static
+_Bool
+nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, _Bool has_key,
+                              const char* query, size_t query_len){
+    _Bool found_match = 0;
+
+    // Check if this value matches
+    if(nav_value_matches_query(nav, val, key, has_key, query, query_len)){
+        found_match = 1;
+        // Expand this container if it's a container
+        if(nav_is_container(val)){
+            expansion_add(&nav->expanded, nav_get_container_id(val));
+        }
+    }
+
+    // Recursively search children
+    if(nav_is_container(val)){
+        int64_t len = drjson_len(nav->jctx, val);
+
+        if(val.kind == DRJSON_ARRAY || val.kind == DRJSON_ARRAY_VIEW){
+            for(int64_t i = 0; i < len; i++){
+                DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
+                // Recursively search child - if it or its descendants match, expand this container
+                if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, 0, query, query_len)){
+                    found_match = 1;
+                    expansion_add(&nav->expanded, nav_get_container_id(val));
+                }
+            }
+        }
+        else {
+            DrJsonValue items = drjson_object_items(val);
+            int64_t items_len = drjson_len(nav->jctx, items);
+            for(int64_t i = 0; i < items_len; i += 2){
+                DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
+                DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
+                // Recursively search child - if it or its descendants match, expand this container
+                if(nav_search_recursive_helper(nav, v, k.atom, 1, query, query_len)){
+                    found_match = 1;
+                    expansion_add(&nav->expanded, nav_get_container_id(val));
+                }
+            }
+        }
+    }
+
+    return found_match;
+}
+
+// Perform search and populate search_matches array
+static
+void
+nav_search(JsonNav* nav){
+    // Clear existing matches
+    nav->search_match_count = 0;
+
+    if(nav->search_buffer.length == 0) return;
+
+    // Search through all visible items
+    for(size_t i = 0; i < nav->item_count; i++){
+        if(nav_item_matches_query(nav, &nav->items[i], nav->search_buffer.data, nav->search_buffer.length)){
+            // Add to matches array
+            if(nav->search_match_count >= nav->search_match_capacity){
+                size_t new_cap = nav->search_match_capacity ? nav->search_match_capacity * 2 : 64;
+                size_t* new_matches = realloc(nav->search_matches, new_cap * sizeof(size_t));
+                if(!new_matches) continue;
+                nav->search_matches = new_matches;
+                nav->search_match_capacity = new_cap;
+            }
+            nav->search_matches[nav->search_match_count++] = i;
+        }
+    }
+
+    // Jump to first match if any
+    if(nav->search_match_count > 0){
+        nav->current_match_idx = 0;
+        nav->cursor_pos = nav->search_matches[0];
+    }
+}
+
+// Perform recursive search (search entire tree, expanding as needed)
+static
+void
+nav_search_recursive(JsonNav* nav){
+    if(nav->search_buffer.length == 0) return;
+
+    // Recursively search the entire tree and expand containers with matches
+    nav_search_recursive_helper(nav, nav->root, (DrJsonAtom){0}, 0,
+                                 nav->search_buffer.data, nav->search_buffer.length);
+
+    // Rebuild to show expanded items
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+
+    // Now search through visible items
+    nav_search(nav);
+}
+
+// Jump to next search match
+static inline
+void
+nav_search_next(JsonNav* nav){
+    if(nav->search_match_count == 0) return;
+
+    nav->current_match_idx = (nav->current_match_idx + 1) % nav->search_match_count;
+    nav->cursor_pos = nav->search_matches[nav->current_match_idx];
+}
+
+// Jump to previous search match
+static inline
+void
+nav_search_prev(JsonNav* nav){
+    if(nav->search_match_count == 0) return;
+
+    if(nav->current_match_idx == 0)
+        nav->current_match_idx = nav->search_match_count - 1;
+    else
+        nav->current_match_idx--;
+
+    nav->cursor_pos = nav->search_matches[nav->current_match_idx];
 }
 
 static inline
@@ -960,6 +1779,7 @@ nav_render_help(Drt* drt, int screenw, int screenh){
         SV(""),
         SV("Expand/Collapse:"),
         SV("  Enter/Space Toggle expand/collapse"),
+        SV("  N+Enter     Jump to index N (e.g., 0↵, 15↵)"),
         SV("  e           Expand recursively"),
         SV("  c           Collapse recursively"),
         SV(""),
@@ -1014,9 +1834,65 @@ nav_render_help(Drt* drt, int screenw, int screenh){
     }
 }
 
+// Render one row of an array of numbers (up to 10 items per row)
 static
 void
-nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
+nav_render_flat_array_row(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int row_index){
+    int64_t len = drjson_len(jctx, val);
+    if(len == 0){
+        drt_puts(drt, "[]", 2);
+        return;
+    }
+    drt_puts(drt, "  ", 2);
+
+    int64_t start_idx = row_index * ITEMS_PER_ROW;
+    int64_t end_idx = start_idx + ITEMS_PER_ROW;
+    if(end_idx > len) end_idx = len;
+
+    // Calculate width needed for the largest index
+    int max_width = snprintf(NULL, 0, "%lld", (long long)(len - 1));
+
+    // Show index range with padding
+    drt_push_state(drt);
+    drt_set_8bit_color(drt, 220); // yellow/gold like array indices
+    drt_printf(drt, "%*lld – %*lld", max_width, (long long)start_idx, max_width, (long long)(end_idx - 1));
+    drt_pop_state(drt);
+    drt_puts(drt, ": ", 2);
+
+    drt_putc(drt, '[');
+
+    for(int64_t i = start_idx; i < end_idx; i++){
+        DrJsonValue item = drjson_get_by_index(jctx, val, i);
+
+        // Format the number
+        char buf[64];
+        int num_len = 0;
+        if(item.kind == DRJSON_NUMBER){
+            num_len = snprintf(buf, sizeof(buf), "%g", item.number);
+        }
+        else if(item.kind == DRJSON_INTEGER){
+            num_len = snprintf(buf, sizeof(buf), "%lld", (unsigned long long)item.integer);
+        }
+        else if(item.kind == DRJSON_UINTEGER){
+            num_len = snprintf(buf, sizeof(buf), "%lld", (unsigned long long)item.uinteger);
+        }
+
+        if(i > start_idx){
+            drt_puts(drt, ", ", 2);
+        }
+
+        drt_push_state(drt);
+        drt_set_8bit_color(drt, 2);
+        drt_puts(drt, buf, num_len);
+        drt_pop_state(drt);
+    }
+
+    drt_putc(drt, ']');
+}
+
+static
+void
+nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, TextBuffer* count_buffer){
     if(nav->needs_rebuild)
         nav_rebuild(nav);
 
@@ -1024,9 +1900,51 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
     drt_clear_color(drt);
     drt_bg_clear_color(drt);
 
+    // Track cursor position for text editing
+    int cursor_x = -1;
+    int cursor_y = -1;
+    _Bool show_cursor = 0;
+
     // Render status line at top
     drt_push_state(drt);
-    drt_printf(drt, " DrJson TUI — %zu items ", nav->item_count);
+    if(nav->search_mode == SEARCH_RECURSIVE){
+        drt_puts(drt, " Recursive Search: ", 19);
+        int start_x = 19;
+        textbuffer_render(drt, &nav->search_buffer);
+        cursor_x = start_x + (int)nav->search_buffer.cursor_pos;
+        cursor_y = 0;
+        show_cursor = 1;
+    }
+    else if(nav->search_mode == SEARCH_NORMAL){
+        drt_puts(drt, " Search: ", 9);
+        int start_x = 9;
+        textbuffer_render(drt, &nav->search_buffer);
+        cursor_x = start_x + (int)nav->search_buffer.cursor_pos;
+        cursor_y = 0;
+        show_cursor = 1;
+    }
+    else if(nav->search_match_count > 0){
+        drt_printf(drt, " DrJson TUI — %zu items — Match %zu/%zu ",
+                   nav->item_count, nav->current_match_idx + 1, nav->search_match_count);
+    }
+    else {
+        drt_printf(drt, " DrJson TUI — %zu items ", nav->item_count);
+    }
+
+    // Show count accumulator if non-zero (right after main status)
+    if(count_buffer->length > 0){
+        int cx, cy;
+        drt_cursor(drt, &cx, &cy);
+        drt_puts(drt, "— Count: ", 11);  // 11 bytes (em dash is 3 bytes)
+        int start_x = cx + 9;  // 9 display characters (em dash displays as 1 char)
+        textbuffer_render(drt, count_buffer);
+        // Count buffer is being edited, position cursor there
+        cursor_x = start_x + (int)count_buffer->cursor_pos;
+        cursor_y = 0;
+        show_cursor = 1;
+        drt_putc(drt, ' ');
+    }
+
     drt_clear_to_end_of_row(drt);
     drt_pop_state(drt);
 
@@ -1047,18 +1965,21 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
             drt_puts(drt, "  ", 2);
         }
 
-        // Expansion indicator for containers
-        if(nav_is_container(item->value)){
-            if(nav_is_expanded(nav, item->value)){
-                drt_putc_mb(drt, "▼", 3, 1);
+        // For flat view items, skip the expansion indicator and key/index
+        if(!item->is_flat_view){
+            // Expansion indicator for containers
+            if(nav_is_container(item->value)){
+                if(nav_is_expanded(nav, item->value)){
+                    drt_putc_mb(drt, "▼", 3, 1);
+                }
+                else {
+                    drt_putc_mb(drt, "▶", 3, 1);
+                }
+                drt_putc(drt, ' ');
             }
             else {
-                drt_putc_mb(drt, "▶", 3, 1);
+                drt_puts(drt, "  ", 2);
             }
-            drt_putc(drt, ' ');
-        }
-        else {
-            drt_puts(drt, "  ", 2);
         }
 
         // Highlight cursor line
@@ -1067,26 +1988,28 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
             drt_set_style(drt, DRT_STYLE_BOLD|DRT_STYLE_UNDERLINE);
         }
 
-        // Key if object member, or index if array element
-        if(item->has_key){
-            const char* key_str = NULL;
-            size_t key_len = 0;
-            DrJsonValue key_val = drjson_atom_to_value(item->key);
-            drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-            if(key_str){
+        // Key if object member, or index if array element (skip for flat view)
+        if(!item->is_flat_view){
+            if(item->has_key){
+                const char* key_str = NULL;
+                size_t key_len = 0;
+                DrJsonValue key_val = drjson_atom_to_value(item->key);
+                drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+                if(key_str){
+                    drt_push_state(drt);
+                    drt_set_8bit_color(drt, 45); // cyan
+                    drt_puts(drt, key_str, key_len);
+                    drt_pop_state(drt);
+                    drt_puts(drt, ": ", 2);
+                }
+            }
+            else if(item->array_index >= 0){
                 drt_push_state(drt);
-                drt_set_8bit_color(drt, 45); // cyan
-                drt_puts(drt, key_str, key_len);
+                drt_set_8bit_color(drt, 220); // yellow/gold
+                drt_printf(drt, "%lld", (long long)item->array_index);
                 drt_pop_state(drt);
                 drt_puts(drt, ": ", 2);
             }
-        }
-        else if(item->array_index >= 0){
-            drt_push_state(drt);
-            drt_set_8bit_color(drt, 220); // yellow/gold
-            drt_printf(drt, "%lld", (long long)item->array_index);
-            drt_pop_state(drt);
-            drt_puts(drt, ": ", 2);
         }
 
         // Value summary
@@ -1094,7 +2017,14 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
         drt_cursor(drt, &cx, &cy);
         int remaining = screenw - cx;
         if(remaining < 10) remaining = 10;
-        nav_render_value_summary(drt, nav->jctx, item->value, remaining);
+
+        // Use flat rendering for flat view items
+        if(item->is_flat_view){
+            nav_render_flat_array_row(drt, nav->jctx, item->value, item->flat_row_index);
+        }
+        else {
+            nav_render_value_summary(drt, nav->jctx, item->value, remaining);
+        }
 
         // Clear rest of line
         drt_clear_to_end_of_row(drt);
@@ -1108,6 +2038,15 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
     for(int y = 1 + (int)(end_idx - nav->scroll_offset); y < screenh; y++){
         drt_move(drt, 0, y);
         drt_clear_to_end_of_row(drt);
+    }
+
+    // Position cursor and show/hide based on whether we're editing
+    if(show_cursor && cursor_x >= 0 && cursor_y >= 0){
+        drt_move_cursor(drt, cursor_x, cursor_y);
+        drt_set_cursor_visible(drt, 1);
+    }
+    else {
+        drt_set_cursor_visible(drt, 0);
     }
 }
 
@@ -1362,6 +2301,9 @@ begin_tui(void){
 #endif
     // alternative buffer
     printf("\033[?1049h");
+    fflush(stdout);
+    // thin cursor
+    printf("\x1b[5 q");
     fflush(stdout);
     // hide cursor
     printf("\033[?25l");
@@ -1766,6 +2708,10 @@ main(int argc, const char* const* argv){
     JsonNav nav;
     nav_init(&nav, jctx, this);
 
+    // Count buffer for vim-style numeric prefixes
+    TextBuffer count_buffer;
+    textbuffer_init(&count_buffer, 32);
+
     for(;;){
         if(globals.needs_rescale){
             TermSize sz = get_terminal_size();
@@ -1781,7 +2727,7 @@ main(int argc, const char* const* argv){
         }
 
         // Render the navigation view
-        nav_render(&nav, &globals.drt, globals.screenw, globals.screenh);
+        nav_render(&nav, &globals.drt, globals.screenw, globals.screenh, &count_buffer);
 
         // Render help overlay if active
         if(nav.show_help){
@@ -1798,7 +2744,149 @@ main(int argc, const char* const* argv){
         // If help is showing, any key closes it
         if(nav.show_help){
             nav.show_help = 0;
+            textbuffer_clear(&count_buffer);
             continue;
+        }
+
+        // Handle search input mode
+        if(nav.search_mode != SEARCH_INACTIVE){
+            if(c == ESC || c == CTRL_C){
+                // Cancel search
+                nav.search_mode = SEARCH_INACTIVE;
+                textbuffer_clear(&nav.search_buffer);
+                continue;
+            }
+            else if(c == ENTER || c == CTRL_J){
+                // Add to history before searching
+                textbuffer_history_add(&nav.search_history, nav.search_buffer.data, nav.search_buffer.length);
+                textbuffer_history_reset(&nav.search_buffer);
+
+                // Perform search (recursive if in recursive mode)
+                _Bool recursive = (nav.search_mode == SEARCH_RECURSIVE);
+                nav.search_mode = SEARCH_INACTIVE;
+                if(recursive){
+                    nav_search_recursive(&nav);
+                }
+                else {
+                    nav_search(&nav);
+                }
+                nav_center_cursor(&nav, globals.screenh);
+                continue;
+            }
+            else if(c == UP || c == CTRL_P){
+                // Navigate to previous history entry
+                textbuffer_history_prev(&nav.search_buffer);
+                continue;
+            }
+            else if(c == DOWN || c == CTRL_N){
+                // Navigate to next history entry
+                textbuffer_history_next(&nav.search_buffer);
+                continue;
+            }
+            else if(c == BACKSPACE || c == 127 || c == CTRL_H){
+                // Delete character before cursor
+                textbuffer_history_reset(&nav.search_buffer);
+                textbuffer_backspace(&nav.search_buffer);
+                continue;
+            }
+            else if(c == DELETE || c == CTRL_D){
+                // Delete character at cursor
+                textbuffer_history_reset(&nav.search_buffer);
+                textbuffer_delete(&nav.search_buffer);
+                continue;
+            }
+            else if(c == LEFT || c == CTRL_B){
+                // Move cursor left
+                textbuffer_move_left(&nav.search_buffer);
+                continue;
+            }
+            else if(c == RIGHT || c == CTRL_F){
+                // Move cursor right
+                textbuffer_move_right(&nav.search_buffer);
+                continue;
+            }
+            else if(c == HOME || c == CTRL_A){
+                // Move cursor to beginning
+                textbuffer_move_home(&nav.search_buffer);
+                continue;
+            }
+            else if(c == END || c == CTRL_E){
+                // Move cursor to end
+                textbuffer_move_end(&nav.search_buffer);
+                continue;
+            }
+            else if(c == CTRL_K){
+                // Kill to end of line
+                textbuffer_history_reset(&nav.search_buffer);
+                textbuffer_kill_line(&nav.search_buffer);
+                continue;
+            }
+            else if(c == CTRL_U){
+                // Kill whole line
+                textbuffer_history_reset(&nav.search_buffer);
+                textbuffer_kill_whole_line(&nav.search_buffer);
+                continue;
+            }
+            else if(c == CTRL_W){
+                // Delete word backward
+                textbuffer_history_reset(&nav.search_buffer);
+                textbuffer_delete_word_backward(&nav.search_buffer);
+                continue;
+            }
+            else if(c >= 32 && c < 127){
+                // Add printable character
+                textbuffer_history_reset(&nav.search_buffer);
+                textbuffer_append_char(&nav.search_buffer, (char)c);
+                continue;
+            }
+            // Ignore other keys in search mode
+            continue;
+        }
+
+        // Handle digit input to build count
+        if(c >= '0' && c <= '9'){
+            textbuffer_append_char(&count_buffer, (char)c);
+            continue;
+        }
+
+        // Handle text editing for count buffer (only when count buffer has content)
+        if(count_buffer.length > 0){
+            if(c == BACKSPACE || c == 127 || c == CTRL_H){
+                textbuffer_backspace(&count_buffer);
+                continue;
+            }
+            else if(c == DELETE || c == CTRL_D){
+                textbuffer_delete(&count_buffer);
+                continue;
+            }
+            else if(c == LEFT || c == CTRL_B){
+                textbuffer_move_left(&count_buffer);
+                continue;
+            }
+            else if(c == RIGHT || c == CTRL_F){
+                textbuffer_move_right(&count_buffer);
+                continue;
+            }
+            else if(c == HOME || c == CTRL_A){
+                textbuffer_move_home(&count_buffer);
+                continue;
+            }
+            else if(c == END || c == CTRL_E){
+                textbuffer_move_end(&count_buffer);
+                continue;
+            }
+            else if(c == CTRL_K){
+                textbuffer_kill_line(&count_buffer);
+                continue;
+            }
+            else if(c == CTRL_U){
+                textbuffer_kill_whole_line(&count_buffer);
+                continue;
+            }
+            else if(c == CTRL_W){
+                textbuffer_delete_word_backward(&count_buffer);
+                continue;
+            }
         }
 
         // Handle 'z' prefix for vim-like commands
@@ -1830,6 +2918,7 @@ main(int argc, const char* const* argv){
                 }
             }
             // If not a recognized z command, ignore
+            textbuffer_clear(&count_buffer);
             continue;
         }
 
@@ -1896,16 +2985,26 @@ main(int argc, const char* const* argv){
 
             case END:
             case 'G':
+                // Go to end
                 if(nav.item_count > 0)
                     nav.cursor_pos = nav.item_count - 1;
                 nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
+            case CTRL_J:
             case ENTER:
             case ' ':
-                // Toggle expand/collapse
-                nav_toggle_expand_at_cursor(&nav);
-                nav_ensure_cursor_visible(&nav, globals.screenh);
+                if(count_buffer.length > 0){
+                    // Jump to item at index (0-indexed, matching array display)
+                    int n = atoi(count_buffer.data);
+                    nav_jump_to_nth_child(&nav, n);
+                    nav_ensure_cursor_visible(&nav, globals.screenh);
+                }
+                else {
+                    // Toggle expand/collapse
+                    nav_toggle_expand_at_cursor(&nav);
+                    nav_ensure_cursor_visible(&nav, globals.screenh);
+                }
                 break;
 
             case RIGHT:
@@ -1966,6 +3065,30 @@ main(int argc, const char* const* argv){
                 nav.show_help = !nav.show_help;
                 break;
 
+            case '/':
+                // Enter search mode
+                nav.search_mode = SEARCH_NORMAL;
+                textbuffer_clear(&nav.search_buffer);
+                break;
+
+            case '*':
+                // Enter recursive search mode (same as / but will search recursively)
+                nav.search_mode = SEARCH_RECURSIVE;
+                textbuffer_clear(&nav.search_buffer);
+                break;
+
+            case 'n':
+                // Next search match
+                nav_search_next(&nav);
+                nav_center_cursor(&nav, globals.screenh);
+                break;
+
+            case 'N':
+                // Previous search match
+                nav_search_prev(&nav);
+                nav_center_cursor(&nav, globals.screenh);
+                break;
+
             case LCLICK_UP:
                 // Handle mouse clicks (only on release to avoid double-toggle)
                 // Status line is at y=0, items start at y=1
@@ -1987,6 +3110,9 @@ main(int argc, const char* const* argv){
                 break;
         }
 
+        // Reset count accumulator after command
+        textbuffer_clear(&count_buffer);
+
         if(globals.needs_rescale){
             TermSize sz = get_terminal_size();
             drt_update_terminal_size(&globals.drt, sz.columns, sz.rows);
@@ -2001,6 +3127,7 @@ main(int argc, const char* const* argv){
         }
     }
     finally:;
+    textbuffer_free(&count_buffer);
     nav_free(&nav);
     return 0;
 }
