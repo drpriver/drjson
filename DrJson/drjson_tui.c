@@ -1043,13 +1043,6 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
 
         drt_move(drt, 0, y);
 
-        // Highlight cursor line
-        if(i == nav->cursor_pos){
-            drt_push_state(drt);
-            drt_bg_set_8bit_color(drt, 236);
-            drt_set_8bit_color(drt, 15);
-            drt_set_style(drt, DRT_STYLE_BOLD);
-        }
 
         // Indentation
         for(int d = 0; d < item->depth; d++){
@@ -1062,12 +1055,18 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh){
                 drt_putc_mb(drt, "▼", 3, 1);
             }
             else {
-                drt_putc_mb(drt, "▶ ", 3, 1); // UTF-8 right arrow
+                drt_putc_mb(drt, "▶", 3, 1);
             }
             drt_putc(drt, ' ');
         }
         else {
             drt_puts(drt, "  ", 2);
+        }
+
+        // Highlight cursor line
+        if(i == nav->cursor_pos){
+            drt_push_state(drt);
+            drt_set_style(drt, DRT_STYLE_BOLD|DRT_STYLE_UNDERLINE);
         }
 
         // Key if object member, or index if array element
