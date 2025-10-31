@@ -489,6 +489,35 @@ drt_puts(Drt* drt, const char* txt, size_t length){
 
 DRT_API
 void
+drt_puts_utf8(Drt* drt, const char* str, size_t length){
+    const unsigned char* s = (const unsigned char*)str;
+    const unsigned char* end = s + length;
+    while(s != end){
+        if(*s < 128){
+            // ASCII character
+            drt_putc(drt, (char)*s);
+            s++;
+        }
+        else {
+            // Multi-byte UTF-8 sequence
+            size_t len = 0;
+            if((*s & 0xe0) == 0xc0) len = 2;
+            else if((*s & 0xf0) == 0xe0) len = 3;
+            else if((*s & 0xf8) == 0xf0) len = 4;
+            else {
+                s++; // Invalid, skip
+                continue;
+            }
+
+            // Use drt_putc_mb with render width of 1 for most chars
+            drt_putc_mb(drt, (const char*)s, len, 1);
+            s += len;
+        }
+    }
+}
+
+DRT_API
+void
 drt_set_cursor_visible(Drt* drt, _Bool show){
     drt->cursor_visible = show;
 }

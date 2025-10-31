@@ -124,6 +124,10 @@ drt_puts(Drt* drt, const char* txt, size_t length);
 
 DRT_API
 void
+drt_puts_utf8(Drt* drt, const char* str, size_t length);
+
+DRT_API
+void
 drt_set_cursor_visible(Drt* drt, _Bool show);
 
 DRT_API

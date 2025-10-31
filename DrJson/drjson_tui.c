@@ -295,7 +295,7 @@ void
 nav_append_item(JsonNav* nav, NavItem item){
     if(nav->item_count >= nav->item_capacity){
         size_t new_cap = nav->item_capacity ? nav->item_capacity * 2 : 256;
-        NavItem* new_items = realloc(nav->items, new_cap * sizeof(NavItem));
+        NavItem* new_items = realloc(nav->items, new_cap * sizeof *new_items);
         if(!new_items) return; // allocation failed
         nav->items = new_items;
         nav->item_capacity = new_cap;
@@ -738,11 +738,11 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             char numbuf[32];
                             int nlen = 0;
                             if(item.kind == DRJSON_NUMBER)
-                                nlen = snprintf(numbuf, sizeof(numbuf), "%g", item.number);
+                                nlen = snprintf(numbuf, sizeof numbuf, "%g", item.number);
                             else if(item.kind == DRJSON_INTEGER)
-                                nlen = snprintf(numbuf, sizeof(numbuf), "%lld", (long long)item.integer);
+                                nlen = snprintf(numbuf, sizeof numbuf, "%lld", (long long)item.integer);
                             else
-                                nlen = snprintf(numbuf, sizeof(numbuf), "%llu", (unsigned long long)item.uinteger);
+                                nlen = snprintf(numbuf, sizeof numbuf, "%llu", (unsigned long long)item.uinteger);
 
                             if(nlen > 0 && nlen < budget){
                                 drt_puts(drt, numbuf, nlen);
@@ -855,8 +855,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                 if(shown < len){
                     int64_t remaining = len - shown;
                     char buf[64];
-                    int blen = snprintf(buf, sizeof(buf), ", ... %lld more]", (long long)remaining);
-                    if(blen > 0 && blen < (int)sizeof(buf)){
+                    int blen = snprintf(buf, sizeof buf, ", ... %lld more]", (long long)remaining);
+                    if(blen > 0 && blen < (int)sizeof buf){
                         drt_puts(drt, buf, blen);
                     } else {
                         drt_puts(drt, ", ...]", 6);
@@ -908,8 +908,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                 if(shown < keys_len){
                     int64_t remaining = keys_len - shown;
                     char buf[64];
-                    int blen = snprintf(buf, sizeof(buf), ", ... %lld more}", (long long)remaining);
-                    if(blen > 0 && blen < (int)sizeof(buf)){
+                    int blen = snprintf(buf, sizeof buf, ", ... %lld more}", (long long)remaining);
+                    if(blen > 0 && blen < (int)sizeof buf){
                         drt_puts(drt, buf, blen);
                     } else {
                         drt_puts(drt, ", ...}", 6);
@@ -931,81 +931,52 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
 
 static
 void
-drt_puts_utf8(Drt* drt, const char* str){
-    // Render a UTF-8 string, handling multi-byte characters correctly
-    const unsigned char* s = (const unsigned char*)str;
-    while(*s){
-        if(*s < 128){
-            // ASCII character
-            drt_putc(drt, (char)*s);
-            s++;
-        }
-        else {
-            // Multi-byte UTF-8 sequence
-            int len = 0;
-            if((*s & 0xe0) == 0xc0) len = 2;
-            else if((*s & 0xf0) == 0xe0) len = 3;
-            else if((*s & 0xf8) == 0xf0) len = 4;
-            else {
-                s++; // Invalid, skip
-                continue;
-            }
-
-            // Use drt_putc_mb with render width of 1 for most chars
-            drt_putc_mb(drt, (const char*)s, len, 1);
-            s += len;
-        }
-    }
-}
-
-static
-void
 nav_render_help(Drt* drt, int screenw, int screenh){
-    const char* help_lines[] = {
-        "DrJson TUI - Keyboard Commands",
-        "",
-        "Navigation:",
-        "  j/↓         Move cursor down",
-        "  k/↑         Move cursor up",
-        "  h/←         Jump to parent (and collapse)",
-        "  H           Jump to parent (keep expanded)",
-        "  l/→         Enter container (expand if needed)",
-        "  ]           Next sibling (skip children)",
-        "  [           Previous sibling",
-        "  -           Jump to parent (no collapse)",
-        "",
-        "Scrolling:",
-        "  Ctrl-D      Scroll down half page",
-        "  Ctrl-U      Scroll up half page",
-        "  Ctrl-F/PgDn Scroll down full page",
-        "  Ctrl-B/PgUp Scroll up full page",
-        "  g/Home      Jump to top",
-        "  G/End       Jump to bottom",
-        "",
-        "Viewport:",
-        "  zz          Center cursor on screen",
-        "  zt          Cursor to top of screen",
-        "  zb          Cursor to bottom of screen",
-        "",
-        "Expand/Collapse:",
-        "  Enter/Space Toggle expand/collapse",
-        "  e           Expand recursively",
-        "  c           Collapse recursively",
-        "",
-        "Other:",
-        "  q/Ctrl-C    Quit",
-        "  ?           Toggle this help",
-        "",
-        "Press any key to close help..."
+    StringView help_lines[] = {
+        SV("DrJson TUI - Keyboard Commands"),
+        SV(""),
+        SV("Navigation:"),
+        SV("  j/↓         Move cursor down"),
+        SV("  k/↑         Move cursor up"),
+        SV("  h/←         Jump to parent (and collapse)"),
+        SV("  H           Jump to parent (keep expanded)"),
+        SV("  l/→         Enter container (expand if needed)"),
+        SV("  ]           Next sibling (skip children)"),
+        SV("  [           Previous sibling"),
+        SV("  -           Jump to parent (no collapse)"),
+        SV(""),
+        SV("Scrolling:"),
+        SV("  Ctrl-D      Scroll down half page"),
+        SV("  Ctrl-U      Scroll up half page"),
+        SV("  Ctrl-F/PgDn Scroll down full page"),
+        SV("  Ctrl-B/PgUp Scroll up full page"),
+        SV("  g/Home      Jump to top"),
+        SV("  G/End       Jump to bottom"),
+        SV(""),
+        SV("Viewport:"),
+        SV("  zz          Center cursor on screen"),
+        SV("  zt          Cursor to top of screen"),
+        SV("  zb          Cursor to bottom of screen"),
+        SV(""),
+        SV("Expand/Collapse:"),
+        SV("  Enter/Space Toggle expand/collapse"),
+        SV("  e           Expand recursively"),
+        SV("  c           Collapse recursively"),
+        SV(""),
+        SV("Other:"),
+        SV("  q/Ctrl-C    Quit"),
+        SV("  ?           Toggle this help"),
+        SV(""),
+        SV("Press any key to close help..."),
     };
 
-    int num_lines = sizeof(help_lines) / sizeof(help_lines[0]);
+    int num_lines = sizeof help_lines / sizeof help_lines[0];
     int start_y = (screenh - num_lines) / 2;
     if(start_y < 1) start_y = 1;
 
     int max_width = 0;
     for(int i = 0; i < num_lines; i++){
-        int len = strlen(help_lines[i]);
+        int len = (int)help_lines[i].length;
         if(len > max_width) max_width = len;
     }
 
@@ -1031,14 +1002,14 @@ nav_render_help(Drt* drt, int screenw, int screenh){
         drt_bg_set_8bit_color(drt, 235);
 
         // Highlight headers
-        if(help_lines[i][0] && help_lines[i][strlen(help_lines[i])-1] == ':'){
+        if(help_lines[i].length && help_lines[i].text[help_lines[i].length-1] == ':'){
             drt_set_8bit_color(drt, 11); // bright yellow
             drt_set_style(drt, DRT_STYLE_BOLD);
         } else {
             drt_set_8bit_color(drt, 15);
         }
 
-        drt_puts_utf8(drt, help_lines[i]);
+        drt_puts_utf8(drt, help_lines[i].text, help_lines[i].length);
         drt_pop_state(drt);
     }
 }
