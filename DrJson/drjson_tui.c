@@ -39,7 +39,8 @@ typedef long long ssize_t;
 #include <stdlib.h>
 #define DRJSON_API static inline
 #include "drjson.h"
-// "drjson.c" is #included at the bottom
+// Access to private APIs
+#include "drjson.c"
 #include "argument_parsing.h"
 #include "term_util.h"
 #include "drt.h"
@@ -54,6 +55,27 @@ typedef long long ssize_t;
 #define force_inline static inline
 #endif
 #endif
+
+static const char* LOGFILE = NULL;
+static FILE* LOGFILE_FP = NULL;
+static inline
+void
+__attribute__((format(printf,1, 2)))
+LOG(const char* fmt, ...){
+    if(!LOGFILE) return;
+#ifdef _WIN32
+    if(!LOGFILE_FP) LOGFILE_FP = fopen(LOGFILE, "w");
+#else
+    if(!LOGFILE_FP) LOGFILE_FP = fopen(LOGFILE, "wbe");
+#endif
+    if(!LOGFILE_FP) return;
+
+    va_list va;
+    va_start(va, fmt);
+    vfprintf(LOGFILE_FP, fmt, va);
+    va_end(va);
+    fflush(LOGFILE_FP);
+}
 
 //------------------------------------------------------------
 // Navigation Data Structures
@@ -73,8 +95,7 @@ struct NavItem {
 // Uses the unique object_idx/array_idx as identifiers
 typedef struct ExpansionSet ExpansionSet;
 struct ExpansionSet {
-    size_t* ids;              // Array of expanded container IDs
-    size_t count;             // Number of expanded containers
+    uint64_t* ids;              // Array of expanded container IDs
     size_t capacity;          // Allocated capacity
 };
 
@@ -190,45 +211,35 @@ finally:
 static inline
 _Bool
 expansion_contains(const ExpansionSet* set, size_t id){
-    for(size_t i = 0; i < set->count; i++){
-        if(set->ids[i] == id)
-            return 1;
-    }
-    return 0;
+    size_t bit = id & 63;
+    size_t idx = id / 64;
+    uint64_t val = set->ids[idx];
+    if(idx >= set->capacity) __builtin_debugtrap();
+    return val & (1llu << bit)?1:0;
 }
 
 static inline
 void
 expansion_add(ExpansionSet* set, size_t id){
-    if(expansion_contains(set, id))
-        return;
-
-    if(set->count >= set->capacity){
-        size_t new_cap = set->capacity ? set->capacity * 2 : 16;
-        size_t* new_ids = realloc(set->ids, new_cap * sizeof(size_t));
-        if(!new_ids) return; // allocation failed
-        set->ids = new_ids;
-        set->capacity = new_cap;
-    }
-    set->ids[set->count++] = id;
+    size_t bit = id & 63;
+    size_t idx = id / 64;
+    if(idx >= set->capacity) __builtin_debugtrap();
+    set->ids[idx] |= 1lu << bit;
 }
 
 static inline
 void
 expansion_remove(ExpansionSet* set, size_t id){
-    for(size_t i = 0; i < set->count; i++){
-        if(set->ids[i] == id){
-            // Move last element to this position
-            set->ids[i] = set->ids[--set->count];
-            return;
-        }
-    }
+    size_t bit = id & 63;
+    size_t idx = id / 64;
+    if(idx >= set->capacity) __builtin_debugtrap();
+    set->ids[idx] &= ~(1llu << bit);
 }
 
 static inline
 void
 expansion_clear(ExpansionSet* set){
-    set->count = 0;
+    memset(set->ids, 0, sizeof *set->ids * set->capacity);
 }
 
 static inline
@@ -236,7 +247,6 @@ void
 expansion_free(ExpansionSet* set){
     free(set->ids);
     set->ids = NULL;
-    set->count = 0;
     set->capacity = 0;
 }
 
@@ -352,6 +362,13 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
         .needs_rebuild = 1,
         .show_help = 0,
     };
+    size_t expanded_count = jctx->arrays.count > jctx->objects.count? jctx->arrays.count : jctx->objects.count;
+    expanded_count += 1;
+    expanded_count *= 2;
+    expanded_count /= 64;
+    expanded_count++; // round up, whatever
+    nav->expanded.ids = calloc(expanded_count, sizeof *nav->expanded.ids);
+    nav->expanded.capacity = expanded_count;
     // Expand root document by default if it's a container
     if(nav_is_container(root)){
         expansion_add(&nav->expanded, nav_get_container_id(root));
@@ -1460,7 +1477,7 @@ get_input(int* pc, int* pcx, int* pcy, int* pmagnitude){
                 // See https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Extended-coordinates
                 int i;
                 int mb = 0;
-                for(i = 2; i < sizeof sequence; i++){
+                for(i = 2; i < (int)sizeof sequence; i++){
                     if(read_one_nb(sequence+i) == -1) return -1;
                     if(sequence[i] == 0) return 0; // unexpected end of escape sequence
                     if(sequence[i] == ';') break;
@@ -1469,7 +1486,7 @@ get_input(int* pc, int* pcx, int* pcy, int* pmagnitude){
                     mb += sequence[i] - '0';
                 }
                 int x = 0;
-                for(; i < sizeof sequence; i++){
+                for(; i < (int)sizeof sequence; i++){
                     if(read_one_nb(sequence+i) == -1) return -1;
                     if(sequence[i] == 0) return 0; // unexpected end of escape sequence
                     if(sequence[i] == ';') break;
@@ -1478,7 +1495,7 @@ get_input(int* pc, int* pcx, int* pcy, int* pmagnitude){
                     x += sequence[i] - '0';
                 }
                 int y = 0;
-                for(; i < sizeof sequence; i++){
+                for(; i < (int)sizeof sequence; i++){
                     if(read_one_nb(sequence+i) == -1) return -1;
                     if(sequence[i] == 0) return 0; // unexpected end of escape sequence
                     if(sequence[i] == 'm' || sequence[i] == 'M') break;
@@ -1638,20 +1655,6 @@ get_input(int* pc, int* pcx, int* pcy, int* pmagnitude){
 
 int 
 main(int argc, const char* const* argv){
-    #ifdef _WIN32
-    globals.STDIN = GetStdHandle(STD_INPUT_HANDLE);
-    globals.STDOUT = GetStdHandle(STD_OUTPUT_HANDLE);
-    #else
-    int pid = getpid();
-    // LOG("pid: %d\n", pid);
-    struct sigaction sa;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_handler = sighandler;
-    sa.sa_flags = 0;
-    sigaction(SIGWINCH, &sa, NULL);
-    sigaction(SIGCONT, &sa, NULL);
-    // signal(SIGWINCH, sighandler);
-    #endif
     Args args = {argc?argc-1:0, argc?argv+1:NULL};
     LongString jsonpath = {0};
     ArgToParse pos_args[] = {
@@ -1677,6 +1680,12 @@ main(int argc, const char* const* argv){
             .altname1 = SV("--intern"),
             .help = "Reuse duplicate arrays and objects while parsing. Slower but can use less memory. Sometimes.",
             .dest = ARGDEST(&intern),
+            .hidden = 1,
+        },
+        {
+            .name = SV("-l"),
+            .altname1 = SV("--logfile"),
+            .dest = ARGDEST(&LOGFILE),
             .hidden = 1,
         },
     };
@@ -1737,6 +1746,20 @@ main(int argc, const char* const* argv){
         print_argparse_error(&parser, error);
         return error;
     }
+    #ifdef _WIN32
+    globals.STDIN = GetStdHandle(STD_INPUT_HANDLE);
+    globals.STDOUT = GetStdHandle(STD_OUTPUT_HANDLE);
+    #else
+    int pid = getpid();
+    LOG("pid: %d\n", pid);
+    struct sigaction sa;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_handler = sighandler;
+    sa.sa_flags = 0;
+    sigaction(SIGWINCH, &sa, NULL);
+    sigaction(SIGCONT, &sa, NULL);
+    // signal(SIGWINCH, sighandler);
+    #endif
     begin_tui();
     atexit(end_tui);
     LongString jsonstr = {0};
@@ -1839,7 +1862,6 @@ main(int argc, const char* const* argv){
         }
 
         // Handle input
-        _Bool handled = 1;
         switch(c){
             case CTRL_C:
             case 'q':
@@ -1990,7 +2012,6 @@ main(int argc, const char* const* argv){
                 break;
 
             default:
-                handled = 0;
                 break;
         }
 
@@ -2013,4 +2034,3 @@ main(int argc, const char* const* argv){
 }
 
 
-#include "drjson.c"
