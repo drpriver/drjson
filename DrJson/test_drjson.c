@@ -25,6 +25,7 @@ static TestFunc TestSerialization;
 static TestFunc TestPrettyPrint;
 static TestFunc TestEscape;
 static TestFunc TestObject;
+static TestFunc TestPathParse;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSimpleParsing);
@@ -35,6 +36,7 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestPrettyPrint);
     RegisterTest(TestEscape);
     RegisterTest(TestObject);
+    RegisterTest(TestPathParse);
     return test_main(argc, argv, NULL);
 }
 
@@ -534,6 +536,30 @@ TestFunction(TestObject){
     assert_all_freed();
     TESTEND();
 }
+
+TestFunction(TestPathParse){
+    TESTBEGIN();
+    const char* example = "{ \"a\": { \"b\": [1, 2, 3] }, \"c\": 4 }";
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+    DrJsonValue root = drjson_parse_string(ctx, example, strlen(example), 0);
+    TestAssertEquals(root.kind, DRJSON_OBJECT);
+
+    DrJsonPath path;
+    const char* path_str = "a.b[1]";
+    int err = drjson_path_parse(ctx, path_str, strlen(path_str), &path);
+    TestAssertFalse(err);
+
+    TestAssertEquals(path.count, 3);
+    TestAssertEquals(path.segments[0].kind, DRJSON_PATH_KEY);
+    TestAssertEquals(path.segments[1].kind, DRJSON_PATH_KEY);
+    TestAssertEquals(path.segments[2].kind, DRJSON_PATH_INDEX);
+    TestAssertEquals(path.segments[2].index, 1);
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
