@@ -1932,9 +1932,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
     DrJsonPath path;
     int parse_err = drjson_path_parse(nav->jctx, args, args_len, &path);
     if(parse_err){
-        char msg[256];
-        snprintf(msg, sizeof(msg), "Error: Invalid path syntax: %.*s", (int)args_len, args);
-        nav_set_message(nav, msg);
+        nav_set_message(nav, "Error: Invalid path syntax: %.*s", (int)args_len, args);
         return CMD_ERROR;
     }
 
@@ -1949,9 +1947,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
         if(seg->kind == DRJSON_PATH_KEY){
             // Navigate by key (object member)
             if(current.kind != DRJSON_OBJECT){
-                char msg[256];
-                snprintf(msg, sizeof(msg), "Error: Cannot index non-object with key at segment %zu", seg_idx);
-                nav_set_message(nav, msg);
+                nav_set_message(nav, "Error: Cannot index non-object with key at segment %zu", seg_idx);
                 return CMD_ERROR;
             }
 
@@ -1960,9 +1956,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
                 const char* key_str;
                 size_t key_len;
                 drjson_get_atom_str_and_length(nav->jctx, seg->key, &key_str, &key_len);
-                char msg[256];
-                snprintf(msg, sizeof(msg), "Error: Key '%.*s' not found", (int)key_len, key_str);
-                nav_set_message(nav, msg);
+                nav_set_message(nav, "Error: Key '%.*s' not found", (int)key_len, key_str);
                 return CMD_ERROR;
             }
 
@@ -1976,17 +1970,13 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
         else if(seg->kind == DRJSON_PATH_INDEX){
             // Navigate by index (array element)
             if(current.kind != DRJSON_ARRAY){
-                char msg[256];
-                snprintf(msg, sizeof(msg), "Error: Cannot index non-array with [%lld] at segment %zu", (long long)seg->index, seg_idx);
-                nav_set_message(nav, msg);
+                nav_set_message(nav, "Error: Cannot index non-array with [%lld] at segment %zu", (long long)seg->index, seg_idx);
                 return CMD_ERROR;
             }
 
             DrJsonValue next = drjson_get_by_index(nav->jctx, current, seg->index);
             if(next.kind == DRJSON_ERROR){
-                char msg[256];
-                snprintf(msg, sizeof(msg), "Error: Index [%lld] out of bounds", (long long)seg->index);
-                nav_set_message(nav, msg);
+                nav_set_message(nav, "Error: Index [%lld] out of bounds", (long long)seg->index);
                 return CMD_ERROR;
             }
 
@@ -2007,9 +1997,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
     for(size_t i = 0; i < nav->item_count; i++){
         if(drjson_eq(nav->items[i].value, current)){
             nav->cursor_pos = i;
-            char msg[256];
-            snprintf(msg, sizeof(msg), "Navigated to: %.*s", (int)args_len, args);
-            nav_set_message(nav, msg);
+            nav_set_message(nav, "Navigated to: %.*s", (int)args_len, args);
             return CMD_OK;
         }
     }
