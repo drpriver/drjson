@@ -1528,6 +1528,22 @@ drjson_object_replace_key_atom(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom old
 
     if(found_pair_idx == UINT32_MAX) return 1; // Key not found
 
+    // Check if new_key already exists (and is not the same as old_key)
+    if(new_key.bits != old_key.bits){
+        uint32_t new_key_hash = drj_atom_get_hash(new_key);
+        uint32_t idx = fast_reduce32(new_key_hash, 2*capacity);
+        for(;;){
+            DrJsonHashIndex hi = idxes[idx];
+            if(hi.index == UINT32_MAX) break; // New key doesn't exist, safe to proceed
+            if(pairs[hi.index].atom.bits == new_key.bits){
+                // New key already exists in the object
+                return 1; // Would create duplicate
+            }
+            idx++;
+            if(idx >= 2*capacity) idx = 0;
+        }
+    }
+
     // Replace the key in the pair
     pairs[found_pair_idx].atom = new_key;
 

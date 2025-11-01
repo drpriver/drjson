@@ -186,6 +186,7 @@ struct JsonNav {
 
     // Inline edit mode
     _Bool edit_mode;                // In inline edit mode
+    _Bool edit_key_mode;            // If true, editing key; if false, editing value
     LineEditor edit_buffer;         // Buffer for editing value
 };
 
@@ -969,6 +970,15 @@ nav_collapse_all(JsonNav* nav){
     expansion_clear(&nav->expanded);
     nav->cursor_pos = 0;
     nav->scroll_offset = 0;
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+}
+
+static inline
+void
+nav_expand_all(JsonNav* nav){
+    // Expand the root and everything inside it recursively
+    nav_expand_recursive_helper(nav, nav->root);
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
 }
@@ -2677,12 +2687,19 @@ static const StringView HELP_LINES[] = {
     SV("  zt          Cursor to top of screen"),
     SV("  zb          Cursor to bottom of screen"),
     SV(""),
+    SV("Editing:"),
+    SV("  ck          Edit key (empty buffer)"),
+    SV("  cv          Edit value (empty buffer)"),
+    SV("  Enter       Edit current value (prefilled)"),
+    SV("  r/R         Rename key (prefilled, object members only)"),
+    SV(""),
     SV("Expand/Collapse:"),
-    SV("  Enter       Edit current value"),
     SV("  Space       Toggle expand/collapse"),
     SV("  N+Enter     Jump to index N (e.g., 0↵, 15↵)"),
-    SV("  e/E         Expand recursively"),
-    SV("  c/C         Collapse recursively"),
+    SV("  zo/zO       Expand recursively (open)"),
+    SV("  zc/zC       Collapse recursively (close)"),
+    SV("  zR          Expand all (open all folds)"),
+    SV("  zM          Collapse all (close all folds)"),
     SV(""),
     SV("Search:"),
     SV("  /           Start search (case-insensitive)"),
@@ -2700,6 +2717,7 @@ static const StringView HELP_LINES[] = {
     SV("  End/Ctrl-E  Move to end"),
     SV("  Ctrl-K      Delete to end of line"),
     SV("  Ctrl-U      Delete entire line"),
+    SV("  Note: Keys don't need quotes unless they start with \" or '"),
     SV(""),
     SV("In Search Mode:"),
     SV("  Enter       Execute search"),
@@ -3130,16 +3148,29 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         // Key if object member, or index if array element (skip for flat view)
         if(!item->is_flat_view){
             if(item->has_key){
-                const char* key_str = NULL;
-                size_t key_len = 0;
-                DrJsonValue key_val = drjson_atom_to_value(item->key);
-                drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-                if(key_str){
-                    drt_push_state(drt);
-                    drt_set_8bit_color(drt, 45); // cyan
-                    drt_puts(drt, key_str, key_len);
-                    drt_pop_state(drt);
+                // If editing the key, show edit buffer here
+                if(i == nav->cursor_pos && nav->edit_mode && nav->edit_key_mode){
+                    int start_x, start_y;
+                    drt_cursor(drt, &start_x, &start_y);
+                    le_render(drt, &nav->edit_buffer);
+                    cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
+                    cursor_y = y;
+                    show_cursor = 1;
                     drt_puts(drt, ": ", 2);
+                }
+                else {
+                    // Normal key rendering
+                    const char* key_str = NULL;
+                    size_t key_len = 0;
+                    DrJsonValue key_val = drjson_atom_to_value(item->key);
+                    drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+                    if(key_str){
+                        drt_push_state(drt);
+                        drt_set_8bit_color(drt, 45); // cyan
+                        drt_puts(drt, key_str, key_len);
+                        drt_pop_state(drt);
+                        drt_puts(drt, ": ", 2);
+                    }
                 }
             }
             else if(item->array_index >= 0){
@@ -3157,8 +3188,8 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         int remaining = screenw - cx;
         if(remaining < 10) remaining = 10;
 
-        // Show edit buffer if this is the cursor line and we're in edit mode
-        if(i == nav->cursor_pos && nav->edit_mode){
+        // Show edit buffer if this is the cursor line and we're in value edit mode
+        if(i == nav->cursor_pos && nav->edit_mode && !nav->edit_key_mode){
             int start_x = cx;
             le_render(drt, &nav->edit_buffer);
             cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
@@ -3671,6 +3702,7 @@ main(int argc, const char* const* argv){
             if(c == ESC || c == CTRL_C){
                 // Cancel edit
                 nav.edit_mode = 0;
+                nav.edit_key_mode = 0;
                 le_clear(&nav.edit_buffer);
                 continue;
             }
@@ -3679,78 +3711,184 @@ main(int argc, const char* const* argv){
                 if(nav.item_count > 0){
                     NavItem* item = &nav.items[nav.cursor_pos];
 
-                    // Parse the new value
-                    DrJsonParseContext pctx = {
-                        .cursor = nav.edit_buffer.data,
-                        .begin = nav.edit_buffer.data,
-                        .end = nav.edit_buffer.data + nav.edit_buffer.length,
-                        .depth = 0,
-                        .ctx = nav.jctx,
-                    };
-                    DrJsonValue new_value = drjson_parse(&pctx, 0);
+                    if(nav.edit_key_mode){
+                        // Editing a key - if quoted, parse as JSON; otherwise treat as raw key name
+                        DrJsonAtom new_key = {0};
+                        int err = 0;
 
-                    if(new_value.kind == DRJSON_ERROR){
-                        nav_set_message(&nav, "Error: Invalid value syntax");
-                    }
-                    else {
-                        // Update the value in its parent
-                        if(item->has_key && item->depth > 0){
-                            // It's an object member, find parent and update
-                            // Find parent object by searching backwards
-                            for(size_t i = nav.cursor_pos; i > 0; i--){
-                                if(nav.items[i - 1].depth < item->depth){
-                                    NavItem* parent = &nav.items[i - 1];
-                                    if(parent->value.kind == DRJSON_OBJECT){
-                                        int err = drjson_object_set_item_atom(nav.jctx, parent->value, item->key, new_value);
-                                        if(err){
-                                            nav_set_message(&nav, "Error: Could not update value");
-                                        }
-                                        else {
-                                            nav_set_message(&nav, "Value updated");
-                                            nav.needs_rebuild = 1;
-                                            nav_rebuild(&nav);
-                                        }
-                                    }
-                                    break;
-                                }
+                        // Check if the buffer starts with a quote
+                        if(nav.edit_buffer.length > 0 &&
+                           (nav.edit_buffer.data[0] == '"' || nav.edit_buffer.data[0] == '\'')){
+                            // Parse as JSON string
+                            DrJsonParseContext pctx = {
+                                .cursor = nav.edit_buffer.data,
+                                .begin = nav.edit_buffer.data,
+                                .end = nav.edit_buffer.data + nav.edit_buffer.length,
+                                .depth = 0,
+                                .ctx = nav.jctx,
+                            };
+                            DrJsonValue parsed = drjson_parse(&pctx, 0);
+
+                            if(parsed.kind == DRJSON_ERROR){
+                                nav_set_message(&nav, "Error: Invalid quoted string syntax");
+                                err = 1;
                             }
-                        }
-                        else if(!item->has_key && item->depth > 0){
-                            // It's an array member, find parent and update
-                            // Find parent array by searching backwards
-                            for(size_t i = nav.cursor_pos; i > 0; i--){
-                                if(nav.items[i - 1].depth < item->depth){
-                                    NavItem* parent = &nav.items[i - 1];
-                                    if(parent->value.kind == DRJSON_ARRAY){
-                                        if(!item->is_flat_view){
-                                            int err = drjson_array_set_by_index(nav.jctx, parent->value, item->array_index, new_value);
-                                            if(err){
-                                                nav_set_message(&nav, "Error: Could not update value");
-                                            }
-                                            else {
-                                                nav_set_message(&nav, "Value updated");
-                                                nav.needs_rebuild = 1;
-                                                nav_rebuild(&nav);
-                                            }
-                                        }
-                                        else {
-                                            nav_set_message(&nav, "Error: Array element editing of flat views not yet supported");
-                                        }
-                                    }
-                                    break;
+                            else if(parsed.kind != DRJSON_STRING){
+                                nav_set_message(&nav, "Error: Expected string");
+                                err = 1;
+                            }
+                            else {
+                                // Check that we consumed all input (skip trailing whitespace)
+                                while(pctx.cursor < pctx.end && (*pctx.cursor == ' ' || *pctx.cursor == '\t' || *pctx.cursor == '\n' || *pctx.cursor == '\r')){
+                                    pctx.cursor++;
+                                }
+                                if(pctx.cursor < pctx.end){
+                                    nav_set_message(&nav, "Error: Extra text after key");
+                                    err = 1;
+                                }
+                                else {
+                                    new_key = parsed.atom;
                                 }
                             }
                         }
                         else {
-                            // It's the root value
-                            nav.root = new_value;
-                            nav.needs_rebuild = 1;
-                            nav_rebuild(&nav);
-                            nav_set_message(&nav, "Root value updated");
+                            // Treat entire buffer as key name (no quotes needed)
+                            if(nav.edit_buffer.length == 0){
+                                nav_set_message(&nav, "Error: Key cannot be empty");
+                                err = 1;
+                            }
+                            else {
+                                err = drjson_atomize(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_key);
+                                if(err){
+                                    nav_set_message(&nav, "Error: Could not create key atom");
+                                }
+                            }
+                        }
+
+                        if(!err){
+
+                            // Find parent object and replace the key
+                            if(item->has_key && item->depth > 0){
+                                for(size_t i = nav.cursor_pos; i > 0; i--){
+                                    if(nav.items[i - 1].depth < item->depth){
+                                        NavItem* parent = &nav.items[i - 1];
+                                        if(parent->value.kind == DRJSON_OBJECT){
+                                            int err = drjson_object_replace_key_atom(nav.jctx, parent->value, item->key, new_key);
+                                            if(err){
+                                                nav_set_message(&nav, "Error: Key already exists or cannot be replaced");
+                                            }
+                                            else {
+                                                nav_set_message(&nav, "Key renamed");
+                                                nav.needs_rebuild = 1;
+                                                nav_rebuild(&nav);
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        // Editing a value - parse the new value
+                        DrJsonParseContext pctx = {
+                            .cursor = nav.edit_buffer.data,
+                            .begin = nav.edit_buffer.data,
+                            .end = nav.edit_buffer.data + nav.edit_buffer.length,
+                            .depth = 0,
+                            .ctx = nav.jctx,
+                        };
+                        DrJsonValue new_value = drjson_parse(&pctx, 0);
+
+                        if(new_value.kind == DRJSON_ERROR){
+                            nav_set_message(&nav, "Error: Invalid value syntax");
+                        }
+                        else {
+                            // Check that we consumed all input (skip trailing whitespace)
+                            while(pctx.cursor < pctx.end && (*pctx.cursor == ' ' || *pctx.cursor == '\t' || *pctx.cursor == '\n' || *pctx.cursor == '\r')){
+                                pctx.cursor++;
+                            }
+                            if(pctx.cursor < pctx.end){
+                                // There's extra text. If we parsed a bare identifier (string),
+                                // treat the entire buffer as a bare identifier instead
+                                if(new_value.kind == DRJSON_STRING && nav.edit_buffer.data[0] != '"' && nav.edit_buffer.data[0] != '\''){
+                                    // Re-parse entire buffer as a bare identifier
+                                    DrJsonAtom atom;
+                                    int err = drjson_atomize(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &atom);
+                                    if(err){
+                                        nav_set_message(&nav, "Error: Could not create string");
+                                    }
+                                    else {
+                                        new_value = drjson_atom_to_value(atom);
+                                    }
+                                }
+                                else {
+                                    nav_set_message(&nav, "Error: Extra text after value");
+                                    new_value.kind = DRJSON_ERROR; // Mark as error so we don't proceed
+                                }
+                            }
+                            if(new_value.kind != DRJSON_ERROR){
+                                // Update the value in its parent
+                                if(item->has_key && item->depth > 0){
+                                    // It's an object member, find parent and update
+                                    // Find parent object by searching backwards
+                                    for(size_t i = nav.cursor_pos; i > 0; i--){
+                                        if(nav.items[i - 1].depth < item->depth){
+                                            NavItem* parent = &nav.items[i - 1];
+                                            if(parent->value.kind == DRJSON_OBJECT){
+                                                int err = drjson_object_set_item_atom(nav.jctx, parent->value, item->key, new_value);
+                                                if(err){
+                                                    nav_set_message(&nav, "Error: Could not update value");
+                                                }
+                                                else {
+                                                    nav_set_message(&nav, "Value updated");
+                                                    nav.needs_rebuild = 1;
+                                                    nav_rebuild(&nav);
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                else if(!item->has_key && item->depth > 0){
+                                    // It's an array member, find parent and update
+                                    // Find parent array by searching backwards
+                                    for(size_t i = nav.cursor_pos; i > 0; i--){
+                                        if(nav.items[i - 1].depth < item->depth){
+                                            NavItem* parent = &nav.items[i - 1];
+                                            if(parent->value.kind == DRJSON_ARRAY){
+                                                if(!item->is_flat_view){
+                                                    int err = drjson_array_set_by_index(nav.jctx, parent->value, item->array_index, new_value);
+                                                    if(err){
+                                                        nav_set_message(&nav, "Error: Could not update value");
+                                                    }
+                                                    else {
+                                                        nav_set_message(&nav, "Value updated");
+                                                        nav.needs_rebuild = 1;
+                                                        nav_rebuild(&nav);
+                                                    }
+                                                }
+                                                else {
+                                                    nav_set_message(&nav, "Error: Array element editing of flat views not yet supported");
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                else {
+                                    // It's the root value
+                                    nav.root = new_value;
+                                    nav.needs_rebuild = 1;
+                                    nav_rebuild(&nav);
+                                    nav_set_message(&nav, "Root value updated");
+                                }
+                            }
                         }
                     }
                 }
                 nav.edit_mode = 0;
+                nav.edit_key_mode = 0;
                 le_clear(&nav.edit_buffer);
                 continue;
             }
@@ -3805,8 +3943,65 @@ main(int argc, const char* const* argv){
                     }
                     continue;
                 }
+                else if(c2 == 'c' || c2 == 'C'){
+                    // zc/zC - collapse current item recursively
+                    nav_collapse_recursive(&nav);
+                    continue;
+                }
+                else if(c2 == 'o' || c2 == 'O'){
+                    // zo/zO - expand recursively (open)
+                    nav_expand_recursive(&nav);
+                    nav_ensure_cursor_visible(&nav, globals.screenh);
+                    continue;
+                }
+                else if(c2 == 'M'){
+                    // zM - collapse all (close all folds)
+                    nav_collapse_all(&nav);
+                    continue;
+                }
+                else if(c2 == 'R'){
+                    // zR - expand all (open all folds)
+                    nav_expand_all(&nav);
+                    continue;
+                }
             }
             // If not a recognized z command, ignore
+            le_clear(&count_buffer);
+            continue;
+        }
+
+        // Handle 'c' prefix for change/edit commands
+        if(c == 'c'){
+            int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
+            int r2 = get_input(&globals.TS, &globals.needs_rescale, &c2, &cx2, &cy2, &magnitude2);
+            if(r2 == -1) goto finally;
+            if(r2){
+                if(c2 == 'k'){
+                    // ck - edit key (empty buffer)
+                    if(nav.item_count > 0){
+                        NavItem* item = &nav.items[nav.cursor_pos];
+                        if(item->has_key && item->depth > 0){
+                            nav.edit_mode = 1;
+                            nav.edit_key_mode = 1;
+                            le_clear(&nav.edit_buffer);
+                        }
+                        else {
+                            nav_set_message(&nav, "Can only rename keys on object members");
+                        }
+                    }
+                    continue;
+                }
+                else if(c2 == 'v'){
+                    // cv - edit value (empty buffer)
+                    if(nav.item_count > 0){
+                        nav.edit_mode = 1;
+                        nav.edit_key_mode = 0;
+                        le_clear(&nav.edit_buffer);
+                    }
+                    continue;
+                }
+            }
+            // If not a recognized c command, ignore
             le_clear(&count_buffer);
             continue;
         }
@@ -3946,12 +4141,6 @@ main(int argc, const char* const* argv){
                 nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
-            case 'e':
-            case 'E':
-                // Expand recursively
-                nav_expand_recursive(&nav);
-                nav_ensure_cursor_visible(&nav, globals.screenh);
-                break;
             case 'A':
                 if(nav.item_count > 0)
                     goto editing_inline;
@@ -3964,9 +4153,31 @@ main(int argc, const char* const* argv){
                 }
                 break;
 
-            case 'c':
-                // Collapse current item recursively
-                nav_collapse_recursive(&nav);
+            case 'r':
+            case 'R':
+                // Rename key (edit key mode)
+                if(nav.item_count > 0){
+                    NavItem* item = &nav.items[nav.cursor_pos];
+                    // Only allow renaming keys for object members
+                    if(item->has_key && item->depth > 0){
+                        nav.edit_mode = 1;
+                        nav.edit_key_mode = 1;
+                        le_clear(&nav.edit_buffer);
+
+                        // Get the current key string and populate edit buffer (without quotes)
+                        const char* key_str;
+                        size_t key_len;
+                        drjson_get_atom_str_and_length(nav.jctx, item->key, &key_str, &key_len);
+
+                        // Copy key as-is (no quotes)
+                        for(size_t i = 0; i < key_len && nav.edit_buffer.length < nav.edit_buffer.capacity - 1; i++){
+                            le_append_char(&nav.edit_buffer, key_str[i]);
+                        }
+                    }
+                    else {
+                        nav_set_message(&nav, "Can only rename keys on object members");
+                    }
+                }
                 break;
 
             case '-':
