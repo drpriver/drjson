@@ -59,6 +59,17 @@ typedef long long ssize_t;
 #endif
 #endif
 
+
+static struct {
+    TermState TS;
+    int needs_recalc, needs_rescale, needs_redisplay;
+    int screenw, screenh;
+    _Bool intern;
+    Drt drt;
+} globals = {
+    .needs_recalc = 1, .needs_rescale = 1, .needs_redisplay = 1,
+};
+
 enum {ITEMS_PER_ROW=16};
 
 static const char* LOGFILE = NULL;
@@ -482,6 +493,51 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
     le_init(&nav->command_buffer, 512);
     nav_rebuild(nav);
 }
+
+static
+void
+nav_reinit(JsonNav* nav){
+    // Reset navigation state but keep buffers
+    nav->cursor_pos = 0;
+    nav->scroll_offset = 0;
+    nav->needs_rebuild = 1;
+    nav->has_message = 0;
+    nav->show_help = 0;
+    nav->command_mode = 0;
+
+    // Clear line editors but keep their buffers
+    if(nav->command_buffer.length > 0)
+        nav->command_buffer.data[0] = 0;
+    nav->command_buffer.length = 0;
+    nav->command_buffer.cursor_pos = 0;
+    if(nav->search_buffer.length > 0)
+        nav->search_buffer.data[0] = 0;
+    nav->search_buffer.length = 0;
+    nav->search_buffer.cursor_pos = 0;
+
+    // Clear search state but keep buffers
+    nav->search_mode = SEARCH_INACTIVE;
+    nav->search_match_count = 0;
+
+    nav->in_completion_menu = 0;
+    nav->tab_count = 0;
+
+    // Re-initialize expansion set for the new context
+    size_t expanded_count = nav->jctx->arrays.count > nav->jctx->objects.count ? nav->jctx->arrays.count : nav->jctx->objects.count;
+    expanded_count += 1;
+    expanded_count *= 2;
+    expanded_count /= 64;
+    expanded_count++; // round up, whatever
+    nav->expanded.ids = realloc(nav->expanded.ids, expanded_count * sizeof *nav->expanded.ids);
+    nav->expanded.capacity = expanded_count;
+    expansion_clear(&nav->expanded);
+
+    if(nav_is_container(nav->root)){
+        expansion_add(&nav->expanded, nav_get_container_id(nav->root));
+    }
+    nav_rebuild(nav);
+}
+
 
 static inline
 void
@@ -1250,11 +1306,13 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open;
 
 static const Command commands[] = {
     {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
     {SV("h"),     SV(":h"), SV("  Show help"),         cmd_help},
+    {SV("open"),  SV(":open <file>"), SV("  Open a JSON file"), cmd_open},
+    {SV("o"),     SV(":o <file>"), SV("  Alias for :open"), cmd_open},
     {SV("save"),  SV(":save <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("w"),     SV(":w <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("quit"),  SV(":quit"), SV("  Quit"),              cmd_quit},
@@ -1273,6 +1331,71 @@ enum {
 };
 
 // Command handlers
+static
+int
+cmd_open(JsonNav* nav, const char* args, size_t args_len){
+    // Skip leading whitespace
+    while(args_len > 0 && args[0] == ' '){
+        args++;
+        args_len--;
+    }
+    while(args_len > 0 && args[args_len - 1] == ' '){
+        args_len--;
+    }
+
+    if(args_len == 0){
+        nav_set_message(nav, "Error: No filename provided");
+        return CMD_ERROR;
+    }
+
+    // Copy filename to null-terminated buffer
+    char filepath[1024];
+    if(args_len >= sizeof(filepath)){
+        nav_set_message(nav, "Error: Filename too long");
+        return CMD_ERROR;
+    }
+    memcpy(filepath, args, args_len);
+    filepath[args_len] = '\0';
+
+    LongString file_content = read_file(filepath);
+    if(!file_content.text){
+        nav_set_message(nav, "Error: Could not read file '%s'", filepath);
+        return CMD_ERROR;
+    }
+
+    DrJsonParseContext pctx = {
+        .ctx = nav->jctx,
+        .begin = file_content.text,
+        .cursor = file_content.text,
+        .end = file_content.text + file_content.length,
+        .depth = 0,
+    };
+    unsigned parse_flags = 0;
+    if(globals.intern) parse_flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
+    DrJsonValue new_root = drjson_parse(&pctx, parse_flags);
+
+    free((void*)file_content.text); // done with this now
+
+    if(new_root.kind == DRJSON_ERROR){
+        size_t line=0, col=0;
+        drjson_get_line_column(&pctx, &line, &col);
+        nav_set_message(nav, "Error parsing '%s': %s at line %zu col %zu", filepath, new_root.err_mess, line, col);
+        drjson_gc(nav->jctx, &nav->root, 1);
+        return CMD_ERROR;
+    }
+    nav->root = new_root;
+    nav_reinit(nav);
+    LOG("gc\n");
+    drjson_gc(nav->jctx, &nav->root, 1);
+    LOG("nav->jctx->arrays.count: %zu\n", nav->jctx->arrays.count);
+    LOG("nav->jctx->free_array: %zu\n", nav->jctx->arrays.free_array);
+    LOG("nav->jctx->objects.count: %zu\n", nav->jctx->objects.count);
+    LOG("nav->jctx->free_object: %zu\n", nav->jctx->objects.free_object);
+
+    nav_set_message(nav, "Opened '%s'", filepath);
+    return CMD_OK;
+}
+
 static
 int
 cmd_write(JsonNav* nav, const char* args, size_t args_len){
@@ -2537,15 +2660,6 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     }
 }
 
-static struct {
-    TermState TS;
-    int needs_recalc, needs_rescale, needs_redisplay;
-    int screenw, screenh;
-    Drt drt;
-} globals = {
-    .needs_recalc = 1, .needs_rescale = 1, .needs_redisplay = 1,
-};
-
 static
 void
 end_tui(void){
@@ -2627,7 +2741,6 @@ main(int argc, const char* const* argv){
     };
 
     _Bool braceless = 0;
-    _Bool intern = 0;
     ArgToParse kw_args[] = {
         {
             .name = SV("--braceless"),
@@ -2638,7 +2751,7 @@ main(int argc, const char* const* argv){
             .name = SV("--intern-objects"),
             .altname1 = SV("--intern"),
             .help = "Reuse duplicate arrays and objects while parsing. Slower but can use less memory. Sometimes.",
-            .dest = ARGDEST(&intern),
+            .dest = ARGDEST(&globals.intern),
             .hidden = 1,
         },
         {
@@ -2738,7 +2851,7 @@ main(int argc, const char* const* argv){
     };
     unsigned flags = DRJSON_PARSE_FLAG_NONE;
     if(braceless) flags |= DRJSON_PARSE_FLAG_BRACELESS_OBJECT;
-    if(intern) flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
+    if(globals.intern) flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
     flags |= DRJSON_PARSE_FLAG_NO_COPY_STRINGS;
     DrJsonValue document = drjson_parse(&ctx, flags);
     if(document.kind == DRJSON_ERROR){
