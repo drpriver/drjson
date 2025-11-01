@@ -139,6 +139,7 @@ struct JsonNav {
     // State flags
     _Bool needs_rebuild;      // Items array needs regeneration
     _Bool show_help;          // Show help overlay
+    int help_page;            // Current help page (0-based)
 
     // Search state
     LineEditor search_buffer;       // Current search query
@@ -448,6 +449,7 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
         .scroll_offset = 0,
         .needs_rebuild = 1,
         .show_help = 0,
+        .help_page = 0,
     };
     size_t expanded_count = jctx->arrays.count > jctx->objects.count? jctx->arrays.count : jctx->objects.count;
     expanded_count += 1;
@@ -495,6 +497,9 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
                 size_t parent_idx = i - 1;
                 NavItem* parent = &nav->items[parent_idx];
                 if(nav_is_container(parent->value)){
+                    // Don't allow collapsing the root
+                    if(parent->depth == 0) return;
+
                     size_t id = nav_get_container_id(parent->value);
                     expansion_toggle(&nav->expanded, id);
                     nav->needs_rebuild = 1;
@@ -505,6 +510,9 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
         }
         return;
     }
+
+    // Don't allow collapsing the root object/array
+    if(item->depth == 0) return;
 
     size_t id = nav_get_container_id(item->value);
     expansion_toggle(&nav->expanded, id);
@@ -594,6 +602,32 @@ nav_collapse_recursive(JsonNav* nav){
     if(!nav_is_container(item->value))
         return;
 
+    // Special handling for root: collapse children but not the root itself
+    if(item->depth == 0){
+        DrJsonValue val = item->value;
+        int64_t len = drjson_len(nav->jctx, val);
+
+        if(val.kind == DRJSON_ARRAY || val.kind == DRJSON_ARRAY_VIEW){
+            for(int64_t i = 0; i < len; i++){
+                DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
+                nav_collapse_recursive_helper(nav, child);
+            }
+        }
+        else if(val.kind == DRJSON_OBJECT || val.kind == DRJSON_OBJECT_KEYS ||
+                val.kind == DRJSON_OBJECT_VALUES || val.kind == DRJSON_OBJECT_ITEMS){
+            DrJsonValue items = drjson_object_items(val);
+            int64_t items_len = drjson_len(nav->jctx, items);
+            for(int64_t i = 0; i < items_len; i += 2){
+                DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
+                nav_collapse_recursive_helper(nav, v);
+            }
+        }
+
+        nav->needs_rebuild = 1;
+        nav_rebuild(nav);
+        return;
+    }
+
     nav_collapse_recursive_helper(nav, item->value);
 
     nav->needs_rebuild = 1;
@@ -617,7 +651,8 @@ nav_jump_to_parent(JsonNav* nav, _Bool collapse){
             // Optionally collapse the parent we just jumped to
             if(collapse){
                 NavItem* parent = &nav->items[nav->cursor_pos];
-                if(nav_is_container(parent->value) && nav_is_expanded(nav, parent->value)){
+                // Don't collapse the root
+                if(parent->depth > 0 && nav_is_container(parent->value) && nav_is_expanded(nav, parent->value)){
                     size_t id = nav_get_container_id(parent->value);
                     expansion_remove(&nav->expanded, id);
                     nav->needs_rebuild = 1;
@@ -1452,19 +1487,19 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
 
 static
 void
-nav_render_help(Drt* drt, int screenw, int screenh){
+nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages){
     StringView help_lines[] = {
         SV("DrJson TUI - Keyboard Commands"),
         SV(""),
         SV("Navigation:"),
-        SV("  j/↓         Move cursor down"),
-        SV("  k/↑         Move cursor up"),
+        SV("  j/↓/J       Move cursor down"),
+        SV("  k/↑/K       Move cursor up"),
         SV("  h/←         Jump to parent (and collapse)"),
         SV("  H           Jump to parent (keep expanded)"),
-        SV("  l/→         Enter container (expand if needed)"),
+        SV("  l/→/L       Enter container (expand if needed)"),
         SV("  ]           Next sibling (skip children)"),
         SV("  [           Previous sibling"),
-        SV("  -           Jump to parent (no collapse)"),
+        SV("  -/_         Jump to parent (no collapse)"),
         SV(""),
         SV("Scrolling:"),
         SV("  Ctrl-D      Scroll down half page"),
@@ -1482,31 +1517,80 @@ nav_render_help(Drt* drt, int screenw, int screenh){
         SV("Expand/Collapse:"),
         SV("  Enter/Space Toggle expand/collapse"),
         SV("  N+Enter     Jump to index N (e.g., 0↵, 15↵)"),
-        SV("  e           Expand recursively"),
-        SV("  c           Collapse recursively"),
+        SV("  e/E         Expand recursively"),
+        SV("  c/C         Collapse recursively"),
+        SV(""),
+        SV("Search:"),
+        SV("  /           Start search (case-insensitive)"),
+        SV("  *           Start recursive search"),
+        SV("  n           Next match"),
+        SV("  N           Previous match"),
+        SV(""),
+        SV("In Search Mode:"),
+        SV("  Enter       Execute search"),
+        SV("  ESC/Ctrl-C  Cancel search"),
+        SV("  ↑/Ctrl-P    Previous search (history)"),
+        SV("  ↓/Ctrl-N    Next search (history)"),
+        SV("  ←/→         Move cursor in search text"),
+        SV("  Backspace   Delete char before cursor"),
+        SV("  Delete      Delete char at cursor"),
+        SV("  Home/Ctrl-A Move to start"),
+        SV("  End/Ctrl-E  Move to end"),
+        SV("  Ctrl-K      Delete to end of line"),
+        SV("  Ctrl-U      Delete entire line"),
+        SV("  Ctrl-W      Delete word backward"),
+        SV(""),
+        SV("Mouse:"),
+        SV("  Click       Jump to item and toggle expand"),
+        SV("  Wheel       Scroll up/down"),
         SV(""),
         SV("Other:"),
-        SV("  q/Ctrl-C    Quit"),
+        SV("  q/Q         Quit"),
+        SV("  Ctrl-Z      Suspend (Unix only)"),
         SV("  ?           Toggle this help"),
         SV(""),
-        SV("Press any key to close help..."),
+        SV("Help Navigation:"),
+        SV("  n/→         Next page"),
+        SV("  p/←         Previous page"),
+        SV("  Any other   Close help"),
     };
 
-    int num_lines = sizeof help_lines / sizeof help_lines[0];
-    int start_y = (screenh - num_lines) / 2;
-    if(start_y < 1) start_y = 1;
+    int total_lines = sizeof help_lines / sizeof help_lines[0];
 
+    // Calculate lines available for content (leave room for borders and page indicator)
+    int max_content_height = screenh - 6;  // Top border, bottom border, page indicator, margins
+    if(max_content_height < 10) max_content_height = 10;
+
+    // Calculate number of pages
+    int num_pages = (total_lines + max_content_height - 1) / max_content_height;
+    if(out_num_pages) *out_num_pages = num_pages;
+
+    // Clamp page to valid range
+    if(page < 0) page = 0;
+    if(page >= num_pages) page = num_pages - 1;
+
+    // Calculate which lines to show on this page
+    int start_line = page * max_content_height;
+    int end_line = start_line + max_content_height;
+    if(end_line > total_lines) end_line = total_lines;
+    int num_lines = end_line - start_line;
+
+    // Find max width needed
     int max_width = 0;
-    for(int i = 0; i < num_lines; i++){
+    for(int i = 0; i < total_lines; i++){
         int len = (int)help_lines[i].length;
         if(len > max_width) max_width = len;
     }
+
+    int box_height = num_lines + 3;  // +3 for top border, bottom border, and page indicator
+    int start_y = (screenh - box_height) / 2;
+    if(start_y < 1) start_y = 1;
 
     int start_x = (screenw - max_width - 4) / 2;
     if(start_x < 0) start_x = 0;
 
     // Draw box background
-    for(int y = 0; y < num_lines + 2 && start_y + y < screenh; y++){
+    for(int y = 0; y < box_height && start_y + y < screenh; y++){
         drt_move(drt, start_x, start_y + y);
         drt_push_state(drt);
         drt_bg_set_8bit_color(drt, 235);
@@ -1517,21 +1601,32 @@ nav_render_help(Drt* drt, int screenw, int screenh){
         drt_pop_state(drt);
     }
 
-    // Draw help text
+    // Draw help text for current page
     for(int i = 0; i < num_lines && start_y + i + 1 < screenh; i++){
+        int line_idx = start_line + i;
         drt_move(drt, start_x + 2, start_y + i + 1);
         drt_push_state(drt);
         drt_bg_set_8bit_color(drt, 235);
 
         // Highlight headers
-        if(help_lines[i].length && help_lines[i].text[help_lines[i].length-1] == ':'){
+        if(help_lines[line_idx].length && help_lines[line_idx].text[help_lines[line_idx].length-1] == ':'){
             drt_set_8bit_color(drt, 11); // bright yellow
             drt_set_style(drt, DRT_STYLE_BOLD);
         } else {
             drt_set_8bit_color(drt, 15);
         }
 
-        drt_puts_utf8(drt, help_lines[i].text, help_lines[i].length);
+        drt_puts_utf8(drt, help_lines[line_idx].text, help_lines[line_idx].length);
+        drt_pop_state(drt);
+    }
+
+    // Draw page indicator at bottom
+    if(num_pages > 1){
+        drt_move(drt, start_x + 2, start_y + num_lines + 1);
+        drt_push_state(drt);
+        drt_bg_set_8bit_color(drt, 235);
+        drt_set_8bit_color(drt, 8);  // gray
+        drt_printf(drt, "Page %d/%d", page + 1, num_pages);
         drt_pop_state(drt);
     }
 }
@@ -2433,7 +2528,7 @@ main(int argc, const char* const* argv){
 
         // Render help overlay if active
         if(nav.show_help){
-            nav_render_help(&globals.drt, globals.screenw, globals.screenh);
+            nav_render_help(&globals.drt, globals.screenw, globals.screenh, nav.help_page, NULL);
         }
 
         drt_paint(&globals.drt);
@@ -2443,11 +2538,40 @@ main(int argc, const char* const* argv){
         if(r == -1) goto finally;
         if(!r) continue;
 
-        // If help is showing, any key closes it
+        // If help is showing, handle help navigation
         if(nav.show_help){
-            nav.show_help = 0;
-            le_clear(&count_buffer);
-            continue;
+            int num_pages = 0;
+            nav_render_help(&globals.drt, globals.screenw, globals.screenh, nav.help_page, &num_pages);
+
+            // Clamp help_page in case window was resized
+            if(nav.help_page >= num_pages){
+                nav.help_page = num_pages - 1;
+            }
+            if(nav.help_page < 0){
+                nav.help_page = 0;
+            }
+
+            if(c == 'n' || c == RIGHT){
+                // Next page
+                if(nav.help_page < num_pages - 1){
+                    nav.help_page++;
+                }
+                continue;
+            }
+            else if(c == 'p' || c == LEFT){
+                // Previous page
+                if(nav.help_page > 0){
+                    nav.help_page--;
+                }
+                continue;
+            }
+            else {
+                // Any other key closes help
+                nav.show_help = 0;
+                nav.help_page = 0;
+                le_clear(&count_buffer);
+                continue;
+            }
         }
 
         // Handle search input mode
@@ -2545,7 +2669,6 @@ main(int argc, const char* const* argv){
 
         // Handle input
         switch(c){
-            case CTRL_C:
             case 'q':
             case 'Q':
                 goto finally;
@@ -2684,6 +2807,9 @@ main(int argc, const char* const* argv){
             case '?':
                 // Toggle help
                 nav.show_help = !nav.show_help;
+                if(nav.show_help){
+                    nav.help_page = 0;  // Start at first page
+                }
                 break;
 
             case '/':
