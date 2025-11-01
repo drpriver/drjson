@@ -276,7 +276,7 @@ drj_atomize_str(DrjAtomTable* table, const DrJsonAllocator* allocator, const cha
         if(copy && len){
             // XXX: use a string arena
             char* p = allocator->alloc(allocator->user_pointer, len);
-            if(!p) {
+            if(!p){
                 allocator->free(allocator->user_pointer, p,drj_atom_table_size_for(capacity) );
                 table->data = NULL;
                 table->capacity = 0;
@@ -413,7 +413,7 @@ static inline
 void*_Nullable
 drj_realloc(const DrJsonContext* ctx, void*_Nullable p, size_t old_size, size_t new_size){
     if(!old_size || !p) return drj_alloc(ctx, new_size);
-    if(!new_size) { drj_free(ctx, p, old_size); return NULL;}
+    if(!new_size){ drj_free(ctx, p, old_size); return NULL;}
     return ctx->allocator.realloc(ctx->allocator.user_pointer, p, old_size, new_size);
 }
 
@@ -819,7 +819,7 @@ drj_parse(DrJsonParseContext* ctx);
 static inline
 DrJsonValue
 parse_object(DrJsonParseContext* ctx){
-    if(unlikely(!drj_match(ctx, '{'))) {
+    if(unlikely(!drj_match(ctx, '{'))){
         return drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "Expected a '{' to begin an object");
     }
     DrJsonValue result = drjson_make_object(ctx->ctx);
@@ -2187,7 +2187,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
                 drjson_buff_putc(buffer, ' ');
                 drjson_pretty_print_value_inner(ctx, buffer, o->value, indent+2);
             }
-            if(newlined) {
+            if(newlined){
                 drjson_buff_putc(buffer, '\n');
                 for(int i = 0; i < indent; i++)
                     drjson_buff_putc(buffer, ' ');
@@ -2214,7 +2214,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
                 drjson_buff_write(buffer, s.pointer, s.length);
                 drjson_buff_putc(buffer, '"');
             }
-            if(newlined) {
+            if(newlined){
                 drjson_buff_putc(buffer, '\n');
                 for(int i = 0; i < indent; i++)
                     drjson_buff_putc(buffer, ' ');
@@ -2237,7 +2237,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
                     drjson_buff_putc(buffer, ' ');
                 drjson_pretty_print_value_inner(ctx, buffer, o->value, indent+2);
             }
-            if(newlined) {
+            if(newlined){
                 drjson_buff_putc(buffer, '\n');
                 for(int i = 0; i < indent; i++)
                     drjson_buff_putc(buffer, ' ');
@@ -2267,7 +2267,7 @@ drjson_pretty_print_value_inner(const DrJsonContext*_Nullable ctx, DrJsonBuffere
                 drjson_buff_putc(buffer, ' ');
                 drjson_pretty_print_value_inner(ctx, buffer, o->value, indent+2);
             }
-            if(newlined) {
+            if(newlined){
                 drjson_buff_putc(buffer, '\n');
                 for(int i = 0; i < indent; i++)
                     drjson_buff_putc(buffer, ' ');

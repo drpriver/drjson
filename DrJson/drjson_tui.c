@@ -32,6 +32,7 @@ typedef long long ssize_t;
 #include <fcntl.h>
 #include <signal.h>
 #include <dirent.h>
+#include <dlfcn.h>
 #endif
 #include <stdio.h>
 #include <string.h>
@@ -1306,7 +1307,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank;
 
 static const Command commands[] = {
     {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
@@ -1320,6 +1321,10 @@ static const Command commands[] = {
     {SV("quit"),  SV(":quit"), SV("  Quit"),              cmd_quit},
     {SV("q"),     SV(":q"), SV("  Quit"),              cmd_quit},
     {SV("exit"),  SV(":exit"), SV("  Quit"),              cmd_quit},
+    {SV("pwd"),   SV(":pwd"), SV("  Print working directory"), cmd_pwd},
+    {SV("cd"),    SV(":cd <dir>"), SV("  Change directory"), cmd_cd},
+    {SV("yank"),  SV(":yank"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
+    {SV("y"),     SV(":y"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
 };
 
 static void build_command_helps(void);
@@ -1464,6 +1469,439 @@ cmd_help(JsonNav* nav, const char* args, size_t args_len){
         nav->help_lines_count = cmd_helps_count;
         nav->help_page = 0;
     }
+    return CMD_OK;
+}
+
+static
+int
+cmd_pwd(JsonNav* nav, const char* args, size_t args_len){
+    (void)args;
+    (void)args_len;
+
+    char cwd[1024];
+    #ifdef _WIN32
+    DWORD len = GetCurrentDirectoryA(sizeof(cwd), cwd);
+    if(len == 0 || len >= sizeof(cwd)){
+        nav_set_message(nav, "Error: Could not get current directory");
+        return CMD_ERROR;
+    }
+    #else
+    if(getcwd(cwd, sizeof(cwd)) == NULL){
+        nav_set_message(nav, "Error: Could not get current directory: %s", strerror(errno));
+        return CMD_ERROR;
+    }
+    #endif
+
+    nav_set_message(nav, "%s", cwd);
+    return CMD_OK;
+}
+
+static
+int
+cmd_cd(JsonNav* nav, const char* args, size_t args_len){
+    // Skip leading whitespace
+    while(args_len > 0 && args[0] == ' '){
+        args++;
+        args_len--;
+    }
+    while(args_len > 0 && args[args_len - 1] == ' '){
+        args_len--;
+    }
+
+    if(args_len == 0){
+        // No argument - change to home directory
+        #ifdef _WIN32
+        const char* home = getenv("USERPROFILE");
+        if(!home) home = getenv("HOMEDRIVE");
+        #else
+        const char* home = getenv("HOME");
+        #endif
+
+        if(!home){
+            nav_set_message(nav, "Error: Could not determine home directory");
+            return CMD_ERROR;
+        }
+
+        #ifdef _WIN32
+        if(!SetCurrentDirectoryA(home)){
+            nav_set_message(nav, "Error: Could not change to home directory");
+            return CMD_ERROR;
+        }
+        #else
+        if(chdir(home) != 0){
+            nav_set_message(nav, "Error: Could not change to home directory: %s", strerror(errno));
+            return CMD_ERROR;
+        }
+        #endif
+
+        nav_set_message(nav, "Changed to %s", home);
+        return CMD_OK;
+    }
+
+    // Copy directory path to null-terminated buffer
+    char dirpath[1024];
+    if(args_len >= sizeof(dirpath)){
+        nav_set_message(nav, "Error: Directory path too long");
+        return CMD_ERROR;
+    }
+    memcpy(dirpath, args, args_len);
+    dirpath[args_len] = '\0';
+
+    #ifdef _WIN32
+    if(!SetCurrentDirectoryA(dirpath)){
+        nav_set_message(nav, "Error: Could not change directory to '%s'", dirpath);
+        return CMD_ERROR;
+    }
+    #else
+    if(chdir(dirpath) != 0){
+        nav_set_message(nav, "Error: Could not change directory to '%s': %s", dirpath, strerror(errno));
+        return CMD_ERROR;
+    }
+    #endif
+
+    nav_set_message(nav, "Changed to %s", dirpath);
+    return CMD_OK;
+}
+
+#ifdef _WIN32
+// Copy text to system clipboard (Windows only)
+// Returns 0 on success, -1 on failure
+static
+int
+copy_to_clipboard(const char* text, size_t len){
+    if(!OpenClipboard(NULL)){
+        return -1;
+    }
+
+    EmptyClipboard();
+
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, len + 1);
+    if(!hMem){
+        CloseClipboard();
+        return -1;
+    }
+
+    char* pMem = (char*)GlobalLock(hMem);
+    if(!pMem){
+        GlobalFree(hMem);
+        CloseClipboard();
+        return -1;
+    }
+
+    memcpy(pMem, text, len);
+    pMem[len] = '\0';
+    GlobalUnlock(hMem);
+
+    if(!SetClipboardData(CF_TEXT, hMem)){
+        GlobalFree(hMem);
+        CloseClipboard();
+        return -1;
+    }
+
+    CloseClipboard();
+    return 0;
+}
+#endif
+
+#ifdef __APPLE__
+// macOS clipboard using Objective-C runtime via dlopen
+// Returns 0 on success, -1 on failure
+static
+int
+macos_copy_to_clipboard(const char* text, size_t len){
+    // LOG("Copying '%s' to clipboard\n", text);
+    (void)len; // Unused parameter
+
+    typedef void* (*objc_getClass_t)(const char*);
+    typedef void* (*sel_registerName_t)(const char*);
+    typedef void* (*objc_msgSend_t)(void*, void*, ...);
+
+    // Load Objective-C runtime
+    static void* objc_lib;
+    if(!objc_lib) objc_lib = dlopen("/usr/lib/libobjc.dylib", RTLD_LAZY);
+    if(!objc_lib){
+        LOG("Couldn't open objc_lib\n");
+        return -1;
+    }
+
+    // Load AppKit framework
+    static void* appkit;
+    if(!appkit) appkit = dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", RTLD_LAZY);
+    if(!appkit){
+        LOG("Couldn't open appkit\n");
+        return -1;
+    }
+
+    // Get Objective-C runtime functions
+    static objc_getClass_t objc_getClass_fn;
+    if(!objc_getClass_fn) objc_getClass_fn = (objc_getClass_t)dlsym(objc_lib, "objc_getClass");
+    static sel_registerName_t sel_registerName_fn;
+    if(!sel_registerName_fn) sel_registerName_fn = (sel_registerName_t)dlsym(objc_lib, "sel_registerName");
+    static objc_msgSend_t objc_msgSend_fn;
+    if(!objc_msgSend_fn) objc_msgSend_fn = (objc_msgSend_t)dlsym(objc_lib, "objc_msgSend");
+
+    if(!objc_getClass_fn || !sel_registerName_fn || !objc_msgSend_fn){
+        if(!objc_getClass_fn) LOG("Couldn't get objc_getClass\n");
+        if(!sel_registerName_fn) LOG("Couldn't get sel_registerName\n");
+        if(!objc_msgSend_fn) LOG("Couldn't get objc_msgSend\n");
+        return -1;
+    }
+
+    // Get classes
+    static void* NSPasteboard;
+    if(!NSPasteboard) NSPasteboard = objc_getClass_fn("NSPasteboard");
+    static void* NSString;
+    if(!NSString) NSString = objc_getClass_fn("NSString");
+
+
+    static void* NSAutoreleasePool;
+    if(!NSAutoreleasePool) NSAutoreleasePool = objc_getClass_fn("NSAutoreleasePool");
+
+    if(!NSPasteboard || !NSString || !NSAutoreleasePool){
+        if(!NSPasteboard) LOG("Couldn't get NSPasteboard\n");
+        if(!NSString) LOG("Couldn't get NSString\n");
+        if(!NSAutoreleasePool) LOG("Couldn't get NSAutoreleasePool\n");
+        return -1;
+    }
+
+    // Get selectors
+    static void* sel_generalPasteboard;
+    if(!sel_generalPasteboard) sel_generalPasteboard = sel_registerName_fn("generalPasteboard");
+    static void* sel_clearContents;
+    if(!sel_clearContents) sel_clearContents = sel_registerName_fn("clearContents");
+    static void* sel_setString;
+    if(!sel_setString) sel_setString = sel_registerName_fn("setString:forType:");
+    static void* sel_stringWithUTF8String;
+    if(!sel_stringWithUTF8String) sel_stringWithUTF8String = sel_registerName_fn("stringWithUTF8String:");
+    static void* sel_alloc;
+    if(!sel_alloc) sel_alloc = sel_registerName_fn("alloc");
+    static void* sel_init;
+    if(!sel_init) sel_init = sel_registerName_fn("init");
+    static void* sel_drain;
+    if(!sel_drain) sel_drain = sel_registerName_fn("drain");
+    static void* sel_retain;
+    if(!sel_retain) sel_retain = sel_registerName_fn("retain");
+
+
+    if(!sel_generalPasteboard || !sel_clearContents || !sel_setString || !sel_stringWithUTF8String || !sel_alloc || !sel_init || !sel_retain){
+        if(!sel_generalPasteboard) LOG("Couldn't get SEL(generalPasteboard)\n");
+        if(!sel_clearContents) LOG("Couldn't get SEL(clearContents)\n");
+        if(!sel_setString) LOG("Couldn't get SEL(setString)\n");
+        if(!sel_stringWithUTF8String) LOG("Couldn't get SEL(stringWithUTF8String)\n");
+        if(!sel_alloc) LOG("Couldn't get SEL(alloc)\n");
+        if(!sel_init) LOG("Couldn't get SEL(init)\n");
+        if(!sel_retain) LOG("Couldn't get SEL(retain)\n");
+        return -1;
+    }
+
+    // NSPasteboard.generalPasteboard
+    static void* pasteboard;
+    if(!pasteboard) pasteboard = ((void*(*)(void*, void*))objc_msgSend_fn)(NSPasteboard, sel_generalPasteboard);
+    if(!pasteboard){
+        LOG("couldn't get generalPasteboard\n");
+        return -1;
+    }
+
+    int result = -1;
+    void* pool = ((void*(*)(void*, void*))objc_msgSend_fn)(NSAutoreleasePool, sel_alloc);
+    pool = ((void*(*)(void*, void*))objc_msgSend_fn)(pool, sel_init);
+    if(!pool){
+        LOG("couldn't allocate a pool\n");
+        return -1;
+    }
+    // Create NSString from C string
+    void* nsstring = ((void*(*)(void*, void*, const void*))objc_msgSend_fn)(NSString, sel_stringWithUTF8String, text);
+    if(!nsstring){
+        LOG("couldn't make an nsstring from '%s'\n", text);
+        goto finally;
+    }
+
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+    // Clear pasteboard
+    ((long(*)(void*, void*))objc_msgSend_fn)(pasteboard, sel_clearContents);
+
+    // Try to get NSPasteboardTypeString constant
+    static void** NSPasteboardTypeString_ptr;
+    if(!NSPasteboardTypeString_ptr) NSPasteboardTypeString_ptr = (void**)dlsym(appkit, "NSPasteboardTypeString");
+    static void* pasteboardType;
+
+    if(!pasteboardType){
+        if(NSPasteboardTypeString_ptr && *NSPasteboardTypeString_ptr){
+            pasteboardType = *NSPasteboardTypeString_ptr;
+        } else {
+            // Fallback: try old API
+            static void** NSStringPboardType_ptr;
+            if(!NSStringPboardType_ptr) NSStringPboardType_ptr = (void**)dlsym(appkit, "NSStringPboardType");
+            if(NSStringPboardType_ptr && *NSStringPboardType_ptr){
+                pasteboardType = *NSStringPboardType_ptr;
+            } else {
+                // Last resort: create string with UTI
+                pasteboardType = ((void*(*)(void*, void*, void*))objc_msgSend_fn)(NSString, sel_stringWithUTF8String, "public.utf8-plain-text");
+                pasteboardType = ((void*(*)(void*, void*))objc_msgSend_fn)(pasteboardType, sel_retain);
+
+            }
+        }
+    }
+
+    if(!pasteboardType){
+        LOG("Couldn't get pasteboardType\n");
+        goto finally;
+    }
+
+    // Set string on pasteboard
+    _Bool ok = ((_Bool(*)(void*, void*, void*, void*))objc_msgSend_fn)(pasteboard, sel_setString, nsstring, pasteboardType);
+    if(!ok){
+        LOG("Failed to setstring the pasteboard\n");
+        goto finally;
+    }
+
+    result = 0;
+    finally:;
+    ((void(*)(void*, void*))objc_msgSend_fn)(pool, sel_drain);
+    LOG("copied to clipboard?: result=%d\n", result);
+    return result;
+}
+#endif
+
+#if defined(_WIN32) || defined(__APPLE__)
+// In-memory buffer for Windows and macOS clipboard
+typedef struct {
+    char* data;
+    size_t size;
+    size_t capacity;
+} MemBuffer;
+
+static
+int
+membuf_write(void* user_data, const void* data, size_t len){
+    MemBuffer* buf = (MemBuffer*)user_data;
+
+    // Ensure capacity
+    size_t needed = buf->size + len;
+    if(needed > buf->capacity){
+        size_t new_cap = buf->capacity * 2;
+        if(new_cap < needed) new_cap = needed;
+        if(new_cap < 1024) new_cap = 1024;
+
+        char* new_data = realloc(buf->data, new_cap);
+        if(!new_data) return -1;
+
+        buf->data = new_data;
+        buf->capacity = new_cap;
+    }
+
+    memcpy(buf->data + buf->size, data, len);
+    buf->size += len;
+    return 0;
+}
+#endif
+
+static
+int
+cmd_yank(JsonNav* nav, const char* args, size_t args_len){
+    (void)args;
+    (void)args_len;
+
+    if(nav->item_count == 0){
+        nav_set_message(nav, "Error: Nothing to yank");
+        return CMD_ERROR;
+    }
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+
+    #ifdef _WIN32
+    // Windows: use in-memory buffer
+    MemBuffer buf = {0};
+    DrJsonTextWriter writer = {
+        .up = &buf,
+        .write = membuf_write,
+    };
+
+    int print_err = drjson_print_value(nav->jctx, &writer, item->value, 0, 0);
+
+    if(print_err){
+        free(buf.data);
+        nav_set_message(nav, "Error: Could not serialize value");
+        return CMD_ERROR;
+    }
+
+    if(buf.size > 10*1024*1024){  // 10MB limit
+        free(buf.data);
+        nav_set_message(nav, "Error: Value too large to yank");
+        return CMD_ERROR;
+    }
+
+    int result = copy_to_clipboard(buf.data, buf.size);
+    free(buf.data);
+
+    if(result != 0){
+        nav_set_message(nav, "Error: Could not copy to clipboard");
+        return CMD_ERROR;
+    }
+
+    #elif defined(__APPLE__)
+    // macOS: use in-memory buffer and native clipboard API
+    MemBuffer buf = {0};
+    DrJsonTextWriter writer = {
+        .up = &buf,
+        .write = membuf_write,
+    };
+
+    int print_err = drjson_print_value(nav->jctx, &writer, item->value, 0, DRJSON_APPEND_ZERO);
+
+    if(print_err){
+        free(buf.data);
+        nav_set_message(nav, "Error: Could not serialize value");
+        return CMD_ERROR;
+    }
+
+    if(0)
+    if(buf.size > 10*1024*1024){  // 10MB limit
+        free(buf.data);
+        nav_set_message(nav, "Error: Value too large to yank");
+        return CMD_ERROR;
+    }
+
+    int result = macos_copy_to_clipboard(buf.data, buf.size);
+    free(buf.data);
+
+    if(result != 0){
+        nav_set_message(nav, "Error: Could not copy to clipboard");
+        return CMD_ERROR;
+    }
+
+    #else
+    // Linux: try tmux first (works in SSH), then fall back to X11 tools
+    FILE* pipe = NULL;
+
+    // Try tmux clipboard (works without X11)
+    if(getenv("TMUX")){
+        pipe = popen("tmux load-buffer - 2>/dev/null", "w");
+    }
+
+    // Fall back to X11 clipboard tools
+    if(!pipe){
+        pipe = popen("xclip -selection clipboard 2>/dev/null", "w");
+    }
+    if(!pipe){
+        pipe = popen("xsel --clipboard --input 2>/dev/null", "w");
+    }
+
+    if(!pipe){
+        nav_set_message(nav, "Error: Could not open clipboard command (tried tmux, xclip, xsel)");
+        return CMD_ERROR;
+    }
+
+    int print_err = drjson_print_value_fp(nav->jctx, pipe, item->value, 0, 0);
+    int status = pclose(pipe);
+
+    if(print_err || status != 0){
+        nav_set_message(nav, "Error: Could not copy to clipboard");
+        return CMD_ERROR;
+    }
+    #endif
+
+    nav_set_message(nav, "Yanked to clipboard");
     return CMD_OK;
 }
 
@@ -2122,6 +2560,10 @@ static const StringView HELP_LINES[] = {
     SV("  Ctrl-K      Delete to end of line"),
     SV("  Ctrl-U      Delete entire line"),
     SV("  Ctrl-W      Delete word backward"),
+    SV(""),
+    SV("Clipboard:"),
+    SV("  y/Y         Yank (copy) current value to clipboard"),
+    SV("  :yank/:y    Same as y key"),
     SV(""),
     SV("Mouse:"),
     SV("  Click       Jump to item and toggle expand"),
@@ -3282,6 +3724,12 @@ main(int argc, const char* const* argv){
                 // Previous search match
                 nav_search_prev(&nav);
                 nav_center_cursor(&nav, globals.screenh);
+                break;
+
+            case 'y':
+            case 'Y':
+                // Yank (copy) current value to clipboard
+                cmd_yank(&nav, NULL, 0);
                 break;
 
             case LCLICK_DOWN:
