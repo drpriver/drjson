@@ -4,9 +4,9 @@
 #include <stdlib.h>
 #include <stddef.h>
 
-// History for text buffers
-typedef struct TextBufferHistory TextBufferHistory;
-struct TextBufferHistory {
+// History for line editors
+typedef struct LineEditorHistory LineEditorHistory;
+struct LineEditorHistory {
     char** entries;          // Array of history entries
     size_t count;            // Number of entries
     size_t capacity;         // Capacity of array
@@ -16,18 +16,18 @@ struct TextBufferHistory {
     _Bool browsing;          // True if currently browsing history
 };
 
-typedef struct TextBuffer TextBuffer;
-struct TextBuffer {
+typedef struct LineEditor LineEditor;
+struct LineEditor {
     char* data;
     size_t length;
     size_t capacity;
     size_t cursor_pos;       // Cursor position (0 to length)
-    TextBufferHistory* history; // Optional history
+    LineEditorHistory* history; // Optional history
 };
 
 static inline
 void
-textbuffer_history_init(TextBufferHistory* hist){
+le_history_init(LineEditorHistory* hist){
     hist->entries = NULL;
     hist->count = 0;
     hist->capacity = 0;
@@ -38,7 +38,7 @@ textbuffer_history_init(TextBufferHistory* hist){
 
 static inline
 void
-textbuffer_history_free(TextBufferHistory* hist){
+le_history_free(LineEditorHistory* hist){
     for(size_t i = 0; i < hist->count; i++){
         free(hist->entries[i]);
     }
@@ -50,7 +50,7 @@ textbuffer_history_free(TextBufferHistory* hist){
 
 static inline
 void
-textbuffer_history_add(TextBufferHistory* hist, const char* text, size_t length){
+le_history_add(LineEditorHistory* hist, const char* text, size_t length){
     if(length == 0) return; // Don't add empty entries
 
     // Don't add if it matches the most recent entry
@@ -80,179 +80,179 @@ textbuffer_history_add(TextBufferHistory* hist, const char* text, size_t length)
 
 static inline
 void
-textbuffer_init(TextBuffer* buf, size_t capacity){
-    buf->data = malloc(capacity);
-    buf->data[0] = '\0';
-    buf->length = 0;
-    buf->capacity = capacity;
-    buf->cursor_pos = 0;
-    buf->history = NULL;
+le_init(LineEditor* le, size_t capacity){
+    le->data = malloc(capacity);
+    le->data[0] = '\0';
+    le->length = 0;
+    le->capacity = capacity;
+    le->cursor_pos = 0;
+    le->history = NULL;
 }
 
 static inline
 void
-textbuffer_free(TextBuffer* buf){
-    free(buf->data);
-    buf->data = NULL;
-    buf->length = 0;
-    buf->capacity = 0;
-    buf->cursor_pos = 0;
+le_free(LineEditor* le){
+    free(le->data);
+    le->data = NULL;
+    le->length = 0;
+    le->capacity = 0;
+    le->cursor_pos = 0;
 }
 
 static inline
 void
-textbuffer_clear(TextBuffer* buf){
-    buf->length = 0;
-    buf->cursor_pos = 0;
-    if(buf->data) buf->data[0] = '\0';
+le_clear(LineEditor* le){
+    le->length = 0;
+    le->cursor_pos = 0;
+    if(le->data) le->data[0] = '\0';
 }
 
 static inline
 void
-textbuffer_append_char(TextBuffer* buf, char c){
-    if(buf->length + 1 < buf->capacity){
+le_append_char(LineEditor* le, char c){
+    if(le->length + 1 < le->capacity){
         // Insert character at cursor position
-        if(buf->cursor_pos < buf->length){
+        if(le->cursor_pos < le->length){
             // Shift characters to the right
-            memmove(buf->data + buf->cursor_pos + 1,
-                    buf->data + buf->cursor_pos,
-                    buf->length - buf->cursor_pos);
+            memmove(le->data + le->cursor_pos + 1,
+                    le->data + le->cursor_pos,
+                    le->length - le->cursor_pos);
         }
-        buf->data[buf->cursor_pos] = c;
-        buf->length++;
-        buf->cursor_pos++;
-        buf->data[buf->length] = '\0';
+        le->data[le->cursor_pos] = c;
+        le->length++;
+        le->cursor_pos++;
+        le->data[le->length] = '\0';
     }
 }
 
 static inline
 void
-textbuffer_backspace(TextBuffer* buf){
-    if(buf->cursor_pos > 0 && buf->length > 0){
+le_backspace(LineEditor* le){
+    if(le->cursor_pos > 0 && le->length > 0){
         // Shift characters to the left
-        memmove(buf->data + buf->cursor_pos - 1,
-                buf->data + buf->cursor_pos,
-                buf->length - buf->cursor_pos);
-        buf->length--;
-        buf->cursor_pos--;
-        buf->data[buf->length] = '\0';
+        memmove(le->data + le->cursor_pos - 1,
+                le->data + le->cursor_pos,
+                le->length - le->cursor_pos);
+        le->length--;
+        le->cursor_pos--;
+        le->data[le->length] = '\0';
     }
 }
 
 static inline
 void
-textbuffer_delete(TextBuffer* buf){
-    if(buf->cursor_pos < buf->length){
+le_delete(LineEditor* le){
+    if(le->cursor_pos < le->length){
         // Shift characters to the left
-        memmove(buf->data + buf->cursor_pos,
-                buf->data + buf->cursor_pos + 1,
-                buf->length - buf->cursor_pos - 1);
-        buf->length--;
-        buf->data[buf->length] = '\0';
+        memmove(le->data + le->cursor_pos,
+                le->data + le->cursor_pos + 1,
+                le->length - le->cursor_pos - 1);
+        le->length--;
+        le->data[le->length] = '\0';
     }
 }
 
 static inline
 void
-textbuffer_move_left(TextBuffer* buf){
-    if(buf->cursor_pos > 0){
-        buf->cursor_pos--;
+le_move_left(LineEditor* le){
+    if(le->cursor_pos > 0){
+        le->cursor_pos--;
     }
 }
 
 static inline
 void
-textbuffer_move_right(TextBuffer* buf){
-    if(buf->cursor_pos < buf->length){
-        buf->cursor_pos++;
+le_move_right(LineEditor* le){
+    if(le->cursor_pos < le->length){
+        le->cursor_pos++;
     }
 }
 
 static inline
 void
-textbuffer_move_home(TextBuffer* buf){
-    buf->cursor_pos = 0;
+le_move_home(LineEditor* le){
+    le->cursor_pos = 0;
 }
 
 static inline
 void
-textbuffer_move_end(TextBuffer* buf){
-    buf->cursor_pos = buf->length;
+le_move_end(LineEditor* le){
+    le->cursor_pos = le->length;
 }
 
 // Kill (delete) from cursor to end of line (Ctrl-K)
 static inline
 void
-textbuffer_kill_line(TextBuffer* buf){
-    if(buf->cursor_pos < buf->length){
-        buf->length = buf->cursor_pos;
-        buf->data[buf->length] = '\0';
+le_kill_line(LineEditor* le){
+    if(le->cursor_pos < le->length){
+        le->length = le->cursor_pos;
+        le->data[le->length] = '\0';
     }
 }
 
 // Kill (delete) entire line (Ctrl-U)
 static inline
 void
-textbuffer_kill_whole_line(TextBuffer* buf){
-    buf->length = 0;
-    buf->cursor_pos = 0;
-    if(buf->data) buf->data[0] = '\0';
+le_kill_whole_line(LineEditor* le){
+    le->length = 0;
+    le->cursor_pos = 0;
+    if(le->data) le->data[0] = '\0';
 }
 
 // Delete word backward (Ctrl-W)
 static inline
 void
-textbuffer_delete_word_backward(TextBuffer* buf){
-    if(buf->cursor_pos == 0) return;
+le_delete_word_backward(LineEditor* le){
+    if(le->cursor_pos == 0) return;
 
-    size_t orig_pos = buf->cursor_pos;
+    size_t orig_pos = le->cursor_pos;
 
     // Skip trailing whitespace
-    while(buf->cursor_pos > 0 && buf->data[buf->cursor_pos - 1] == ' '){
-        buf->cursor_pos--;
+    while(le->cursor_pos > 0 && le->data[le->cursor_pos - 1] == ' '){
+        le->cursor_pos--;
     }
 
     // Delete word characters
-    while(buf->cursor_pos > 0 && buf->data[buf->cursor_pos - 1] != ' '){
-        buf->cursor_pos--;
+    while(le->cursor_pos > 0 && le->data[le->cursor_pos - 1] != ' '){
+        le->cursor_pos--;
     }
 
     // Shift remaining text left
-    if(buf->cursor_pos < orig_pos){
-        size_t delete_len = orig_pos - buf->cursor_pos;
-        memmove(buf->data + buf->cursor_pos,
-                buf->data + orig_pos,
-                buf->length - orig_pos);
-        buf->length -= delete_len;
-        buf->data[buf->length] = '\0';
+    if(le->cursor_pos < orig_pos){
+        size_t delete_len = orig_pos - le->cursor_pos;
+        memmove(le->data + le->cursor_pos,
+                le->data + orig_pos,
+                le->length - orig_pos);
+        le->length -= delete_len;
+        le->data[le->length] = '\0';
     }
 }
 
 // Navigate to previous history entry (up arrow / Ctrl-P)
 static inline
 void
-textbuffer_history_prev(TextBuffer* buf){
-    if(!buf->history || buf->history->count == 0) return;
+le_history_prev(LineEditor* le){
+    if(!le->history || le->history->count == 0) return;
 
     // If not browsing yet, save current text and start from end of history
-    if(!buf->history->browsing){
-        buf->history->browsing = 1;
-        buf->history->browse_index = buf->history->count;
-        buf->history->saved_length = buf->length < 256 ? buf->length : 255;
-        memcpy(buf->history->saved_current, buf->data, buf->history->saved_length);
-        buf->history->saved_current[buf->history->saved_length] = '\0';
+    if(!le->history->browsing){
+        le->history->browsing = 1;
+        le->history->browse_index = le->history->count;
+        le->history->saved_length = le->length < 256 ? le->length : 255;
+        memcpy(le->history->saved_current, le->data, le->history->saved_length);
+        le->history->saved_current[le->history->saved_length] = '\0';
     }
 
     // Move to previous entry
-    if(buf->history->browse_index > 0){
-        buf->history->browse_index--;
-        const char* entry = buf->history->entries[buf->history->browse_index];
+    if(le->history->browse_index > 0){
+        le->history->browse_index--;
+        const char* entry = le->history->entries[le->history->browse_index];
         size_t entry_len = strlen(entry);
-        if(entry_len < buf->capacity){
-            memcpy(buf->data, entry, entry_len);
-            buf->data[entry_len] = '\0';
-            buf->length = entry_len;
-            buf->cursor_pos = entry_len; // Move cursor to end
+        if(entry_len < le->capacity){
+            memcpy(le->data, entry, entry_len);
+            le->data[entry_len] = '\0';
+            le->length = entry_len;
+            le->cursor_pos = entry_len; // Move cursor to end
         }
     }
 }
@@ -260,28 +260,28 @@ textbuffer_history_prev(TextBuffer* buf){
 // Navigate to next history entry (down arrow / Ctrl-N)
 static inline
 void
-textbuffer_history_next(TextBuffer* buf){
-    if(!buf->history || !buf->history->browsing) return;
+le_history_next(LineEditor* le){
+    if(!le->history || !le->history->browsing) return;
 
-    buf->history->browse_index++;
+    le->history->browse_index++;
 
     // If we've gone past the end, restore saved text and stop browsing
-    if(buf->history->browse_index >= buf->history->count){
-        buf->history->browsing = 0;
-        buf->history->browse_index = buf->history->count;
-        memcpy(buf->data, buf->history->saved_current, buf->history->saved_length);
-        buf->data[buf->history->saved_length] = '\0';
-        buf->length = buf->history->saved_length;
-        buf->cursor_pos = buf->length; // Move cursor to end
+    if(le->history->browse_index >= le->history->count){
+        le->history->browsing = 0;
+        le->history->browse_index = le->history->count;
+        memcpy(le->data, le->history->saved_current, le->history->saved_length);
+        le->data[le->history->saved_length] = '\0';
+        le->length = le->history->saved_length;
+        le->cursor_pos = le->length; // Move cursor to end
     }
     else {
-        const char* entry = buf->history->entries[buf->history->browse_index];
+        const char* entry = le->history->entries[le->history->browse_index];
         size_t entry_len = strlen(entry);
-        if(entry_len < buf->capacity){
-            memcpy(buf->data, entry, entry_len);
-            buf->data[entry_len] = '\0';
-            buf->length = entry_len;
-            buf->cursor_pos = entry_len; // Move cursor to end
+        if(entry_len < le->capacity){
+            memcpy(le->data, entry, entry_len);
+            le->data[entry_len] = '\0';
+            le->length = entry_len;
+            le->cursor_pos = entry_len; // Move cursor to end
         }
     }
 }
@@ -289,10 +289,10 @@ textbuffer_history_next(TextBuffer* buf){
 // Reset history browsing state
 static inline
 void
-textbuffer_history_reset(TextBuffer* buf){
-    if(!buf->history) return;
-    buf->history->browsing = 0;
-    buf->history->browse_index = buf->history->count;
+le_history_reset(LineEditor* le){
+    if(!le->history) return;
+    le->history->browsing = 0;
+    le->history->browse_index = le->history->count;
 }
 
 #endif

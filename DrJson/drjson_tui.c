@@ -82,7 +82,7 @@ LOG(const char* fmt, ...){
 
 static inline
 void
-textbuffer_render(Drt* drt, TextBuffer* buf){
+le_render(Drt* drt, LineEditor* buf){
     if(buf->length > 0)
         drt_puts(drt, buf->data, buf->length);
 }
@@ -141,8 +141,8 @@ struct JsonNav {
     _Bool show_help;          // Show help overlay
 
     // Search state
-    TextBuffer search_buffer;       // Current search query
-    TextBufferHistory search_history; // Search history
+    LineEditor search_buffer;       // Current search query
+    LineEditorHistory search_history; // Search history
     enum SearchMode search_mode;    // Current search mode
     size_t* search_matches;         // Array of indices of items that match
     size_t search_match_count;
@@ -460,8 +460,8 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
     if(nav_is_container(root)){
         expansion_add(&nav->expanded, nav_get_container_id(root));
     }
-    textbuffer_init(&nav->search_buffer, 256);
-    textbuffer_history_init(&nav->search_history);
+    le_init(&nav->search_buffer, 256);
+    le_history_init(&nav->search_history);
     nav->search_buffer.history = &nav->search_history;
     nav_rebuild(nav);
 }
@@ -472,8 +472,8 @@ nav_free(JsonNav* nav){
     free(nav->items);
     free(nav->search_matches);
     expansion_free(&nav->expanded);
-    textbuffer_free(&nav->search_buffer);
-    textbuffer_history_free(&nav->search_history);
+    le_free(&nav->search_buffer);
+    le_history_free(&nav->search_history);
     *nav = (JsonNav){0};
 }
 
@@ -1594,7 +1594,7 @@ nav_render_flat_array_row(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int ro
 
 static
 void
-nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, TextBuffer* count_buffer){
+nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_buffer){
     if(nav->needs_rebuild)
         nav_rebuild(nav);
 
@@ -1612,7 +1612,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, TextBuffer* count_b
     if(nav->search_mode == SEARCH_RECURSIVE){
         drt_puts(drt, " Recursive Search: ", 19);
         int start_x = 19;
-        textbuffer_render(drt, &nav->search_buffer);
+        le_render(drt, &nav->search_buffer);
         cursor_x = start_x + (int)nav->search_buffer.cursor_pos;
         cursor_y = 0;
         show_cursor = 1;
@@ -1620,7 +1620,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, TextBuffer* count_b
     else if(nav->search_mode == SEARCH_NORMAL){
         drt_puts(drt, " Search: ", 9);
         int start_x = 9;
-        textbuffer_render(drt, &nav->search_buffer);
+        le_render(drt, &nav->search_buffer);
         cursor_x = start_x + (int)nav->search_buffer.cursor_pos;
         cursor_y = 0;
         show_cursor = 1;
@@ -1639,7 +1639,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, TextBuffer* count_b
         drt_cursor(drt, &cx, &cy);
         drt_puts(drt, "— Count: ", 11);  // 11 bytes (em dash is 3 bytes)
         int start_x = cx + 9;  // 9 display characters (em dash displays as 1 char)
-        textbuffer_render(drt, count_buffer);
+        le_render(drt, count_buffer);
         // Count buffer is being edited, position cursor there
         cursor_x = start_x + (int)count_buffer->cursor_pos;
         cursor_y = 0;
@@ -2411,8 +2411,8 @@ main(int argc, const char* const* argv){
     nav_init(&nav, jctx, this);
 
     // Count buffer for vim-style numeric prefixes
-    TextBuffer count_buffer;
-    textbuffer_init(&count_buffer, 32);
+    LineEditor count_buffer;
+    le_init(&count_buffer, 32);
 
     for(;;){
         if(globals.needs_rescale){
@@ -2446,7 +2446,7 @@ main(int argc, const char* const* argv){
         // If help is showing, any key closes it
         if(nav.show_help){
             nav.show_help = 0;
-            textbuffer_clear(&count_buffer);
+            le_clear(&count_buffer);
             continue;
         }
 
@@ -2455,13 +2455,13 @@ main(int argc, const char* const* argv){
             if(c == ESC || c == CTRL_C){
                 // Cancel search
                 nav.search_mode = SEARCH_INACTIVE;
-                textbuffer_clear(&nav.search_buffer);
+                le_clear(&nav.search_buffer);
                 continue;
             }
             else if(c == ENTER || c == CTRL_J){
                 // Add to history before searching
-                textbuffer_history_add(&nav.search_history, nav.search_buffer.data, nav.search_buffer.length);
-                textbuffer_history_reset(&nav.search_buffer);
+                le_history_add(&nav.search_history, nav.search_buffer.data, nav.search_buffer.length);
+                le_history_reset(&nav.search_buffer);
 
                 // Perform search (recursive if in recursive mode)
                 _Bool recursive = (nav.search_mode == SEARCH_RECURSIVE);
@@ -2477,68 +2477,68 @@ main(int argc, const char* const* argv){
             }
             else if(c == UP || c == CTRL_P){
                 // Navigate to previous history entry
-                textbuffer_history_prev(&nav.search_buffer);
+                le_history_prev(&nav.search_buffer);
                 continue;
             }
             else if(c == DOWN || c == CTRL_N){
                 // Navigate to next history entry
-                textbuffer_history_next(&nav.search_buffer);
+                le_history_next(&nav.search_buffer);
                 continue;
             }
             else if(c == BACKSPACE || c == 127 || c == CTRL_H){
                 // Delete character before cursor
-                textbuffer_history_reset(&nav.search_buffer);
-                textbuffer_backspace(&nav.search_buffer);
+                le_history_reset(&nav.search_buffer);
+                le_backspace(&nav.search_buffer);
                 continue;
             }
             else if(c == DELETE || c == CTRL_D){
                 // Delete character at cursor
-                textbuffer_history_reset(&nav.search_buffer);
-                textbuffer_delete(&nav.search_buffer);
+                le_history_reset(&nav.search_buffer);
+                le_delete(&nav.search_buffer);
                 continue;
             }
             else if(c == LEFT || c == CTRL_B){
                 // Move cursor left
-                textbuffer_move_left(&nav.search_buffer);
+                le_move_left(&nav.search_buffer);
                 continue;
             }
             else if(c == RIGHT || c == CTRL_F){
                 // Move cursor right
-                textbuffer_move_right(&nav.search_buffer);
+                le_move_right(&nav.search_buffer);
                 continue;
             }
             else if(c == HOME || c == CTRL_A){
                 // Move cursor to beginning
-                textbuffer_move_home(&nav.search_buffer);
+                le_move_home(&nav.search_buffer);
                 continue;
             }
             else if(c == END || c == CTRL_E){
                 // Move cursor to end
-                textbuffer_move_end(&nav.search_buffer);
+                le_move_end(&nav.search_buffer);
                 continue;
             }
             else if(c == CTRL_K){
                 // Kill to end of line
-                textbuffer_history_reset(&nav.search_buffer);
-                textbuffer_kill_line(&nav.search_buffer);
+                le_history_reset(&nav.search_buffer);
+                le_kill_line(&nav.search_buffer);
                 continue;
             }
             else if(c == CTRL_U){
                 // Kill whole line
-                textbuffer_history_reset(&nav.search_buffer);
-                textbuffer_kill_whole_line(&nav.search_buffer);
+                le_history_reset(&nav.search_buffer);
+                le_kill_whole_line(&nav.search_buffer);
                 continue;
             }
             else if(c == CTRL_W){
                 // Delete word backward
-                textbuffer_history_reset(&nav.search_buffer);
-                textbuffer_delete_word_backward(&nav.search_buffer);
+                le_history_reset(&nav.search_buffer);
+                le_delete_word_backward(&nav.search_buffer);
                 continue;
             }
             else if(c >= 32 && c < 127){
                 // Add printable character
-                textbuffer_history_reset(&nav.search_buffer);
-                textbuffer_append_char(&nav.search_buffer, (char)c);
+                le_history_reset(&nav.search_buffer);
+                le_append_char(&nav.search_buffer, (char)c);
                 continue;
             }
             // Ignore other keys in search mode
@@ -2547,46 +2547,46 @@ main(int argc, const char* const* argv){
 
         // Handle digit input to build count
         if(c >= '0' && c <= '9'){
-            textbuffer_append_char(&count_buffer, (char)c);
+            le_append_char(&count_buffer, (char)c);
             continue;
         }
 
         // Handle text editing for count buffer (only when count buffer has content)
         if(count_buffer.length > 0){
             if(c == BACKSPACE || c == 127 || c == CTRL_H){
-                textbuffer_backspace(&count_buffer);
+                le_backspace(&count_buffer);
                 continue;
             }
             else if(c == DELETE || c == CTRL_D){
-                textbuffer_delete(&count_buffer);
+                le_delete(&count_buffer);
                 continue;
             }
             else if(c == LEFT || c == CTRL_B){
-                textbuffer_move_left(&count_buffer);
+                le_move_left(&count_buffer);
                 continue;
             }
             else if(c == RIGHT || c == CTRL_F){
-                textbuffer_move_right(&count_buffer);
+                le_move_right(&count_buffer);
                 continue;
             }
             else if(c == HOME || c == CTRL_A){
-                textbuffer_move_home(&count_buffer);
+                le_move_home(&count_buffer);
                 continue;
             }
             else if(c == END || c == CTRL_E){
-                textbuffer_move_end(&count_buffer);
+                le_move_end(&count_buffer);
                 continue;
             }
             else if(c == CTRL_K){
-                textbuffer_kill_line(&count_buffer);
+                le_kill_line(&count_buffer);
                 continue;
             }
             else if(c == CTRL_U){
-                textbuffer_kill_whole_line(&count_buffer);
+                le_kill_whole_line(&count_buffer);
                 continue;
             }
             else if(c == CTRL_W){
-                textbuffer_delete_word_backward(&count_buffer);
+                le_delete_word_backward(&count_buffer);
                 continue;
             }
         }
@@ -2620,7 +2620,7 @@ main(int argc, const char* const* argv){
                 }
             }
             // If not a recognized z command, ignore
-            textbuffer_clear(&count_buffer);
+            le_clear(&count_buffer);
             continue;
         }
 
@@ -2770,13 +2770,13 @@ main(int argc, const char* const* argv){
             case '/':
                 // Enter search mode
                 nav.search_mode = SEARCH_NORMAL;
-                textbuffer_clear(&nav.search_buffer);
+                le_clear(&nav.search_buffer);
                 break;
 
             case '*':
                 // Enter recursive search mode (same as / but will search recursively)
                 nav.search_mode = SEARCH_RECURSIVE;
-                textbuffer_clear(&nav.search_buffer);
+                le_clear(&nav.search_buffer);
                 break;
 
             case 'n':
@@ -2813,7 +2813,7 @@ main(int argc, const char* const* argv){
         }
 
         // Reset count accumulator after command
-        textbuffer_clear(&count_buffer);
+        le_clear(&count_buffer);
 
         if(globals.needs_rescale){
             TermSize sz = get_terminal_size();
@@ -2829,7 +2829,7 @@ main(int argc, const char* const* argv){
         }
     }
     finally:;
-    textbuffer_free(&count_buffer);
+    le_free(&count_buffer);
     nav_free(&nav);
     return 0;
 }
