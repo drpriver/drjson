@@ -32,6 +32,7 @@ typedef long long ssize_t;
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <dirent.h>
 #endif
 #include <stdio.h>
 #include <string.h>
@@ -140,6 +141,24 @@ struct JsonNav {
     _Bool needs_rebuild;      // Items array needs regeneration
     _Bool show_help;          // Show help overlay
     int help_page;            // Current help page (0-based)
+    _Bool command_mode;       // In command mode (:w, :save, etc.)
+
+    // Message display
+    char message[512];        // Message to display to user
+    _Bool has_message;        // Whether there's a message to show
+
+    // Command mode
+    LineEditor command_buffer;      // Command input buffer
+    int tab_count;                  // Number of consecutive tabs pressed
+    char saved_command[256];        // Original command before tab completion
+    size_t saved_command_len;       // Length of saved command
+
+    // Completion menu
+    _Bool in_completion_menu;       // Whether completion menu is showing
+    char completion_matches[64][256]; // Array of completion strings
+    int completion_count;           // Number of completions
+    int completion_selected;        // Currently selected completion index
+    int completion_scroll;          // Scroll offset for completion menu
 
     // Search state
     LineEditor search_buffer;       // Current search query
@@ -450,6 +469,13 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
         .needs_rebuild = 1,
         .show_help = 0,
         .help_page = 0,
+        .command_mode = 0,
+        .has_message = 0,
+        .tab_count = 0,
+        .in_completion_menu = 0,
+        .completion_count = 0,
+        .completion_selected = 0,
+        .completion_scroll = 0,
     };
     size_t expanded_count = jctx->arrays.count > jctx->objects.count? jctx->arrays.count : jctx->objects.count;
     expanded_count += 1;
@@ -465,6 +491,7 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
     le_init(&nav->search_buffer, 256);
     le_history_init(&nav->search_history);
     nav->search_buffer.history = &nav->search_history;
+    le_init(&nav->command_buffer, 512);
     nav_rebuild(nav);
 }
 
@@ -476,6 +503,7 @@ nav_free(JsonNav* nav){
     expansion_free(&nav->expanded);
     le_free(&nav->search_buffer);
     le_history_free(&nav->search_history);
+    le_free(&nav->command_buffer);
     *nav = (JsonNav){0};
 }
 
@@ -1198,6 +1226,424 @@ nav_get_current_value(const JsonNav* nav){
 }
 
 //------------------------------------------------------------
+// Message Display
+//------------------------------------------------------------
+
+// Set a message to display to the user
+static
+void
+nav_set_message(JsonNav* nav, const char* fmt, ...){
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(nav->message, sizeof(nav->message), fmt, args);
+    va_end(args);
+    nav->has_message = 1;
+}
+
+// Clear the current message
+static inline
+void
+nav_clear_message(JsonNav* nav){
+    nav->has_message = 0;
+}
+
+//------------------------------------------------------------
+// Command Mode
+//------------------------------------------------------------
+
+// Command handler function type
+// Returns: 0 = success, -1 = error, 1 = quit requested
+typedef int (*CommandHandler)(JsonNav* nav, const char* args, size_t args_len);
+
+typedef struct Command Command;
+struct Command {
+    StringView name;
+    StringView description;
+    CommandHandler handler;
+};
+
+// Command handlers
+static
+int
+cmd_write(JsonNav* nav, const char* args, size_t args_len){
+    // Skip leading whitespace
+    while(args_len > 0 && args[0] == ' '){
+        args++;
+        args_len--;
+    }
+    while(args_len > 0 && args[args_len - 1] == ' '){
+        args_len--;
+    }
+
+    if(args_len == 0){
+        nav_set_message(nav, "Error: No filename provided");
+        return -1;
+    }
+
+    // Copy filename to null-terminated buffer
+    char filepath[1024];
+    if(args_len >= sizeof(filepath)){
+        nav_set_message(nav, "Error: Filename too long");
+        return -1;
+    }
+    memcpy(filepath, args, args_len);
+    filepath[args_len] = '\0';
+
+    // Write JSON to file
+    FILE* fp = fopen(filepath, "wb");
+    if(!fp){
+        nav_set_message(nav, "Error: Could not open file '%s' for writing", filepath);
+        return -1;
+    }
+
+    int print_err = drjson_print_value_fp(nav->jctx, fp, nav->root, 0, DRJSON_PRETTY_PRINT);
+    int close_err = fclose(fp);
+
+    if(print_err || close_err){
+        nav_set_message(nav, "Error: Failed to write to '%s'", filepath);
+        return -1;
+    }
+
+    nav_set_message(nav, "Wrote to '%s'", filepath);
+    return 0;
+}
+
+static
+int
+cmd_quit(JsonNav* nav, const char* args, size_t args_len){
+    (void)nav;
+    (void)args;
+    (void)args_len;
+    return 1; // Signal quit
+}
+
+// Command table
+static const Command commands[] = {
+    {SV("w"),     SV("Save JSON to file"), cmd_write},
+    {SV("save"),  SV("Save JSON to file"), cmd_write},
+    {SV("q"),     SV("Quit"),              cmd_quit},
+    {SV("quit"),  SV("Quit"),              cmd_quit},
+    {SV("exit"),  SV("Quit"),              cmd_quit},
+};
+static const int command_count = sizeof(commands) / sizeof(commands[0]);
+
+// Tab completion for command mode
+// Opens completion menu with all matches
+// Returns: 0 = no completion, 1 = menu shown
+static
+int
+nav_complete_command(JsonNav* nav){
+    LineEditor* le = &nav->command_buffer;
+
+    // Save original command on first tab
+    if(!nav->in_completion_menu){
+        nav->saved_command_len = le->length < sizeof(nav->saved_command) ? le->length : sizeof(nav->saved_command) - 1;
+        memcpy(nav->saved_command, le->data, nav->saved_command_len);
+        nav->saved_command[nav->saved_command_len] = '\0';
+    }
+
+    // Use saved command for determining context
+    const char* source = nav->saved_command;
+    size_t source_len = nav->saved_command_len;
+
+    // Find where we are in the command
+    // If cursor is at start or only whitespace before cursor, complete command names
+    _Bool completing_command = 1;
+    for(size_t i = 0; i < source_len; i++){
+        if(source[i] == ' '){
+            completing_command = 0;
+            break;
+        }
+    }
+
+    nav->completion_count = 0;
+
+    if(completing_command){
+        // Complete command names using command table
+        // Find prefix
+        size_t prefix_len = source_len;
+        const char* prefix = source;
+
+        // Find matching commands
+        for(int i = 0; i < command_count && nav->completion_count < 64; i++){
+            size_t cmd_len = commands[i].name.length;
+            if(cmd_len >= prefix_len && memcmp(commands[i].name.text, prefix, prefix_len) == 0){
+                // Store the full command name
+                size_t copy_len = cmd_len < 255 ? cmd_len : 255;
+                memcpy(nav->completion_matches[nav->completion_count], commands[i].name.text, copy_len);
+                nav->completion_matches[nav->completion_count][copy_len] = '\0';
+                nav->completion_count++;
+            }
+        }
+
+        if(nav->completion_count == 0){
+            return 0; // No matches
+        }
+
+        // Show completion menu
+        nav->in_completion_menu = 1;
+        nav->completion_selected = 0;
+        nav->completion_scroll = 0;
+        return 1;
+    }
+    else {
+        // Complete file paths
+        // Use saved original command to extract the path prefix
+        const char* source = nav->saved_command;
+        size_t source_len = nav->saved_command_len;
+
+        // Extract the path part after the command
+        size_t path_start = 0;
+        for(size_t i = 0; i < source_len; i++){
+            if(source[i] == ' '){
+                path_start = i + 1;
+                break;
+            }
+        }
+
+        // Skip leading spaces in path
+        while(path_start < source_len && source[path_start] == ' '){
+            path_start++;
+        }
+
+        if(path_start >= source_len){
+            // No path typed yet, list current directory
+            path_start = source_len;
+        }
+
+        // Extract the path prefix from the original saved command
+        size_t path_len = source_len - path_start;
+        char path_prefix[1024];
+        if(path_len >= sizeof(path_prefix)) path_len = sizeof(path_prefix) - 1;
+        memcpy(path_prefix, source + path_start, path_len);
+        path_prefix[path_len] = '\0';
+
+        // Split into directory and filename parts
+        char dir_path[1024] = ".";
+        char file_prefix[256] = "";
+        size_t file_prefix_len = 0;
+
+        // Find last '/' to split directory and filename
+        for(size_t i = path_len; i > 0; i--){
+            if(path_prefix[i-1] == '/' || path_prefix[i-1] == '\\'){
+                // Copy directory part
+                size_t dir_len = i;
+                if(dir_len >= sizeof(dir_path)) dir_len = sizeof(dir_path) - 1;
+                memcpy(dir_path, path_prefix, dir_len);
+                dir_path[dir_len] = '\0';
+
+                // Copy filename prefix
+                file_prefix_len = path_len - i;
+                if(file_prefix_len >= sizeof(file_prefix)) file_prefix_len = sizeof(file_prefix) - 1;
+                memcpy(file_prefix, path_prefix + i, file_prefix_len);
+                file_prefix[file_prefix_len] = '\0';
+                break;
+            }
+        }
+
+        // If no '/' found, use current directory and full path as prefix
+        if(dir_path[0] != '.' || dir_path[1] != '\0'){
+            // We found a directory part
+        }
+        else {
+            // No directory separator found, use whole path as filename prefix
+            file_prefix_len = path_len;
+            if(file_prefix_len >= sizeof(file_prefix)) file_prefix_len = sizeof(file_prefix) - 1;
+            memcpy(file_prefix, path_prefix, file_prefix_len);
+            file_prefix[file_prefix_len] = '\0';
+        }
+
+        // List matching files
+        #ifndef _WIN32
+        DIR* d = opendir(dir_path);
+        if(!d) return 0;
+
+        // Collect matching entries into completion menu
+        struct dirent* entry;
+        while((entry = readdir(d)) != NULL && nav->completion_count < 64){
+            // Skip . and ..
+            if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
+                continue;
+            }
+
+            // Check if it matches the prefix
+            size_t entry_len = strlen(entry->d_name);
+            if(entry_len >= file_prefix_len &&
+               memcmp(entry->d_name, file_prefix, file_prefix_len) == 0){
+
+                // Build the full completed path for this match
+                char completed[256];
+                size_t completed_len = 0;
+
+                // Copy command part from saved original
+                for(size_t i = 0; i < path_start; i++){
+                    if(completed_len < sizeof(completed) - 1){
+                        completed[completed_len++] = source[i];
+                    }
+                }
+
+                // Copy directory part if present
+                if(dir_path[0] != '.' || dir_path[1] != '\0'){
+                    size_t dir_len = strlen(dir_path);
+                    for(size_t i = 0; i < dir_len && completed_len < sizeof(completed) - 1; i++){
+                        completed[completed_len++] = dir_path[i];
+                    }
+                }
+
+                // Copy matched filename
+                for(size_t i = 0; i < entry_len && completed_len < sizeof(completed) - 1; i++){
+                    completed[completed_len++] = entry->d_name[i];
+                }
+
+                completed[completed_len] = '\0';
+
+                // Store in completion matches
+                memcpy(nav->completion_matches[nav->completion_count], completed, completed_len + 1);
+                nav->completion_count++;
+            }
+        }
+        closedir(d);
+
+        if(nav->completion_count == 0){
+            return 0; // No matches
+        }
+
+        // Show completion menu
+        nav->in_completion_menu = 1;
+        nav->completion_selected = 0;
+        nav->completion_scroll = 0;
+        return 1;
+        #else
+        // Windows file completion - similar but with FindFirstFile
+        // For brevity, just return no completion on Windows for now
+        return 0;
+        #endif
+    }
+}
+
+// Accept the currently selected completion
+static
+void
+nav_accept_completion(JsonNav* nav){
+    if(!nav->in_completion_menu || nav->completion_count == 0){
+        return;
+    }
+
+    LineEditor* le = &nav->command_buffer;
+    const char* completion = nav->completion_matches[nav->completion_selected];
+    size_t completion_len = strlen(completion);
+
+    if(completion_len < le->capacity){
+        memcpy(le->data, completion, completion_len);
+        le->data[completion_len] = '\0';
+        le->length = completion_len;
+        le->cursor_pos = completion_len;
+    }
+
+    // Exit completion menu
+    nav->in_completion_menu = 0;
+}
+
+// Cancel the completion menu and restore original text
+static
+void
+nav_cancel_completion(JsonNav* nav){
+    if(!nav->in_completion_menu){
+        return;
+    }
+
+    LineEditor* le = &nav->command_buffer;
+    memcpy(le->data, nav->saved_command, nav->saved_command_len);
+    le->data[nav->saved_command_len] = '\0';
+    le->length = nav->saved_command_len;
+    le->cursor_pos = nav->saved_command_len;
+
+    nav->in_completion_menu = 0;
+}
+
+// Move selection in completion menu
+static
+void
+nav_completion_move(JsonNav* nav, int delta){
+    if(!nav->in_completion_menu || nav->completion_count == 0){
+        return;
+    }
+
+    nav->completion_selected += delta;
+
+    // Wrap around
+    if(nav->completion_selected < 0){
+        nav->completion_selected = nav->completion_count - 1;
+    }
+    else if(nav->completion_selected >= nav->completion_count){
+        nav->completion_selected = 0;
+    }
+
+    // Adjust scroll to keep selection visible
+    // Show up to 10 items at a time
+    int visible_items = 10;
+    if(nav->completion_selected < nav->completion_scroll){
+        nav->completion_scroll = nav->completion_selected;
+    }
+    else if(nav->completion_selected >= nav->completion_scroll + visible_items){
+        nav->completion_scroll = nav->completion_selected - visible_items + 1;
+    }
+}
+
+// Execute a command from command mode
+// Returns: 0 = success, -1 = error, 1 = quit requested
+static
+int
+nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
+    if(command_len == 0) return 0;
+
+    // Skip leading/trailing whitespace
+    while(command_len > 0 && command[0] == ' '){
+        command++;
+        command_len--;
+    }
+    while(command_len > 0 && command[command_len - 1] == ' '){
+        command_len--;
+    }
+    if(command_len == 0) return 0;
+
+    // Parse command and arguments
+    const char* arg_start = NULL;
+    size_t cmd_len = 0;
+    size_t arg_len = 0;
+
+    // Find first space to separate command from arguments
+    for(size_t i = 0; i < command_len; i++){
+        if(command[i] == ' '){
+            cmd_len = i;
+            // Skip spaces
+            while(i < command_len && command[i] == ' ') i++;
+            if(i < command_len){
+                arg_start = command + i;
+                arg_len = command_len - i;
+            }
+            break;
+        }
+    }
+    if(cmd_len == 0) cmd_len = command_len;
+
+    // Look up command in command table
+    for(int i = 0; i < command_count; i++){
+        size_t name_len = commands[i].name.length;
+        if(name_len == cmd_len && memcmp(commands[i].name.text, command, cmd_len) == 0){
+            // Found matching command, call handler
+            const char* args = arg_start ? arg_start : "";
+            size_t args_len = arg_start ? arg_len : 0;
+            return commands[i].handler(nav, args, args_len);
+        }
+    }
+
+    // Unknown command
+    nav_set_message(nav, "Unknown command: %.*s", (int)cmd_len, command);
+    return -1;
+}
+
+//------------------------------------------------------------
 // Rendering
 //------------------------------------------------------------
 
@@ -1543,6 +1989,35 @@ nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages
         SV("Mouse:"),
         SV("  Click       Jump to item and toggle expand"),
         SV("  Wheel       Scroll up/down"),
+        SV(""),
+        SV("Commands:"),
+        SV("  :           Enter command mode"),
+        SV("  :w <file>   Save JSON to file"),
+        SV("  :save <file> Save JSON to file"),
+        SV("  :q          Quit"),
+        SV("  :quit       Quit"),
+        SV("  :exit       Quit"),
+        SV(""),
+        SV("In Command Mode:"),
+        SV("  Tab         Show completion menu"),
+        SV("  Enter       Execute command"),
+        SV("  ESC/Ctrl-C  Cancel command"),
+        SV("  ←/→         Move cursor in command text"),
+        SV("  Backspace   Delete char before cursor"),
+        SV("  Delete      Delete char at cursor"),
+        SV("  Home/Ctrl-A Move to start"),
+        SV("  End/Ctrl-E  Move to end"),
+        SV("  Ctrl-K      Delete to end of line"),
+        SV("  Ctrl-U      Delete entire line"),
+        SV("  Ctrl-W      Delete word backward"),
+        SV(""),
+        SV("In Completion Menu:"),
+        SV("  ↑/Ctrl-P    Move selection up"),
+        SV("  ↓/Ctrl-N    Move selection down"),
+        SV("  Tab         Move to next completion"),
+        SV("  Enter       Accept selected completion"),
+        SV("  ESC/Ctrl-C  Cancel completion"),
+        SV("  Any key     Cancel and continue editing"),
         SV(""),
         SV("Other:"),
         SV("  q/Q         Quit"),
@@ -1939,11 +2414,63 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         drt_clear_to_end_of_row(drt);
     }
 
-    // Render breadcrumb (JSON path) at bottom
+    // Render completion menu if active (above command line)
+    if(nav->in_completion_menu && nav->completion_count > 0){
+        int visible_items = 10;
+        if(nav->completion_count < visible_items) visible_items = nav->completion_count;
+
+        // Render up to visible_items above the bottom line
+        for(int i = 0; i < visible_items; i++){
+            int match_idx = nav->completion_scroll + i;
+            if(match_idx >= nav->completion_count) break;
+
+            int y = screenh - 1 - visible_items + i;
+            if(y < 1) break; // Don't overwrite status line
+
+            drt_move(drt, 0, y);
+            drt_push_state(drt);
+
+            // Highlight selected item
+            if(match_idx == nav->completion_selected){
+                drt_bg_set_8bit_color(drt, 240); // lighter gray
+                drt_set_8bit_color(drt, 15);     // white text
+            }
+            else {
+                drt_bg_set_8bit_color(drt, 235); // dark gray
+                drt_set_8bit_color(drt, 250);    // light gray text
+            }
+
+            drt_putc(drt, ' ');
+            drt_puts(drt, nav->completion_matches[match_idx], strlen(nav->completion_matches[match_idx]));
+            drt_putc(drt, ' ');
+            drt_clear_to_end_of_row(drt);
+            drt_pop_state(drt);
+        }
+    }
+
+    // Render breadcrumb (JSON path) or command prompt at bottom
     drt_move(drt, 0, screenh - 1);
     drt_push_state(drt);
     drt_bg_set_8bit_color(drt, 235); // dark gray background
-    if(nav->item_count > 0){
+
+    if(nav->command_mode){
+        // Show command prompt
+        drt_putc(drt, ':');
+        int start_x = 1;
+        le_render(drt, &nav->command_buffer);
+        cursor_x = start_x + (int)nav->command_buffer.cursor_pos;
+        cursor_y = screenh - 1;
+        show_cursor = 1;
+    }
+    else if(nav->has_message){
+        // Show message to user
+        drt_putc(drt, ' ');
+        drt_set_8bit_color(drt, 226); // bright yellow text for visibility
+        drt_puts(drt, nav->message, strlen(nav->message));
+        drt_putc(drt, ' ');
+    }
+    else if(nav->item_count > 0){
+        // Show breadcrumb (JSON path)
         char path_buf[512];
         size_t path_len = nav_build_json_path(nav, path_buf, sizeof(path_buf));
         if(path_len > 0){
@@ -2740,6 +3267,82 @@ main(int argc, const char* const* argv){
             continue;
         }
 
+        // Handle command mode
+        if(nav.command_mode){
+            // Handle completion menu navigation
+            if(nav.in_completion_menu){
+                if(c == UP || c == CTRL_P){
+                    // Move selection up
+                    nav_completion_move(&nav, -1);
+                    continue;
+                }
+                else if(c == DOWN || c == CTRL_N){
+                    // Move selection down
+                    nav_completion_move(&nav, 1);
+                    continue;
+                }
+                else if(c == ENTER || c == CTRL_J){
+                    // Accept completion (don't execute command)
+                    nav_accept_completion(&nav);
+                    continue;
+                }
+                else if(c == ESC || c == CTRL_C){
+                    // Cancel completion menu
+                    nav_cancel_completion(&nav);
+                    continue;
+                }
+                else if(c == TAB){
+                    // Tab again cycles through in menu (already showing)
+                    nav_completion_move(&nav, 1);
+                    continue;
+                }
+                else {
+                    // Any other key cancels completion menu and continues with normal handling
+                    nav_cancel_completion(&nav);
+                    // Fall through to normal command mode handling
+                }
+            }
+
+            // Normal command mode handling
+            if(c == ESC || c == CTRL_C){
+                // Cancel command
+                nav.command_mode = 0;
+                nav.tab_count = 0;
+                le_clear(&nav.command_buffer);
+                continue;
+            }
+            else if(c == ENTER || c == CTRL_J){
+                // Execute command
+                int cmd_result = nav_execute_command(&nav, nav.command_buffer.data, nav.command_buffer.length);
+                nav.command_mode = 0;
+                nav.tab_count = 0;
+                le_clear(&nav.command_buffer);
+                if(cmd_result == 1){
+                    // Quit requested
+                    goto finally;
+                }
+                continue;
+            }
+            else if(c == TAB){
+                // Tab completion
+                nav_complete_command(&nav);
+                continue;
+            }
+            else if(le_handle_key(&nav.command_buffer, c, 0)){
+                // Common line editing keys handled
+                nav.tab_count = 0; // Reset tab completion
+                continue;
+            }
+            else if(c >= 32 && c < 127){
+                // Add printable character
+                nav.tab_count = 0; // Reset tab completion
+                le_append_char(&nav.command_buffer, (char)c);
+                continue;
+            }
+            // Ignore other keys in command mode
+            continue;
+        }
+
         // Handle digit input to build count
         if(c >= '0' && c <= '9'){
             le_append_char(&count_buffer, (char)c);
@@ -2782,6 +3385,11 @@ main(int argc, const char* const* argv){
             // If not a recognized z command, ignore
             le_clear(&count_buffer);
             continue;
+        }
+
+        // Clear any displayed message on user action
+        if(nav.has_message){
+            nav_clear_message(&nav);
         }
 
         // Handle input
@@ -2933,6 +3541,13 @@ main(int argc, const char* const* argv){
                 // Enter search mode
                 nav.search_mode = SEARCH_NORMAL;
                 le_clear(&nav.search_buffer);
+                break;
+
+            case ';':
+            case ':':
+                // Enter command mode
+                nav.command_mode = 1;
+                le_clear(&nav.command_buffer);
                 break;
 
             case '*':
