@@ -913,8 +913,8 @@ void
 nav_ensure_cursor_visible(JsonNav* nav, int viewport_height){
     if(nav->item_count == 0) return;
 
-    // Account for status line taking up one row
-    int visible_rows = viewport_height - 1;
+    // Account for status line at top and breadcrumb at bottom
+    int visible_rows = viewport_height - 2;
     if(visible_rows < 1) visible_rows = 1;
 
     // Cursor is above viewport
@@ -1167,8 +1167,8 @@ void
 nav_center_cursor(JsonNav* nav, int viewport_height){
     if(nav->item_count == 0) return;
 
-    // Account for status line taking up one row
-    int visible_rows = viewport_height - 1;
+    // Account for status line at top and breadcrumb at bottom
+    int visible_rows = viewport_height - 2;
     if(visible_rows < 1) visible_rows = 1;
 
     // Center cursor in viewport
@@ -1631,6 +1631,108 @@ nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages
     }
 }
 
+// Build JSON path to current cursor position
+// Returns number of characters written (not including null terminator)
+static
+size_t
+nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
+    if(nav->item_count == 0 || buf_size == 0) return 0;
+
+    NavItem* cursor_item = &nav->items[nav->cursor_pos];
+
+    // Collect path components by walking backwards to root
+    typedef struct PathComponent PathComponent;
+    struct PathComponent {
+        _Bool is_array_index;
+        int64_t index;
+        DrJsonAtom key;
+    };
+
+    PathComponent components[64]; // Support up to 64 levels deep
+    int component_count = 0;
+
+    // Start from cursor position and walk backwards to root
+    size_t current_pos = nav->cursor_pos;
+    int current_depth = cursor_item->depth;
+
+    // Add the cursor item itself
+    if(current_depth > 0 && component_count < 64){
+        if(cursor_item->has_key){
+            components[component_count].is_array_index = 0;
+            components[component_count].key = cursor_item->key;
+            component_count++;
+        }
+        else if(cursor_item->array_index >= 0){
+            components[component_count].is_array_index = 1;
+            components[component_count].index = cursor_item->array_index;
+            component_count++;
+        }
+    }
+
+    // Walk backwards to find all parent items
+    for(size_t i = current_pos; i > 0 && current_depth > 0; i--){
+        NavItem* item = &nav->items[i - 1];
+        if(item->depth < current_depth){
+            // Found a parent
+            if(item->depth > 0 && component_count < 64){
+                if(item->has_key){
+                    components[component_count].is_array_index = 0;
+                    components[component_count].key = item->key;
+                    component_count++;
+                }
+                else if(item->array_index >= 0){
+                    components[component_count].is_array_index = 1;
+                    components[component_count].index = item->array_index;
+                    component_count++;
+                }
+            }
+            current_depth = item->depth;
+        }
+    }
+
+    // Build the path string (components are in reverse order)
+    size_t written = 0;
+
+    // Start with root indicator
+    if(written + 1 < buf_size){
+        buf[written++] = '$';
+    }
+
+    // Add components in reverse order (from root to cursor)
+    for(int i = component_count - 1; i >= 0 && written < buf_size; i--){
+        if(components[i].is_array_index){
+            // Array index: [123]
+            char index_buf[32];
+            int len = snprintf(index_buf, sizeof(index_buf), "[%lld]", (long long)components[i].index);
+            if(len > 0 && written + (size_t)len < buf_size){
+                memcpy(buf + written, index_buf, len);
+                written += len;
+            }
+        }
+        else {
+            // Object key: .keyname
+            DrJsonValue key_val = drjson_atom_to_value(components[i].key);
+            const char* key_str = NULL;
+            size_t key_len = 0;
+            drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+            if(key_str && written + key_len + 1 < buf_size){
+                buf[written++] = '.';
+                memcpy(buf + written, key_str, key_len);
+                written += key_len;
+            }
+        }
+    }
+
+    if(written < buf_size){
+        buf[written] = '\0';
+    }
+    else if(buf_size > 0){
+        buf[buf_size - 1] = '\0';
+    }
+
+    return written;
+}
+
 // Render one row of an array of numbers (up to 10 items per row)
 static
 void
@@ -1746,7 +1848,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     drt_pop_state(drt);
 
     // Render visible items
-    size_t end_idx = nav->scroll_offset + (size_t)screenh - 1; // -1 for status line
+    size_t end_idx = nav->scroll_offset + (size_t)screenh - 2; // -1 for status line, -1 for breadcrumb
     if(end_idx > nav->item_count)
         end_idx = nav->item_count;
 
@@ -1831,11 +1933,28 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         }
     }
 
-    // Clear remaining lines
-    for(int y = 1 + (int)(end_idx - nav->scroll_offset); y < screenh; y++){
+    // Clear remaining lines (but not the bottom line - that's for breadcrumb)
+    for(int y = 1 + (int)(end_idx - nav->scroll_offset); y < screenh - 1; y++){
         drt_move(drt, 0, y);
         drt_clear_to_end_of_row(drt);
     }
+
+    // Render breadcrumb (JSON path) at bottom
+    drt_move(drt, 0, screenh - 1);
+    drt_push_state(drt);
+    drt_bg_set_8bit_color(drt, 235); // dark gray background
+    if(nav->item_count > 0){
+        char path_buf[512];
+        size_t path_len = nav_build_json_path(nav, path_buf, sizeof(path_buf));
+        if(path_len > 0){
+            drt_putc(drt, ' ');
+            drt_set_8bit_color(drt, 250); // light gray text
+            drt_puts(drt, path_buf, path_len);
+            drt_putc(drt, ' ');
+        }
+    }
+    drt_clear_to_end_of_row(drt);
+    drt_pop_state(drt);
 
     // Position cursor and show/hide based on whether we're editing
     if(show_cursor && cursor_x >= 0 && cursor_y >= 0){
@@ -2652,7 +2771,7 @@ main(int argc, const char* const* argv){
                 }
                 else if(c2 == 'b'){
                     // zb - cursor to bottom of screen
-                    int visible_rows = globals.screenh - 1;
+                    int visible_rows = globals.screenh - 2;  // Account for status and breadcrumb
                     if(visible_rows < 1) visible_rows = 1;
                     if(nav.cursor_pos >= (size_t)(visible_rows - 1)){
                         nav.scroll_offset = nav.cursor_pos - (size_t)(visible_rows - 1);
