@@ -3893,6 +3893,7 @@ main(int argc, const char* const* argv){
                     nav_ensure_cursor_visible(&nav, globals.screenh);
                 }
                 else if(nav.item_count > 0){
+                    editing_inline:;
                     NavItem* item = &nav.items[nav.cursor_pos];
                     // Enter edit mode for any value
                     nav.edit_mode = 1;
@@ -3951,9 +3952,19 @@ main(int argc, const char* const* argv){
                 nav_expand_recursive(&nav);
                 nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
+            case 'A':
+                if(nav.item_count > 0)
+                    goto editing_inline;
+                break;
+
+            case 'C':
+                if(nav.item_count > 0){
+                    nav.edit_mode = 1;
+                    le_clear(&nav.edit_buffer);
+                }
+                break;
 
             case 'c':
-            case 'C':
                 // Collapse current item recursively
                 nav_collapse_recursive(&nav);
                 break;
