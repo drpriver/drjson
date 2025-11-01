@@ -1450,6 +1450,132 @@ drjson_checked_query(const DrJsonContext* ctx, DrJsonValue v, int type, const ch
     return o;
 }
 
+
+DRJSON_API
+int
+drjson_path_add_key(DrJsonPath* path, DrJsonAtom key){
+    if(path->count >= DRJSON_PATH_MAX_DEPTH) return 1;
+    path->segments[path->count++] = (DrJsonPathSegment){ .kind = DRJSON_PATH_KEY, .key = key };
+    return 0;
+}
+
+DRJSON_API
+int
+drjson_path_add_index(DrJsonPath* path, int64_t index){
+    if(path->count >= DRJSON_PATH_MAX_DEPTH) return 1;
+    path->segments[path->count++] = (DrJsonPathSegment){ .kind = DRJSON_PATH_INDEX, .index = index };
+    return 0;
+}
+
+DRJSON_API
+int
+drjson_path_parse(DrJsonContext* ctx, const char* query, size_t length, DrJsonPath* path){
+    path->count = 0;
+    size_t begin = 0;
+    size_t i = 0;
+
+    if(i == length) return 1; // Empty path
+
+Ldispatch:
+    for(;i < length; i++){
+        char c = query[i];
+        switch(c){
+            case '.':
+                i++;
+            LHack:
+                begin = i;
+                if(i == length) return 1; // Empty query after a '.'
+                switch(query[i]){
+                    case '\"':
+                        i++;
+                        begin = i;
+                        goto Lquoted_getitem;
+                    default:
+                        goto Lgetitem;
+                }
+            case '[':
+                i++;
+                begin = i;
+                goto Lsubscript;
+            default:
+                if(i == 0)
+                    goto LHack;
+                return 1; // Queries must continue with '.', '['
+        }
+    }
+    goto Ldone;
+
+Lgetitem:
+    for(;i!=length;i++){
+        switch(query[i]){
+            case '.':
+            case '[':
+                goto Ldo_getitem;
+            default:
+                continue;
+        }
+    }
+    // fall-through
+Ldo_getitem:
+    if(i == begin) return 1; // 0 length query after '.'
+    {
+        DrJsonAtom atom;
+        int err = drjson_atomize(ctx, query + begin, i - begin, &atom);
+        if(err) return 1;
+        err = drjson_path_add_key(path, atom);
+        if(err) return 1;
+    }
+    goto Ldispatch;
+
+Lsubscript:
+    for(;i!=length;i++){
+        switch(query[i]){
+            case ']':
+                goto Ldo_subscript;
+            default:
+                continue;
+        }
+    }
+    return 1; // No ']' found to close a subscript
+
+Ldo_subscript:
+    {
+        Int64Result pr = parse_int64(query+begin, i-begin);
+        if(pr.errored){
+            return 1;
+        }
+        int err = drjson_path_add_index(path, pr.result);
+        if(err) return 1;
+    }
+    i++;
+    goto Ldispatch;
+
+Lquoted_getitem:
+    for(;i!=length;i++){
+        if(query[i] == '\"'){
+            size_t nbackslash = 0;
+            for(size_t back = i-1; back != begin; back--){
+                if(query[back] != '\\') break;
+                nbackslash++;
+            }
+            if(nbackslash & 1) continue;
+            {
+                DrJsonAtom atom;
+                int err = drjson_atomize(ctx, query + begin, i - begin, &atom);
+                if(err) return 1;
+                err = drjson_path_add_key(path, atom);
+                if(err) return 1;
+            }
+            i++;
+            goto Ldispatch;
+        }
+    }
+    return 1; // Unterminated quoted query
+
+Ldone:
+    return 0;
+}
+
 DRJSON_API
 DrJsonValue
 drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t length){

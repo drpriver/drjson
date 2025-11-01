@@ -525,6 +525,44 @@ drjson_clear(const DrJsonContext* ctx, DrJsonValue v);
 
 //------------------------------------------------------------
 
+////////////////
+// DrJsonPath
+//
+
+enum {DRJSON_PATH_MAX_DEPTH=32};
+
+typedef enum DrJsonPathSegmentKind {
+    DRJSON_PATH_KEY,
+    DRJSON_PATH_INDEX,
+} DrJsonPathSegmentKind;
+
+typedef struct DrJsonPathSegment {
+    DrJsonPathSegmentKind kind;
+    union {
+        DrJsonAtom key;
+        int64_t index;
+    };
+} DrJsonPathSegment;
+
+typedef struct DrJsonPath {
+    DrJsonPathSegment segments[DRJSON_PATH_MAX_DEPTH];
+    size_t count;
+} DrJsonPath;
+
+DRJSON_API
+int // 0 on success
+drjson_path_add_key(DrJsonPath* path, DrJsonAtom key);
+
+DRJSON_API
+int // 0 on success
+drjson_path_add_index(DrJsonPath* path, int64_t index);
+
+DRJSON_API
+int // 0 on success
+drjson_path_parse(DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path);
+
+//------------------------------------------------------------
+
 //////////
 // Queries
 //

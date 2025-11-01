@@ -1307,7 +1307,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_query;
 
 static const Command commands[] = {
     {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
@@ -1325,6 +1325,7 @@ static const Command commands[] = {
     {SV("cd"),    SV(":cd <dir>"), SV("  Change directory"), cmd_cd},
     {SV("yank"),  SV(":yank"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
     {SV("y"),     SV(":y"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
+    {SV("query"), SV(":query <path>"), SV("  Navigate to path (e.g., foo.bar[0].baz)"), cmd_query},
 };
 
 static void build_command_helps(void);
@@ -1905,6 +1906,119 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
     return CMD_OK;
 }
 
+static
+int
+cmd_query(JsonNav* nav, const char* args, size_t args_len){
+    // Skip leading whitespace
+    while(args_len > 0 && args[0] == ' '){
+        args++;
+        args_len--;
+    }
+    while(args_len > 0 && args[args_len - 1] == ' '){
+        args_len--;
+    }
+
+    if(args_len == 0){
+        nav_set_message(nav, "Error: No query path provided");
+        return CMD_ERROR;
+    }
+
+    if(nav->item_count == 0){
+        nav_set_message(nav, "Error: No JSON loaded");
+        return CMD_ERROR;
+    }
+
+    // Parse the path into components
+    DrJsonPath path;
+    int parse_err = drjson_path_parse(nav->jctx, args, args_len, &path);
+    if(parse_err){
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Error: Invalid path syntax: %.*s", (int)args_len, args);
+        nav_set_message(nav, msg);
+        return CMD_ERROR;
+    }
+
+    // Get current value as starting point
+    DrJsonValue current = nav->items[nav->cursor_pos].value;
+
+    // Navigate through the path using the JSON API (not the visible items)
+    // This allows us to navigate through collapsed containers
+    for(size_t seg_idx = 0; seg_idx < path.count; seg_idx++){
+        DrJsonPathSegment* seg = &path.segments[seg_idx];
+
+        if(seg->kind == DRJSON_PATH_KEY){
+            // Navigate by key (object member)
+            if(current.kind != DRJSON_OBJECT){
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Error: Cannot index non-object with key at segment %zu", seg_idx);
+                nav_set_message(nav, msg);
+                return CMD_ERROR;
+            }
+
+            DrJsonValue next = drjson_object_get_item_atom(nav->jctx, current, seg->key);
+            if(next.kind == DRJSON_ERROR){
+                const char* key_str;
+                size_t key_len;
+                drjson_get_atom_str_and_length(nav->jctx, seg->key, &key_str, &key_len);
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Error: Key '%.*s' not found", (int)key_len, key_str);
+                nav_set_message(nav, msg);
+                return CMD_ERROR;
+            }
+
+            // Expand the current container if needed
+            if(nav_is_container(current)){
+                expansion_add(&nav->expanded, nav_get_container_id(current));
+            }
+
+            current = next;
+        }
+        else if(seg->kind == DRJSON_PATH_INDEX){
+            // Navigate by index (array element)
+            if(current.kind != DRJSON_ARRAY){
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Error: Cannot index non-array with [%lld] at segment %zu", (long long)seg->index, seg_idx);
+                nav_set_message(nav, msg);
+                return CMD_ERROR;
+            }
+
+            DrJsonValue next = drjson_get_by_index(nav->jctx, current, seg->index);
+            if(next.kind == DRJSON_ERROR){
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Error: Index [%lld] out of bounds", (long long)seg->index);
+                nav_set_message(nav, msg);
+                return CMD_ERROR;
+            }
+
+            // Expand the current container if needed
+            if(nav_is_container(current)){
+                expansion_add(&nav->expanded, nav_get_container_id(current));
+            }
+
+            current = next;
+        }
+    }
+
+    // Rebuild the items array to show newly expanded containers
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+
+    // Now find the target value in the rebuilt items array
+    for(size_t i = 0; i < nav->item_count; i++){
+        if(drjson_eq(nav->items[i].value, current)){
+            nav->cursor_pos = i;
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Navigated to: %.*s", (int)args_len, args);
+            nav_set_message(nav, msg);
+            return CMD_OK;
+        }
+    }
+
+    // This shouldn't happen, but handle it just in case
+    nav_set_message(nav, "Error: Found value but couldn't locate it in view");
+    return CMD_ERROR;
+}
+
 // Tab completion for command mode
 // Opens completion menu with all matches
 // Returns: 0 = no completion, 1 = menu shown
@@ -1962,6 +2076,15 @@ nav_complete_command(JsonNav* nav){
         nav->in_completion_menu = 1;
         nav->completion_selected = 0;
         nav->completion_scroll = 0;
+
+        // Update buffer with first completion
+        const char* first = nav->completion_matches[0];
+        size_t first_len = strlen(first);
+        le->length = first_len < le->capacity ? first_len : le->capacity - 1;
+        memcpy(le->data, first, le->length);
+        le->data[le->length] = '\0';
+        le->cursor_pos = le->length;
+
         return 1;
     }
     else {
@@ -2090,6 +2213,15 @@ nav_complete_command(JsonNav* nav){
         nav->in_completion_menu = 1;
         nav->completion_selected = 0;
         nav->completion_scroll = 0;
+
+        // Update buffer with first completion
+        const char* first = nav->completion_matches[0];
+        size_t first_len = strlen(first);
+        le->length = first_len < le->capacity ? first_len : le->capacity - 1;
+        memcpy(le->data, first, le->length);
+        le->data[le->length] = '\0';
+        le->cursor_pos = le->length;
+
         return 1;
         #else
         // Windows file completion - similar but with FindFirstFile
@@ -2119,6 +2251,13 @@ nav_accept_completion(JsonNav* nav){
     }
 
     // Exit completion menu
+    nav->in_completion_menu = 0;
+}
+
+// Exit the completion menu without changing the buffer
+static
+void
+nav_exit_completion(JsonNav* nav){
     nav->in_completion_menu = 0;
 }
 
@@ -2156,6 +2295,16 @@ nav_completion_move(JsonNav* nav, int delta){
     else if(nav->completion_selected >= nav->completion_count){
         nav->completion_selected = 0;
     }
+
+    // Update the line editor buffer with the selected completion
+    const char* selected = nav->completion_matches[nav->completion_selected];
+    size_t selected_len = strlen(selected);
+
+    LineEditor* le = &nav->command_buffer;
+    le->length = selected_len < le->capacity ? selected_len : le->capacity - 1;
+    memcpy(le->data, selected, le->length);
+    le->data[le->length] = '\0';
+    le->cursor_pos = le->length;
 
     // Adjust scroll to keep selection visible
     // Show up to 10 items at a time
@@ -3456,8 +3605,8 @@ main(int argc, const char* const* argv){
                     continue;
                 }
                 else {
-                    // Any other key cancels completion menu and continues with normal handling
-                    nav_cancel_completion(&nav);
+                    // Any other key exits completion menu and continues with normal handling
+                    nav_exit_completion(&nav);
                     // Fall through to normal command mode handling
                 }
             }
