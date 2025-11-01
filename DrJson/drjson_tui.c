@@ -139,7 +139,9 @@ struct JsonNav {
 
     // State flags
     _Bool needs_rebuild;      // Items array needs regeneration
-    _Bool show_help;          // Show help overlay
+    _Bool show_help;
+    const StringView* help_lines;
+    size_t help_lines_count;
     int help_page;            // Current help page (0-based)
     _Bool command_mode;       // In command mode (:w, :save, etc.)
 
@@ -460,22 +462,7 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
     *nav = (JsonNav){
         .jctx = jctx,
         .root = root,
-        .items = NULL,
-        .item_count = 0,
-        .item_capacity = 0,
-        .expanded = {0},
-        .cursor_pos = 0,
-        .scroll_offset = 0,
         .needs_rebuild = 1,
-        .show_help = 0,
-        .help_page = 0,
-        .command_mode = 0,
-        .has_message = 0,
-        .tab_count = 0,
-        .in_completion_menu = 0,
-        .completion_count = 0,
-        .completion_selected = 0,
-        .completion_scroll = 0,
     };
     size_t expanded_count = jctx->arrays.count > jctx->objects.count? jctx->arrays.count : jctx->objects.count;
     expanded_count += 1;
@@ -1253,13 +1240,35 @@ nav_clear_message(JsonNav* nav){
 
 // Command handler function type
 // Returns: 0 = success, -1 = error, 1 = quit requested
-typedef int (*CommandHandler)(JsonNav* nav, const char* args, size_t args_len);
+typedef int (CommandHandler)(JsonNav* nav, const char* args, size_t args_len);
 
 typedef struct Command Command;
 struct Command {
     StringView name;
-    StringView description;
-    CommandHandler handler;
+    StringView help_name;
+    StringView short_help;
+    CommandHandler* handler;
+};
+static CommandHandler cmd_help, cmd_write, cmd_quit;
+
+static const Command commands[] = {
+    {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
+    {SV("h"),     SV(":h"), SV("  Show help"),         cmd_help},
+    {SV("save"),  SV(":save <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("w"),     SV(":w <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("quit"),  SV(":quit"), SV("  Quit"),              cmd_quit},
+    {SV("q"),     SV(":q"), SV("  Quit"),              cmd_quit},
+    {SV("exit"),  SV(":exit"), SV("  Quit"),              cmd_quit},
+};
+
+static void build_command_helps(void);
+static const StringView* cmd_helps;
+static size_t cmd_helps_count;
+
+enum {
+    CMD_ERROR = -1,
+    CMD_OK = 0,
+    CMD_QUIT = 1,
 };
 
 // Command handlers
@@ -1277,14 +1286,14 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
 
     if(args_len == 0){
         nav_set_message(nav, "Error: No filename provided");
-        return -1;
+        return CMD_ERROR;
     }
 
     // Copy filename to null-terminated buffer
     char filepath[1024];
     if(args_len >= sizeof(filepath)){
         nav_set_message(nav, "Error: Filename too long");
-        return -1;
+        return CMD_ERROR;
     }
     memcpy(filepath, args, args_len);
     filepath[args_len] = '\0';
@@ -1293,7 +1302,7 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
     FILE* fp = fopen(filepath, "wb");
     if(!fp){
         nav_set_message(nav, "Error: Could not open file '%s' for writing", filepath);
-        return -1;
+        return CMD_ERROR;
     }
 
     int print_err = drjson_print_value_fp(nav->jctx, fp, nav->root, 0, DRJSON_PRETTY_PRINT);
@@ -1301,11 +1310,11 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
 
     if(print_err || close_err){
         nav_set_message(nav, "Error: Failed to write to '%s'", filepath);
-        return -1;
+        return CMD_ERROR;
     }
 
     nav_set_message(nav, "Wrote to '%s'", filepath);
-    return 0;
+    return CMD_OK;
 }
 
 static
@@ -1314,18 +1323,23 @@ cmd_quit(JsonNav* nav, const char* args, size_t args_len){
     (void)nav;
     (void)args;
     (void)args_len;
-    return 1; // Signal quit
+    return CMD_QUIT; // Signal quit
 }
 
-// Command table
-static const Command commands[] = {
-    {SV("w"),     SV("Save JSON to file"), cmd_write},
-    {SV("save"),  SV("Save JSON to file"), cmd_write},
-    {SV("q"),     SV("Quit"),              cmd_quit},
-    {SV("quit"),  SV("Quit"),              cmd_quit},
-    {SV("exit"),  SV("Quit"),              cmd_quit},
-};
-static const int command_count = sizeof(commands) / sizeof(commands[0]);
+static
+int
+cmd_help(JsonNav* nav, const char* args, size_t args_len){
+    (void)args;
+    (void)args_len;
+    build_command_helps();
+    if(cmd_helps){
+        nav->show_help = 1;
+        nav->help_lines = cmd_helps;
+        nav->help_lines_count = cmd_helps_count;
+        nav->help_page = 0;
+    }
+    return CMD_OK;
+}
 
 // Tab completion for command mode
 // Opens completion menu with all matches
@@ -1365,7 +1379,7 @@ nav_complete_command(JsonNav* nav){
         const char* prefix = source;
 
         // Find matching commands
-        for(int i = 0; i < command_count && nav->completion_count < 64; i++){
+        for(size_t i = 0; i < sizeof commands / sizeof commands[0] && nav->completion_count < 64; i++){
             size_t cmd_len = commands[i].name.length;
             if(cmd_len >= prefix_len && memcmp(commands[i].name.text, prefix, prefix_len) == 0){
                 // Store the full command name
@@ -1595,7 +1609,7 @@ nav_completion_move(JsonNav* nav, int delta){
 static
 int
 nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
-    if(command_len == 0) return 0;
+    if(command_len == 0) return CMD_OK;
 
     // Skip leading/trailing whitespace
     while(command_len > 0 && command[0] == ' '){
@@ -1605,7 +1619,7 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
     while(command_len > 0 && command[command_len - 1] == ' '){
         command_len--;
     }
-    if(command_len == 0) return 0;
+    if(command_len == 0) return CMD_OK;
 
     // Parse command and arguments
     const char* arg_start = NULL;
@@ -1628,7 +1642,7 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
     if(cmd_len == 0) cmd_len = command_len;
 
     // Look up command in command table
-    for(int i = 0; i < command_count; i++){
+    for(size_t i = 0; i < sizeof commands / sizeof commands[0]; i++){
         size_t name_len = commands[i].name.length;
         if(name_len == cmd_len && memcmp(commands[i].name.text, command, cmd_len) == 0){
             // Found matching command, call handler
@@ -1640,7 +1654,7 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
 
     // Unknown command
     nav_set_message(nav, "Unknown command: %.*s", (int)cmd_len, command);
-    return -1;
+    return CMD_ERROR;
 }
 
 //------------------------------------------------------------
@@ -1931,107 +1945,104 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
     }
 }
 
+static const StringView HELP_LINES[] = {
+    SV("DrJson TUI - Keyboard Commands"),
+    SV(""),
+    SV("Navigation:"),
+    SV("  j/↓/J       Move cursor down"),
+    SV("  k/↑/K       Move cursor up"),
+    SV("  h/←         Jump to parent (and collapse)"),
+    SV("  H           Jump to parent (keep expanded)"),
+    SV("  l/→/L       Enter container (expand if needed)"),
+    SV("  ]           Next sibling (skip children)"),
+    SV("  [           Previous sibling"),
+    SV("  -/_         Jump to parent (no collapse)"),
+    SV(""),
+    SV("Scrolling:"),
+    SV("  Ctrl-D      Scroll down half page"),
+    SV("  Ctrl-U      Scroll up half page"),
+    SV("  Ctrl-F/PgDn Scroll down full page"),
+    SV("  Ctrl-B/PgUp Scroll up full page"),
+    SV("  g/Home      Jump to top"),
+    SV("  G/End       Jump to bottom"),
+    SV(""),
+    SV("Viewport:"),
+    SV("  zz          Center cursor on screen"),
+    SV("  zt          Cursor to top of screen"),
+    SV("  zb          Cursor to bottom of screen"),
+    SV(""),
+    SV("Expand/Collapse:"),
+    SV("  Enter/Space Toggle expand/collapse"),
+    SV("  N+Enter     Jump to index N (e.g., 0↵, 15↵)"),
+    SV("  e/E         Expand recursively"),
+    SV("  c/C         Collapse recursively"),
+    SV(""),
+    SV("Search:"),
+    SV("  /           Start search (case-insensitive)"),
+    SV("  *           Start recursive search"),
+    SV("  n           Next match"),
+    SV("  N           Previous match"),
+    SV(""),
+    SV("In Search Mode:"),
+    SV("  Enter       Execute search"),
+    SV("  ESC/Ctrl-C  Cancel search"),
+    SV("  ↑/Ctrl-P    Previous search (history)"),
+    SV("  ↓/Ctrl-N    Next search (history)"),
+    SV("  ←/→         Move cursor in search text"),
+    SV("  Backspace   Delete char before cursor"),
+    SV("  Delete      Delete char at cursor"),
+    SV("  Home/Ctrl-A Move to start"),
+    SV("  End/Ctrl-E  Move to end"),
+    SV("  Ctrl-K      Delete to end of line"),
+    SV("  Ctrl-U      Delete entire line"),
+    SV("  Ctrl-W      Delete word backward"),
+    SV(""),
+    SV("Mouse:"),
+    SV("  Click       Jump to item and toggle expand"),
+    SV("  Wheel       Scroll up/down"),
+    SV(""),
+    SV("Commands:"),
+    SV("  :           Enter command mode"),
+    SV("  :help       Show available commands"),
+    SV(""),
+    SV("In Command Mode:"),
+    SV("  Tab         Show completion menu"),
+    SV("  Enter       Execute command"),
+    SV("  ESC/Ctrl-C  Cancel command"),
+    SV("  ←/→         Move cursor in command text"),
+    SV("  Backspace   Delete char before cursor"),
+    SV("  Delete      Delete char at cursor"),
+    SV("  Home/Ctrl-A Move to start"),
+    SV("  End/Ctrl-E  Move to end"),
+    SV("  Ctrl-K      Delete to end of line"),
+    SV("  Ctrl-U      Delete entire line"),
+    SV("  Ctrl-W      Delete word backward"),
+    SV(""),
+    SV("In Completion Menu:"),
+    SV("  ↑/Ctrl-P    Move selection up"),
+    SV("  ↓/Ctrl-N    Move selection down"),
+    SV("  Tab         Move to next completion"),
+    SV("  Enter       Accept selected completion"),
+    SV("  ESC/Ctrl-C  Cancel completion"),
+    SV("  Any key     Cancel and continue editing"),
+    SV(""),
+    SV("Other:"),
+    SV("  q/Q         Quit"),
+    SV("  Ctrl-Z      Suspend (Unix only)"),
+    SV("  ?           Toggle this help"),
+    SV(""),
+    SV("Help Navigation:"),
+    SV("  n/→         Next page"),
+    SV("  p/←         Previous page"),
+    SV("  Any other   Close help"),
+};
+
+// Shared help rendering function
+// Takes an array of StringView lines and renders them with pagination
 static
 void
-nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages){
-    StringView help_lines[] = {
-        SV("DrJson TUI - Keyboard Commands"),
-        SV(""),
-        SV("Navigation:"),
-        SV("  j/↓/J       Move cursor down"),
-        SV("  k/↑/K       Move cursor up"),
-        SV("  h/←         Jump to parent (and collapse)"),
-        SV("  H           Jump to parent (keep expanded)"),
-        SV("  l/→/L       Enter container (expand if needed)"),
-        SV("  ]           Next sibling (skip children)"),
-        SV("  [           Previous sibling"),
-        SV("  -/_         Jump to parent (no collapse)"),
-        SV(""),
-        SV("Scrolling:"),
-        SV("  Ctrl-D      Scroll down half page"),
-        SV("  Ctrl-U      Scroll up half page"),
-        SV("  Ctrl-F/PgDn Scroll down full page"),
-        SV("  Ctrl-B/PgUp Scroll up full page"),
-        SV("  g/Home      Jump to top"),
-        SV("  G/End       Jump to bottom"),
-        SV(""),
-        SV("Viewport:"),
-        SV("  zz          Center cursor on screen"),
-        SV("  zt          Cursor to top of screen"),
-        SV("  zb          Cursor to bottom of screen"),
-        SV(""),
-        SV("Expand/Collapse:"),
-        SV("  Enter/Space Toggle expand/collapse"),
-        SV("  N+Enter     Jump to index N (e.g., 0↵, 15↵)"),
-        SV("  e/E         Expand recursively"),
-        SV("  c/C         Collapse recursively"),
-        SV(""),
-        SV("Search:"),
-        SV("  /           Start search (case-insensitive)"),
-        SV("  *           Start recursive search"),
-        SV("  n           Next match"),
-        SV("  N           Previous match"),
-        SV(""),
-        SV("In Search Mode:"),
-        SV("  Enter       Execute search"),
-        SV("  ESC/Ctrl-C  Cancel search"),
-        SV("  ↑/Ctrl-P    Previous search (history)"),
-        SV("  ↓/Ctrl-N    Next search (history)"),
-        SV("  ←/→         Move cursor in search text"),
-        SV("  Backspace   Delete char before cursor"),
-        SV("  Delete      Delete char at cursor"),
-        SV("  Home/Ctrl-A Move to start"),
-        SV("  End/Ctrl-E  Move to end"),
-        SV("  Ctrl-K      Delete to end of line"),
-        SV("  Ctrl-U      Delete entire line"),
-        SV("  Ctrl-W      Delete word backward"),
-        SV(""),
-        SV("Mouse:"),
-        SV("  Click       Jump to item and toggle expand"),
-        SV("  Wheel       Scroll up/down"),
-        SV(""),
-        SV("Commands:"),
-        SV("  :           Enter command mode"),
-        SV("  :w <file>   Save JSON to file"),
-        SV("  :save <file> Save JSON to file"),
-        SV("  :q          Quit"),
-        SV("  :quit       Quit"),
-        SV("  :exit       Quit"),
-        SV(""),
-        SV("In Command Mode:"),
-        SV("  Tab         Show completion menu"),
-        SV("  Enter       Execute command"),
-        SV("  ESC/Ctrl-C  Cancel command"),
-        SV("  ←/→         Move cursor in command text"),
-        SV("  Backspace   Delete char before cursor"),
-        SV("  Delete      Delete char at cursor"),
-        SV("  Home/Ctrl-A Move to start"),
-        SV("  End/Ctrl-E  Move to end"),
-        SV("  Ctrl-K      Delete to end of line"),
-        SV("  Ctrl-U      Delete entire line"),
-        SV("  Ctrl-W      Delete word backward"),
-        SV(""),
-        SV("In Completion Menu:"),
-        SV("  ↑/Ctrl-P    Move selection up"),
-        SV("  ↓/Ctrl-N    Move selection down"),
-        SV("  Tab         Move to next completion"),
-        SV("  Enter       Accept selected completion"),
-        SV("  ESC/Ctrl-C  Cancel completion"),
-        SV("  Any key     Cancel and continue editing"),
-        SV(""),
-        SV("Other:"),
-        SV("  q/Q         Quit"),
-        SV("  Ctrl-Z      Suspend (Unix only)"),
-        SV("  ?           Toggle this help"),
-        SV(""),
-        SV("Help Navigation:"),
-        SV("  n/→         Next page"),
-        SV("  p/←         Previous page"),
-        SV("  Any other   Close help"),
-    };
-
-    int total_lines = sizeof help_lines / sizeof help_lines[0];
-
+nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages,
+                        const StringView* help_lines, int total_lines){
     // Calculate lines available for content (leave room for borders and page indicator)
     int max_content_height = screenh - 6;  // Top border, bottom border, page indicator, margins
     if(max_content_height < 10) max_content_height = 10;
@@ -2084,7 +2095,7 @@ nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages
         drt_bg_set_8bit_color(drt, 235);
 
         // Highlight headers
-        if(help_lines[line_idx].length && help_lines[line_idx].text[help_lines[line_idx].length-1] == ':'){
+        if(help_lines[line_idx].length && (help_lines[line_idx].text[help_lines[line_idx].length-1] == ':' || help_lines[line_idx].text[0] == ':')){
             drt_set_8bit_color(drt, 11); // bright yellow
             drt_set_style(drt, DRT_STYLE_BOLD);
         } else {
@@ -2104,6 +2115,38 @@ nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages
         drt_printf(drt, "Page %d/%d", page + 1, num_pages);
         drt_pop_state(drt);
     }
+}
+
+static
+void
+build_command_helps(void){
+    if(cmd_helps) return;
+    size_t command_count = sizeof commands / sizeof commands[0];
+    size_t count = command_count;
+    for(size_t i = 0; i < command_count - 1; i++){
+        if(commands[i].handler != commands[i+1].handler){
+            count+=2;
+        }
+    }
+    count += 2;
+    count++;
+    StringView* helps = calloc(count, sizeof *helps);
+    if(!helps) return;
+    size_t j = 0;
+    helps[j++] = SV("Commands");
+    helps[j++] = SV("");
+    for(size_t i = 0; i < command_count; i++){
+        helps[j++] = commands[i].help_name;
+        if(i + 1 < command_count && commands[i].handler != commands[i+1].handler){
+            helps[j++] = commands[i].short_help;
+            helps[j++] = SV("");
+        }
+    }
+    helps[j++] = commands[command_count-1].short_help;
+    if(j != count) __builtin_debugtrap();
+    cmd_helps = helps;
+    cmd_helps_count = count;
+    if(0)LOG("command_count: %zu\n", command_count);
 }
 
 // Build JSON path to current cursor position
@@ -3172,7 +3215,7 @@ main(int argc, const char* const* argv){
 
         // Render help overlay if active
         if(nav.show_help){
-            nav_render_help(&globals.drt, globals.screenw, globals.screenh, nav.help_page, NULL);
+            nav_render_help(&globals.drt, globals.screenw, globals.screenh, nav.help_page, NULL, nav.help_lines, nav.help_lines_count);
         }
 
         drt_paint(&globals.drt);
@@ -3185,7 +3228,7 @@ main(int argc, const char* const* argv){
         // If help is showing, handle help navigation
         if(nav.show_help){
             int num_pages = 0;
-            nav_render_help(&globals.drt, globals.screenw, globals.screenh, nav.help_page, &num_pages);
+            nav_render_help(&globals.drt, globals.screenw, globals.screenh, nav.help_page, &num_pages, nav.help_lines, nav.help_lines_count);
 
             // Clamp help_page in case window was resized
             if(nav.help_page >= num_pages){
@@ -3530,11 +3573,10 @@ main(int argc, const char* const* argv){
                 break;
 
             case '?':
-                // Toggle help
-                nav.show_help = !nav.show_help;
-                if(nav.show_help){
-                    nav.help_page = 0;  // Start at first page
-                }
+                nav.show_help = 1;
+                nav.help_lines = HELP_LINES;
+                nav.help_lines_count = sizeof HELP_LINES / sizeof HELP_LINES[0];
+                nav.help_page = 0;  // Start at first page
                 break;
 
             case '/':
