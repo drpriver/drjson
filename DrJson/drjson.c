@@ -1504,6 +1504,50 @@ drjson_object_delete_item(DrJsonContext* ctx, DrJsonValue object, const char* ke
 }
 
 DRJSON_API
+int // 0 on success, 1 if key not found or error
+drjson_object_replace_key_atom(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom old_key, DrJsonAtom new_key){
+    if(o.kind != DRJSON_OBJECT) return 1;
+    DrJsonObject* object = &ctx->objects.data[o.object_idx];
+    if(object->read_only) return 1;
+    if(object->count == 0) return 1;
+    if(!object->capacity) return 1;
+
+    uint32_t capacity = object->capacity;
+    DrJsonHashIndex* idxes;
+    DrJsonObjectPair* pairs;
+    drj_get_obj_ptrs(object->object_items, capacity, &idxes, &pairs);
+
+    // Find the old key in the pairs array
+    uint32_t found_pair_idx = UINT32_MAX;
+    for(uint32_t i = 0; i < object->count; i++){
+        if(pairs[i].atom.bits == old_key.bits){
+            found_pair_idx = i;
+            break;
+        }
+    }
+
+    if(found_pair_idx == UINT32_MAX) return 1; // Key not found
+
+    // Replace the key in the pair
+    pairs[found_pair_idx].atom = new_key;
+
+    // Rebuild the hash table
+    drj_memset(idxes, 0xff, 2*capacity * sizeof *idxes);
+    for(uint32_t i = 0; i < object->count; i++){
+        const DrJsonObjectPair* p = &pairs[i];
+        uint32_t hash = drj_atom_get_hash(p->atom);
+        uint32_t idx = fast_reduce32(hash, 2*capacity);
+        while(idxes[idx].index != UINT32_MAX){
+            idx++;
+            if(idx >= 2*capacity) idx = 0;
+        }
+        idxes[idx].index = i;
+    }
+
+    return 0;
+}
+
+DRJSON_API
 DrJsonValue
 drjson_object_get_item_atom(const DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom){
     if(o.kind != DRJSON_OBJECT) return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "not an object");

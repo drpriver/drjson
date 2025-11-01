@@ -481,6 +481,10 @@ DRJSON_API
 int // 0 on success, 1 if key not found or error
 drjson_object_delete_item_atom(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom key);
 
+DRJSON_API
+int // 0 on success, 1 if key not found or error
+drjson_object_replace_key_atom(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom old_key, DrJsonAtom new_key);
+
 //------------------------------------------------------------
 
 ////////////

@@ -27,6 +27,7 @@ static TestFunc TestEscape;
 static TestFunc TestObject;
 static TestFunc TestPathParse;
 static TestFunc TestObjectDeletion;
+static TestFunc TestObjectReplaceKey;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSimpleParsing);
@@ -39,6 +40,7 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestObject);
     RegisterTest(TestPathParse);
     RegisterTest(TestObjectDeletion);
+    RegisterTest(TestObjectReplaceKey);
     return test_main(argc, argv, NULL);
 }
 
@@ -828,6 +830,155 @@ TestFunction(TestObjectDeletion){
             TestAssertEquals(val.kind, DRJSON_INTEGER);
             TestAssertEquals(val.integer, i * 100);
         }
+    }
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestObjectReplaceKey){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test 1: Basic key replacement
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        DrJsonAtom key_a, key_b, key_c, key_new;
+        int err;
+
+        err = drjson_atomize(ctx, "a", 1, &key_a);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "b", 1, &key_b);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "c", 1, &key_c);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "new_key", 7, &key_new);
+        TestAssertFalse(err);
+
+        err = drjson_object_set_item_atom(ctx, obj, key_a, drjson_make_int(1));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_atom(ctx, obj, key_b, drjson_make_int(2));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_atom(ctx, obj, key_c, drjson_make_int(3));
+        TestAssertFalse(err);
+
+        // Replace key "b" with "new_key"
+        err = drjson_object_replace_key_atom(ctx, obj, key_b, key_new);
+        TestAssertEquals(err, 0);
+
+        // Verify old key doesn't exist
+        DrJsonValue val_b = drjson_object_get_item_atom(ctx, obj, key_b);
+        TestAssertEquals(val_b.kind, DRJSON_ERROR);
+
+        // Verify new key exists with the correct value
+        DrJsonValue val_new = drjson_object_get_item_atom(ctx, obj, key_new);
+        TestAssertEquals(val_new.kind, DRJSON_INTEGER);
+        TestAssertEquals(val_new.integer, 2);
+
+        // Verify other keys still exist
+        DrJsonValue val_a = drjson_object_get_item_atom(ctx, obj, key_a);
+        TestAssertEquals(val_a.kind, DRJSON_INTEGER);
+        TestAssertEquals(val_a.integer, 1);
+
+        DrJsonValue val_c = drjson_object_get_item_atom(ctx, obj, key_c);
+        TestAssertEquals(val_c.kind, DRJSON_INTEGER);
+        TestAssertEquals(val_c.integer, 3);
+
+        // Verify insertion order is preserved
+        DrJsonValue keys = drjson_object_keys(obj);
+        int64_t keys_len = drjson_len(ctx, keys);
+        TestAssertEquals(keys_len, 3);
+
+        // Should be: a, new_key, c (b was replaced with new_key in middle position)
+        DrJsonValue key0 = drjson_get_by_index(ctx, keys, 0);
+        TestAssertEquals(key0.atom.bits, key_a.bits);
+
+        DrJsonValue key1 = drjson_get_by_index(ctx, keys, 1);
+        TestAssertEquals(key1.atom.bits, key_new.bits);
+
+        DrJsonValue key2 = drjson_get_by_index(ctx, keys, 2);
+        TestAssertEquals(key2.atom.bits, key_c.bits);
+    }
+
+    // Test 2: Replace first and last keys
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        DrJsonAtom key1, key2, key3, key_first, key_last;
+        int err;
+
+        err = drjson_atomize(ctx, "first", 5, &key1);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "middle", 6, &key2);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "last", 4, &key3);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "new_first", 9, &key_first);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "new_last", 8, &key_last);
+        TestAssertFalse(err);
+
+        err = drjson_object_set_item_atom(ctx, obj, key1, drjson_make_int(10));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_atom(ctx, obj, key2, drjson_make_int(20));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_atom(ctx, obj, key3, drjson_make_int(30));
+        TestAssertFalse(err);
+
+        // Replace first key
+        err = drjson_object_replace_key_atom(ctx, obj, key1, key_first);
+        TestAssertEquals(err, 0);
+
+        // Replace last key
+        err = drjson_object_replace_key_atom(ctx, obj, key3, key_last);
+        TestAssertEquals(err, 0);
+
+        // Verify order: new_first, middle, new_last
+        DrJsonValue keys = drjson_object_keys(obj);
+        DrJsonValue k0 = drjson_get_by_index(ctx, keys, 0);
+        TestAssertEquals(k0.atom.bits, key_first.bits);
+
+        DrJsonValue k1 = drjson_get_by_index(ctx, keys, 1);
+        TestAssertEquals(k1.atom.bits, key2.bits);
+
+        DrJsonValue k2 = drjson_get_by_index(ctx, keys, 2);
+        TestAssertEquals(k2.atom.bits, key_last.bits);
+
+        // Verify values are correct
+        DrJsonValue v0 = drjson_object_get_item_atom(ctx, obj, key_first);
+        TestAssertEquals(v0.integer, 10);
+
+        DrJsonValue v1 = drjson_object_get_item_atom(ctx, obj, key2);
+        TestAssertEquals(v1.integer, 20);
+
+        DrJsonValue v2 = drjson_object_get_item_atom(ctx, obj, key_last);
+        TestAssertEquals(v2.integer, 30);
+    }
+
+    // Test 3: Replace non-existent key should fail
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        DrJsonAtom key_exists, key_missing, key_new;
+        int err;
+
+        err = drjson_atomize(ctx, "exists", 6, &key_exists);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "missing", 7, &key_missing);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "new", 3, &key_new);
+        TestAssertFalse(err);
+
+        err = drjson_object_set_item_atom(ctx, obj, key_exists, drjson_make_int(42));
+        TestAssertFalse(err);
+
+        // Try to replace non-existent key
+        err = drjson_object_replace_key_atom(ctx, obj, key_missing, key_new);
+        TestAssertEquals(err, 1); // Should fail
+
+        // Original key should still exist
+        DrJsonValue val = drjson_object_get_item_atom(ctx, obj, key_exists);
+        TestAssertEquals(val.kind, DRJSON_INTEGER);
+        TestAssertEquals(val.integer, 42);
     }
 
     drjson_ctx_free_all(ctx);
