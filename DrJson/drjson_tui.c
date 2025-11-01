@@ -2485,54 +2485,8 @@ main(int argc, const char* const* argv){
                 le_history_next(&nav.search_buffer);
                 continue;
             }
-            else if(c == BACKSPACE || c == 127 || c == CTRL_H){
-                // Delete character before cursor
-                le_history_reset(&nav.search_buffer);
-                le_backspace(&nav.search_buffer);
-                continue;
-            }
-            else if(c == DELETE || c == CTRL_D){
-                // Delete character at cursor
-                le_history_reset(&nav.search_buffer);
-                le_delete(&nav.search_buffer);
-                continue;
-            }
-            else if(c == LEFT || c == CTRL_B){
-                // Move cursor left
-                le_move_left(&nav.search_buffer);
-                continue;
-            }
-            else if(c == RIGHT || c == CTRL_F){
-                // Move cursor right
-                le_move_right(&nav.search_buffer);
-                continue;
-            }
-            else if(c == HOME || c == CTRL_A){
-                // Move cursor to beginning
-                le_move_home(&nav.search_buffer);
-                continue;
-            }
-            else if(c == END || c == CTRL_E){
-                // Move cursor to end
-                le_move_end(&nav.search_buffer);
-                continue;
-            }
-            else if(c == CTRL_K){
-                // Kill to end of line
-                le_history_reset(&nav.search_buffer);
-                le_kill_line(&nav.search_buffer);
-                continue;
-            }
-            else if(c == CTRL_U){
-                // Kill whole line
-                le_history_reset(&nav.search_buffer);
-                le_kill_whole_line(&nav.search_buffer);
-                continue;
-            }
-            else if(c == CTRL_W){
-                // Delete word backward
-                le_history_reset(&nav.search_buffer);
-                le_delete_word_backward(&nav.search_buffer);
+            else if(le_handle_key(&nav.search_buffer, c, 1)){
+                // Common line editing keys handled
                 continue;
             }
             else if(c >= 32 && c < 127){
@@ -2552,43 +2506,8 @@ main(int argc, const char* const* argv){
         }
 
         // Handle text editing for count buffer (only when count buffer has content)
-        if(count_buffer.length > 0){
-            if(c == BACKSPACE || c == 127 || c == CTRL_H){
-                le_backspace(&count_buffer);
-                continue;
-            }
-            else if(c == DELETE || c == CTRL_D){
-                le_delete(&count_buffer);
-                continue;
-            }
-            else if(c == LEFT || c == CTRL_B){
-                le_move_left(&count_buffer);
-                continue;
-            }
-            else if(c == RIGHT || c == CTRL_F){
-                le_move_right(&count_buffer);
-                continue;
-            }
-            else if(c == HOME || c == CTRL_A){
-                le_move_home(&count_buffer);
-                continue;
-            }
-            else if(c == END || c == CTRL_E){
-                le_move_end(&count_buffer);
-                continue;
-            }
-            else if(c == CTRL_K){
-                le_kill_line(&count_buffer);
-                continue;
-            }
-            else if(c == CTRL_U){
-                le_kill_whole_line(&count_buffer);
-                continue;
-            }
-            else if(c == CTRL_W){
-                le_delete_word_backward(&count_buffer);
-                continue;
-            }
+        if(count_buffer.length > 0 && le_handle_key(&count_buffer, c, 0)){
+            continue;
         }
 
         // Handle 'z' prefix for vim-like commands
@@ -2791,7 +2710,7 @@ main(int argc, const char* const* argv){
                 nav_center_cursor(&nav, globals.screenh);
                 break;
 
-            case LCLICK_UP:
+            case LCLICK_DOWN:
                 // Handle mouse clicks (only on release to avoid double-toggle)
                 // Status line is at y=0, items start at y=1
                 if(cy >= 1 && cy < globals.screenh){
