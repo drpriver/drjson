@@ -2618,11 +2618,9 @@ main(int argc, const char* const* argv){
         drjson_print_error_fp(stderr,  jsonpath.text, jsonpath.length, l, c, document);
         return 1;
     }
-    DrJsonValue this = document;
-
     // Initialize navigation
     JsonNav nav;
-    nav_init(&nav, jctx, this);
+    nav_init(&nav, jctx, document);
 
     // Count buffer for vim-style numeric prefixes
     LineEditor count_buffer;
