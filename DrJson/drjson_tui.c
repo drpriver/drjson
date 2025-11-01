@@ -1311,8 +1311,10 @@ static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open;
 static const Command commands[] = {
     {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
     {SV("h"),     SV(":h"), SV("  Show help"),         cmd_help},
-    {SV("open"),  SV(":open <file>"), SV("  Open a JSON file"), cmd_open},
-    {SV("o"),     SV(":o <file>"), SV("  Alias for :open"), cmd_open},
+    {SV("open"),  SV(":open <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("o"),     SV(":o <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("edit"),  SV(":edit <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("e"),     SV(":e <file>"), SV("  Open JSON at <file>"), cmd_open},
     {SV("save"),  SV(":save <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("w"),     SV(":w <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("quit"),  SV(":quit"), SV("  Quit"),              cmd_quit},
