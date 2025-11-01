@@ -1408,6 +1408,102 @@ drjson_object_set_item_atom(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom a
 }
 
 DRJSON_API
+int // 0 on success, 1 if key not found or error
+drjson_object_delete_item_atom(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom){
+    if(o.kind != DRJSON_OBJECT) return 1;
+    DrJsonObject* object = &ctx->objects.data[o.object_idx];
+    if(object->read_only) return 1;
+    if(object->count == 0) return 1;
+    if(!object->capacity) return 1;
+
+    uint32_t capacity = object->capacity;
+    uint32_t hash = drj_atom_get_hash(atom);
+    uint32_t hash_idx = fast_reduce32(hash, 2*capacity);
+    DrJsonHashIndex* idxes;
+    DrJsonObjectPair* pairs;
+    drj_get_obj_ptrs(object->object_items, capacity, &idxes, &pairs);
+
+    // Find the key in the hash table
+    uint32_t found_hash_slot = UINT32_MAX;
+    uint32_t found_pair_idx = UINT32_MAX;
+
+    for(uint32_t idx = hash_idx;;){
+        DrJsonHashIndex hi = idxes[idx];
+        if(hi.index == UINT32_MAX) return 1; // Not found
+
+        if(pairs[hi.index].atom.bits == atom.bits){
+            found_hash_slot = idx;
+            found_pair_idx = hi.index;
+            break;
+        }
+
+        idx++;
+        if(idx >= 2*capacity) idx = 0;
+    }
+
+    // Step 1: Shift pairs array to remove the deleted pair
+    // This preserves insertion order
+    if(found_pair_idx < object->count - 1)
+        memmove(&pairs[found_pair_idx], &pairs[found_pair_idx + 1], (object->count - found_pair_idx - 1) * sizeof * pairs);
+    object->count--;
+
+    // Step 2: Decrement all hash indices > found_pair_idx
+    // (they now point to shifted pairs)
+    for(uint32_t i = 0; i < 2*capacity; i++){
+        if(idxes[i].index != UINT32_MAX && idxes[i].index > found_pair_idx)
+            idxes[i].index--;
+    }
+
+    // Step 3: Fix the probe chain using backward shift deletion
+    // This maintains the linear probing invariant
+    uint32_t i = found_hash_slot;
+    for(;;){
+        uint32_t j = i;
+
+        // Look ahead in the probe sequence
+        for(;;){
+            j++;
+            if(j >= 2*capacity) j = 0;
+
+            // If we hit an empty slot, we're done
+            if(idxes[j].index == UINT32_MAX){
+                idxes[i].index = UINT32_MAX;
+                return 0;
+            }
+
+            // Check if element at j can move to slot i
+            // It can move if its ideal position is NOT in the range (i, j]
+            uint32_t pair_hash = drj_atom_get_hash(pairs[idxes[j].index].atom);
+            uint32_t k = fast_reduce32(pair_hash, 2*capacity);
+
+            // Check if k is in range (i, j] (with wrapping)
+            _Bool k_in_range;
+            if(i < j)
+                k_in_range = (k > i && k <= j);
+            else // Wrapped range
+                k_in_range = (k > i || k <= j);
+
+            if(!k_in_range)
+                break; // Element at j wants to be at k, which is not in (i,j]
+                       // So it was probing through i, and we can move it back
+        }
+
+        // Move element from j to i
+        idxes[i] = idxes[j];
+        i = j;
+    }
+}
+
+DRJSON_API
+int // 0 on success, 1 if key not found or error
+drjson_object_delete_item(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen){
+    DrJsonAtom atom;
+    int err = drj_get_atom_no_alloc(&ctx->atoms, key, (uint32_t)keylen, &atom);
+    if(err) return 1; // Key not in atom table means it's not in the object
+    return drjson_object_delete_item_atom(ctx, object, atom);
+}
+
+DRJSON_API
 DrJsonValue
 drjson_object_get_item_atom(const DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom){
     if(o.kind != DRJSON_OBJECT) return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "not an object");

@@ -26,6 +26,7 @@ static TestFunc TestPrettyPrint;
 static TestFunc TestEscape;
 static TestFunc TestObject;
 static TestFunc TestPathParse;
+static TestFunc TestObjectDeletion;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSimpleParsing);
@@ -37,6 +38,7 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestEscape);
     RegisterTest(TestObject);
     RegisterTest(TestPathParse);
+    RegisterTest(TestObjectDeletion);
     return test_main(argc, argv, NULL);
 }
 
@@ -554,6 +556,279 @@ TestFunction(TestPathParse){
     TestAssertEquals(path.segments[1].kind, DRJSON_PATH_KEY);
     TestAssertEquals(path.segments[2].kind, DRJSON_PATH_INDEX);
     TestAssertEquals(path.segments[2].index, 1);
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestObjectDeletion){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test 1: Basic deletion and order preservation
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        TestAssertEquals(obj.kind, DRJSON_OBJECT);
+
+        DrJsonAtom key_a, key_b, key_c, key_d;
+        int err;
+        err = drjson_atomize(ctx, "a", 1, &key_a);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "b", 1, &key_b);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "c", 1, &key_c);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "d", 1, &key_d);
+        TestAssertFalse(err);
+
+        err = drjson_object_set_item_atom(ctx, obj, key_a, drjson_make_int(1));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_atom(ctx, obj, key_b, drjson_make_int(2));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_atom(ctx, obj, key_c, drjson_make_int(3));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_atom(ctx, obj, key_d, drjson_make_int(4));
+        TestAssertFalse(err);
+
+        int64_t len = drjson_len(ctx, obj);
+        TestAssertEquals(len, 4);
+
+        // Delete key "b" (middle element)
+        err = drjson_object_delete_item_atom(ctx, obj, key_b);
+        TestAssertEquals(err, 0); // 0 = success
+
+        len = drjson_len(ctx, obj);
+        TestAssertEquals(len, 3);
+
+        // Verify key "b" is gone
+        DrJsonValue val_b = drjson_object_get_item_atom(ctx, obj, key_b);
+        TestAssertEquals(val_b.kind, DRJSON_ERROR);
+
+        // Verify other keys still exist and have correct values
+        DrJsonValue val_a = drjson_object_get_item_atom(ctx, obj, key_a);
+        TestAssertEquals(val_a.kind, DRJSON_INTEGER);
+        TestAssertEquals(val_a.integer, 1);
+
+        DrJsonValue val_c = drjson_object_get_item_atom(ctx, obj, key_c);
+        TestAssertEquals(val_c.kind, DRJSON_INTEGER);
+        TestAssertEquals(val_c.integer, 3);
+
+        DrJsonValue val_d = drjson_object_get_item_atom(ctx, obj, key_d);
+        TestAssertEquals(val_d.kind, DRJSON_INTEGER);
+        TestAssertEquals(val_d.integer, 4);
+
+        // Test insertion order preservation via keys()
+        DrJsonValue keys = drjson_object_keys(obj);
+        int64_t keys_len = drjson_len(ctx, keys);
+        TestAssertEquals(keys_len, 3);
+
+        // Should be: a, c, d (b was deleted, order preserved)
+        DrJsonValue key0 = drjson_get_by_index(ctx, keys, 0);
+        TestAssertEquals(key0.atom.bits, key_a.bits);
+
+        DrJsonValue key1 = drjson_get_by_index(ctx, keys, 1);
+        TestAssertEquals(key1.atom.bits, key_c.bits);
+
+        DrJsonValue key2 = drjson_get_by_index(ctx, keys, 2);
+        TestAssertEquals(key2.atom.bits, key_d.bits);
+
+        // Test order preservation via values()
+        DrJsonValue values = drjson_object_values(obj);
+        int64_t values_len = drjson_len(ctx, values);
+        TestAssertEquals(values_len, 3);
+
+        DrJsonValue val0 = drjson_get_by_index(ctx, values, 0);
+        TestAssertEquals(val0.integer, 1);
+
+        DrJsonValue val1 = drjson_get_by_index(ctx, values, 1);
+        TestAssertEquals(val1.integer, 3);
+
+        DrJsonValue val2 = drjson_get_by_index(ctx, values, 2);
+        TestAssertEquals(val2.integer, 4);
+
+        // Test order preservation via items()
+        DrJsonValue items = drjson_object_items(obj);
+        int64_t items_len = drjson_len(ctx, items);
+        TestAssertEquals(items_len / 2, 3); // 3 keys, 6 items total
+
+        DrJsonValue item_key0 = drjson_get_by_index(ctx, items, 0);
+        TestAssertEquals(item_key0.atom.bits, key_a.bits);
+        DrJsonValue item_val0 = drjson_get_by_index(ctx, items, 1);
+        TestAssertEquals(item_val0.integer, 1);
+
+        DrJsonValue item_key1 = drjson_get_by_index(ctx, items, 2);
+        TestAssertEquals(item_key1.atom.bits, key_c.bits);
+        DrJsonValue item_val1 = drjson_get_by_index(ctx, items, 3);
+        TestAssertEquals(item_val1.integer, 3);
+
+        DrJsonValue item_key2 = drjson_get_by_index(ctx, items, 4);
+        TestAssertEquals(item_key2.atom.bits, key_d.bits);
+        DrJsonValue item_val2 = drjson_get_by_index(ctx, items, 5);
+        TestAssertEquals(item_val2.integer, 4);
+
+        // Test deleting non-existent key
+        err = drjson_object_delete_item_atom(ctx, obj, key_b);
+        TestAssertEquals(err, 1); // 1 = not found
+
+        // Test deleting first element
+        err = drjson_object_delete_item_atom(ctx, obj, key_a);
+        TestAssertFalse(err);
+        len = drjson_len(ctx, obj);
+        TestAssertEquals(len, 2);
+
+        // Verify order after first deletion: should be c, d
+        keys = drjson_object_keys(obj);
+        DrJsonValue key_after0 = drjson_get_by_index(ctx, keys, 0);
+        TestAssertEquals(key_after0.atom.bits, key_c.bits);
+        DrJsonValue key_after1 = drjson_get_by_index(ctx, keys, 1);
+        TestAssertEquals(key_after1.atom.bits, key_d.bits);
+
+        // Test deleting last element
+        err = drjson_object_delete_item_atom(ctx, obj, key_d);
+        TestAssertFalse(err);
+        len = drjson_len(ctx, obj);
+        TestAssertEquals(len, 1);
+
+        // Only 'c' should remain
+        DrJsonValue val_c_final = drjson_object_get_item_atom(ctx, obj, key_c);
+        TestAssertEquals(val_c_final.kind, DRJSON_INTEGER);
+        TestAssertEquals(val_c_final.integer, 3);
+
+        keys = drjson_object_keys(obj);
+        DrJsonValue last_key = drjson_get_by_index(ctx, keys, 0);
+        TestAssertEquals(last_key.atom.bits, key_c.bits);
+
+        // Delete the last element
+        err = drjson_object_delete_item_atom(ctx, obj, key_c);
+        TestAssertFalse(err);
+        len = drjson_len(ctx, obj);
+        TestAssertEquals(len, 0);
+    }
+
+    // Test 2: Deletion with string API
+    {
+        DrJsonValue obj2 = drjson_make_object(ctx);
+        int err = drjson_object_set_item_copy_key(ctx, obj2, "foo", 3, drjson_make_int(42));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_copy_key(ctx, obj2, "bar", 3, drjson_make_int(99));
+        TestAssertFalse(err);
+
+        err = drjson_object_delete_item(ctx, obj2, "foo", 3);
+        TestAssertFalse(err);
+
+        DrJsonValue val_bar = drjson_object_get_item(ctx, obj2, "bar", 3);
+        TestAssertEquals(val_bar.kind, DRJSON_INTEGER);
+        TestAssertEquals(val_bar.integer, 99);
+
+        DrJsonValue val_foo = drjson_object_get_item(ctx, obj2, "foo", 3);
+        TestAssertEquals(val_foo.kind, DRJSON_ERROR);
+    }
+
+    // Test 3: Large object with resizing
+    // Objects start with capacity 4, then double: 4 -> 8 -> 16 -> 32 -> 64
+    {
+        DrJsonValue obj3 = drjson_make_object(ctx);
+
+        // Add 100 keys to force multiple resizes
+        DrJsonAtom keys[100];
+        for(int i = 0; i < 100; i++){
+            char keybuf[32];
+            int keylen = snprintf(keybuf, sizeof(keybuf), "key_%d", i);
+            int err = drjson_atomize(ctx, keybuf, (size_t)keylen, &keys[i]);
+            TestAssertFalse(err);
+            err = drjson_object_set_item_atom(ctx, obj3, keys[i], drjson_make_int(i * 10));
+            TestAssertFalse(err);
+        }
+
+        int64_t len = drjson_len(ctx, obj3);
+        TestAssertEquals(len, 100);
+
+        // Verify order is preserved (all 100 keys in insertion order)
+        DrJsonValue obj3_keys = drjson_object_keys(obj3);
+        for(int i = 0; i < 100; i++){
+            DrJsonValue key = drjson_get_by_index(ctx, obj3_keys, i);
+            TestAssertEquals(key.atom.bits, keys[i].bits);
+        }
+
+        // Delete every 3rd key (keys 0, 3, 6, 9, ...)
+        for(int i = 0; i < 100; i += 3){
+            int err = drjson_object_delete_item_atom(ctx, obj3, keys[i]);
+            TestAssertEquals(err, 0);
+        }
+
+        len = drjson_len(ctx, obj3);
+        TestAssertEquals(len, 66); // 100 - 34 = 66
+
+        // Verify remaining keys are still in order
+        obj3_keys = drjson_object_keys(obj3);
+        int expected_idx = 1; // Start at 1 since 0 was deleted
+        for(int i = 0; i < 66; i++){
+            // Skip deleted keys (0, 3, 6, ...)
+            while(expected_idx % 3 == 0) expected_idx++;
+
+            DrJsonValue key = drjson_get_by_index(ctx, obj3_keys, i);
+            TestAssertEquals(key.atom.bits, keys[expected_idx].bits);
+
+            // Verify value is correct
+            DrJsonValue val = drjson_object_get_item_atom(ctx, obj3, keys[expected_idx]);
+            TestAssertEquals(val.kind, DRJSON_INTEGER);
+            TestAssertEquals(val.integer, expected_idx * 10);
+
+            expected_idx++;
+        }
+
+        // Delete every other remaining key
+        // Save the atoms first since the keys view will change as we delete
+        DrJsonAtom keys_to_delete[33];
+        obj3_keys = drjson_object_keys(obj3);
+        for(int i = 0; i < 66; i += 2){
+            DrJsonValue key = drjson_get_by_index(ctx, obj3_keys, i);
+            keys_to_delete[i/2] = key.atom;
+        }
+        for(int i = 0; i < 33; i++){
+            int err = drjson_object_delete_item_atom(ctx, obj3, keys_to_delete[i]);
+            TestAssertEquals(err, 0);
+        }
+
+        len = drjson_len(ctx, obj3);
+        TestAssertEquals(len, 33); // 66 - 33 = 33
+
+        // Verify order is still preserved
+        obj3_keys = drjson_object_keys(obj3);
+        for(int i = 0; i < 33; i++){
+            DrJsonValue key_i = drjson_get_by_index(ctx, obj3_keys, i);
+
+            // Verify we can look it up
+            DrJsonValue val = drjson_object_get_item_atom(ctx, obj3, key_i.atom);
+            TestAssertEquals(val.kind, DRJSON_INTEGER);
+        }
+
+        // Add 50 more keys to test adding after deletions
+        DrJsonAtom new_keys[50];
+        for(int i = 0; i < 50; i++){
+            char keybuf[32];
+            int keylen = snprintf(keybuf, sizeof(keybuf), "new_key_%d", i);
+            int err = drjson_atomize(ctx, keybuf, (size_t)keylen, &new_keys[i]);
+            TestAssertFalse(err);
+            err = drjson_object_set_item_atom(ctx, obj3, new_keys[i], drjson_make_int(i * 100));
+            TestAssertFalse(err);
+        }
+
+        len = drjson_len(ctx, obj3);
+        TestAssertEquals(len, 83); // 33 + 50 = 83
+
+        // Verify new keys are at the end in order
+        obj3_keys = drjson_object_keys(obj3);
+        for(int i = 0; i < 50; i++){
+            DrJsonValue key = drjson_get_by_index(ctx, obj3_keys, 33 + i);
+            TestAssertEquals(key.atom.bits, new_keys[i].bits);
+
+            DrJsonValue val = drjson_object_get_item_atom(ctx, obj3, new_keys[i]);
+            TestAssertEquals(val.kind, DRJSON_INTEGER);
+            TestAssertEquals(val.integer, i * 100);
+        }
+    }
 
     drjson_ctx_free_all(ctx);
     assert_all_freed();
