@@ -304,12 +304,37 @@ finally:
 //------------------------------------------------------------
 
 static inline
+void
+expansion_ensure_capacity(ExpansionSet* set, size_t id){
+    size_t idx = id / 64;
+    if(idx >= set->capacity){
+        size_t new_capacity = idx + 1;
+        // Round up to next power of 2 for fewer reallocations
+        new_capacity--;
+        new_capacity |= new_capacity >> 1;
+        new_capacity |= new_capacity >> 2;
+        new_capacity |= new_capacity >> 4;
+        new_capacity |= new_capacity >> 8;
+        new_capacity |= new_capacity >> 16;
+        new_capacity |= new_capacity >> 32;
+        new_capacity++;
+
+        uint64_t* new_ids = realloc(set->ids, new_capacity * sizeof(*set->ids));
+        if(!new_ids) __builtin_debugtrap();
+        // Zero out the new portion
+        memset(new_ids + set->capacity, 0, (new_capacity - set->capacity) * sizeof(*new_ids));
+        set->ids = new_ids;
+        set->capacity = new_capacity;
+    }
+}
+
+static inline
 _Bool
 expansion_contains(const ExpansionSet* set, size_t id){
     size_t bit = id & 63;
     size_t idx = id / 64;
+    if(idx >= set->capacity) return 0;
     uint64_t val = set->ids[idx];
-    if(idx >= set->capacity) __builtin_debugtrap();
     return val & (1llu << bit)?1:0;
 }
 
@@ -318,7 +343,7 @@ void
 expansion_add(ExpansionSet* set, size_t id){
     size_t bit = id & 63;
     size_t idx = id / 64;
-    if(idx >= set->capacity) __builtin_debugtrap();
+    expansion_ensure_capacity(set, id);
     set->ids[idx] |= 1lu << bit;
 }
 
@@ -327,7 +352,7 @@ void
 expansion_remove(ExpansionSet* set, size_t id){
     size_t bit = id & 63;
     size_t idx = id / 64;
-    if(idx >= set->capacity) __builtin_debugtrap();
+    if(idx >= set->capacity) return; // Nothing to remove
     set->ids[idx] &= ~(1llu << bit);
 }
 
@@ -336,7 +361,7 @@ void
 expansion_toggle(ExpansionSet* set, size_t id){
     size_t bit = id & 63;
     size_t idx = id / 64;
-    if(idx >= set->capacity) __builtin_debugtrap();
+    expansion_ensure_capacity(set, id);
     set->ids[idx] ^= 1lu << bit;
 }
 
@@ -519,13 +544,6 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
         .root = root,
         .needs_rebuild = 1,
     };
-    size_t expanded_count = jctx->arrays.count > jctx->objects.count? jctx->arrays.count : jctx->objects.count;
-    expanded_count += 1;
-    expanded_count *= 2;
-    expanded_count /= 64;
-    expanded_count++; // round up, whatever
-    nav->expanded.ids = calloc(expanded_count, sizeof *nav->expanded.ids);
-    nav->expanded.capacity = expanded_count;
     // Expand root document by default if it's a container
     if(nav_is_container(root)){
         expansion_add(&nav->expanded, nav_get_container_id(root));
@@ -566,14 +584,7 @@ nav_reinit(JsonNav* nav){
     nav->in_completion_menu = 0;
     nav->tab_count = 0;
 
-    // Re-initialize expansion set for the new context
-    size_t expanded_count = nav->jctx->arrays.count > nav->jctx->objects.count ? nav->jctx->arrays.count : nav->jctx->objects.count;
-    expanded_count += 1;
-    expanded_count *= 2;
-    expanded_count /= 64;
-    expanded_count++; // round up, whatever
-    nav->expanded.ids = realloc(nav->expanded.ids, expanded_count * sizeof *nav->expanded.ids);
-    nav->expanded.capacity = expanded_count;
+    // Clear expansion set - capacity stays allocated for reuse
     expansion_clear(&nav->expanded);
 
     if(nav_is_container(nav->root)){
