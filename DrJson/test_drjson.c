@@ -28,6 +28,7 @@ static TestFunc TestObject;
 static TestFunc TestPathParse;
 static TestFunc TestObjectDeletion;
 static TestFunc TestObjectReplaceKey;
+static TestFunc TestObjectInsertAtIndex;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSimpleParsing);
@@ -41,6 +42,7 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestPathParse);
     RegisterTest(TestObjectDeletion);
     RegisterTest(TestObjectReplaceKey);
+    RegisterTest(TestObjectInsertAtIndex);
     return test_main(argc, argv, NULL);
 }
 
@@ -1050,6 +1052,154 @@ TestFunction(TestObjectReplaceKey){
         DrJsonValue val = drjson_object_get_item_atom(ctx, obj, key_a);
         TestAssertEquals(val.kind, DRJSON_INTEGER);
         TestAssertEquals(val.integer, 42);
+    }
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestObjectInsertAtIndex){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test 1: Insert at beginning of empty object
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        DrJsonAtom key_a;
+        int err;
+
+        err = drjson_atomize(ctx, "a", 1, &key_a);
+        TestAssertFalse(err);
+
+        err = drjson_object_insert_item_at_index(ctx, obj, key_a, drjson_make_int(1), 0);
+        TestAssertEquals(err, 0);
+
+        DrJsonValue val = drjson_object_get_item_atom(ctx, obj, key_a);
+        TestAssertEquals(val.kind, DRJSON_INTEGER);
+        TestAssertEquals(val.integer, 1);
+    }
+
+    // Test 2: Insert at specific positions to control order
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        DrJsonAtom key_a, key_b, key_c, key_d;
+        int err;
+
+        err = drjson_atomize(ctx, "a", 1, &key_a);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "b", 1, &key_b);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "c", 1, &key_c);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "d", 1, &key_d);
+        TestAssertFalse(err);
+
+        // Insert at end (index 0 in empty object)
+        err = drjson_object_insert_item_at_index(ctx, obj, key_a, drjson_make_int(1), 0);
+        TestAssertEquals(err, 0);
+
+        // Insert at end (index 1)
+        err = drjson_object_insert_item_at_index(ctx, obj, key_c, drjson_make_int(3), 1);
+        TestAssertEquals(err, 0);
+
+        // Insert in middle (index 1, shifting "c" to index 2)
+        err = drjson_object_insert_item_at_index(ctx, obj, key_b, drjson_make_int(2), 1);
+        TestAssertEquals(err, 0);
+
+        // Insert at end (index 3)
+        err = drjson_object_insert_item_at_index(ctx, obj, key_d, drjson_make_int(4), 3);
+        TestAssertEquals(err, 0);
+
+        // Verify order is a, b, c, d
+        DrJsonValue keys = drjson_object_keys(obj);
+        TestAssertEquals(drjson_len(ctx, keys), 4);
+
+        DrJsonValue k0 = drjson_get_by_index(ctx, keys, 0);
+        TestAssertEquals(k0.atom.bits, key_a.bits);
+        DrJsonValue k1 = drjson_get_by_index(ctx, keys, 1);
+        TestAssertEquals(k1.atom.bits, key_b.bits);
+        DrJsonValue k2 = drjson_get_by_index(ctx, keys, 2);
+        TestAssertEquals(k2.atom.bits, key_c.bits);
+        DrJsonValue k3 = drjson_get_by_index(ctx, keys, 3);
+        TestAssertEquals(k3.atom.bits, key_d.bits);
+    }
+
+    // Test 3: Cannot insert duplicate key
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        DrJsonAtom key_a;
+        int err;
+
+        err = drjson_atomize(ctx, "a", 1, &key_a);
+        TestAssertFalse(err);
+
+        err = drjson_object_insert_item_at_index(ctx, obj, key_a, drjson_make_int(1), 0);
+        TestAssertEquals(err, 0);
+
+        // Try to insert the same key again
+        err = drjson_object_insert_item_at_index(ctx, obj, key_a, drjson_make_int(2), 0);
+        TestAssertEquals(err, 1); // Should fail
+
+        // Verify value is unchanged
+        DrJsonValue val = drjson_object_get_item_atom(ctx, obj, key_a);
+        TestAssertEquals(val.integer, 1);
+    }
+
+    // Test 4: Cannot insert at invalid index
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        DrJsonAtom key_a, key_b;
+        int err;
+
+        err = drjson_atomize(ctx, "a", 1, &key_a);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "b", 1, &key_b);
+        TestAssertFalse(err);
+
+        err = drjson_object_insert_item_at_index(ctx, obj, key_a, drjson_make_int(1), 0);
+        TestAssertEquals(err, 0);
+
+        // Try to insert at index 2 (count is 1, so valid indices are 0-1)
+        err = drjson_object_insert_item_at_index(ctx, obj, key_b, drjson_make_int(2), 2);
+        TestAssertEquals(err, 1); // Should fail
+
+        // Inserting at index 1 (count) should succeed (append)
+        err = drjson_object_insert_item_at_index(ctx, obj, key_b, drjson_make_int(2), 1);
+        TestAssertEquals(err, 0); // Should succeed
+    }
+
+    // Test 5: Insert at beginning shifts existing items
+    {
+        DrJsonValue obj = drjson_make_object(ctx);
+        DrJsonAtom key_a, key_b, key_z;
+        int err;
+
+        err = drjson_atomize(ctx, "a", 1, &key_a);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "b", 1, &key_b);
+        TestAssertFalse(err);
+        err = drjson_atomize(ctx, "z", 1, &key_z);
+        TestAssertFalse(err);
+
+        // Add a and b normally
+        err = drjson_object_set_item_atom(ctx, obj, key_a, drjson_make_int(1));
+        TestAssertFalse(err);
+        err = drjson_object_set_item_atom(ctx, obj, key_b, drjson_make_int(2));
+        TestAssertFalse(err);
+
+        // Insert z at beginning
+        err = drjson_object_insert_item_at_index(ctx, obj, key_z, drjson_make_int(26), 0);
+        TestAssertEquals(err, 0);
+
+        // Verify order is z, a, b
+        DrJsonValue keys = drjson_object_keys(obj);
+        DrJsonValue k0 = drjson_get_by_index(ctx, keys, 0);
+        TestAssertEquals(k0.atom.bits, key_z.bits);
+        DrJsonValue k1 = drjson_get_by_index(ctx, keys, 1);
+        TestAssertEquals(k1.atom.bits, key_a.bits);
+        DrJsonValue k2 = drjson_get_by_index(ctx, keys, 2);
+        TestAssertEquals(k2.atom.bits, key_b.bits);
     }
 
     drjson_ctx_free_all(ctx);

@@ -485,6 +485,10 @@ DRJSON_API
 int // 0 on success, 1 if key not found or error
 drjson_object_replace_key_atom(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom old_key, DrJsonAtom new_key);
 
+DRJSON_API
+int // 0 on success, 1 if key already exists, index out of bounds, or error
+drjson_object_insert_item_at_index(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom key, DrJsonValue item, size_t index);
+
 //------------------------------------------------------------
 
 ////////////

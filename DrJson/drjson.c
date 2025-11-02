@@ -1209,6 +1209,7 @@ drjson_array_insert_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx, Dr
     if(a.kind != DRJSON_ARRAY) return 1;
     DrJsonArray* adata = ctx->arrays.data;
     DrJsonArray* array = &adata[a.array_idx];
+    if(idx == array->count) return drjson_array_push_item(ctx, a, item);
     if(array->read_only) return 1;
     if(idx >= array->count) return 1;
     if(array->capacity < array->count+1u){
@@ -1549,6 +1550,97 @@ drjson_object_replace_key_atom(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom old
 
     // Rebuild the hash table
     drj_memset(idxes, 0xff, 2*capacity * sizeof *idxes);
+    for(uint32_t i = 0; i < object->count; i++){
+        const DrJsonObjectPair* p = &pairs[i];
+        uint32_t hash = drj_atom_get_hash(p->atom);
+        uint32_t idx = fast_reduce32(hash, 2*capacity);
+        while(idxes[idx].index != UINT32_MAX){
+            idx++;
+            if(idx >= 2*capacity) idx = 0;
+        }
+        idxes[idx].index = i;
+    }
+
+    return 0;
+}
+
+DRJSON_API
+int // 0 on success, 1 if key already exists, index out of bounds, or error
+drjson_object_insert_item_at_index(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom key, DrJsonValue item, size_t index){
+    if(o.kind != DRJSON_OBJECT) return 1;
+    DrJsonObject* object = &ctx->objects.data[o.object_idx];
+    if(object->read_only) return 1;
+
+    // Check if index is valid (can be 0 to count inclusive, where count means append)
+    if(index > object->count) return 1;
+
+    enum {OBJECT_MAX = 0x1fffffff};
+
+    // Check if key already exists
+    if(object->count > 0 && object->capacity > 0){
+        uint32_t capacity = object->capacity;
+        uint32_t hash = drj_atom_get_hash(key);
+        uint32_t hash_idx = fast_reduce32(hash, 2*capacity);
+        DrJsonHashIndex* idxes;
+        DrJsonObjectPair* pairs;
+        drj_get_obj_ptrs(object->object_items, capacity, &idxes, &pairs);
+
+        for(uint32_t idx = hash_idx;;){
+            DrJsonHashIndex hi = idxes[idx];
+            if(hi.index == UINT32_MAX) break; // Key doesn't exist, safe to proceed
+
+            if(pairs[hi.index].atom.bits == key.bits){
+                // Key already exists
+                return 1;
+            }
+
+            idx++;
+            if(idx >= 2*capacity) idx = 0;
+        }
+    }
+
+    // Ensure capacity (same logic as drjson_object_set_item)
+    if(unlikely(object->count >= object->capacity)){
+        if(!object->capacity){
+            size_t new_cap = 4;
+            size_t size = drjson_size_for_object_of_length(new_cap);
+            void* p = drj_alloc(ctx, size);
+            if(!p) return 1;
+            drj_memset(drj_obj_get_idxes(p, new_cap), 0xff, 2*new_cap*sizeof(DrJsonHashIndex));
+            object->object_items = p;
+            object->capacity = (uint32_t)new_cap;
+        }
+        else {
+            size_t old_cap = object->capacity;
+            size_t new_cap = old_cap * 2;
+            if(new_cap > OBJECT_MAX) return 1;
+            void* p = drj_realloc(ctx, object->object_items, drjson_size_for_object_of_length(old_cap), drjson_size_for_object_of_length(new_cap));
+            if(!p) return 1;
+            object->object_items = p;
+            object->capacity = (uint32_t)new_cap;
+            // Hash table will be rebuilt below
+        }
+    }
+
+    uint32_t capacity = object->capacity;
+    DrJsonHashIndex* idxes;
+    DrJsonObjectPair* pairs;
+    drj_get_obj_ptrs(object->object_items, capacity, &idxes, &pairs);
+
+    // Shift pairs from index onwards to make room
+    if(index < object->count){
+        memmove(&pairs[index + 1], &pairs[index], (object->count - index) * sizeof(*pairs));
+    }
+
+    // Insert the new pair at the specified index
+    pairs[index] = (DrJsonObjectPair){
+        .atom = key,
+        .value = item,
+    };
+    object->count++;
+
+    // Rebuild the hash table to point to all pairs in their new positions
+    drj_memset(idxes, 0xff, 2*capacity * sizeof(*idxes));
     for(uint32_t i = 0; i < object->count; i++){
         const DrJsonObjectPair* p = &pairs[i];
         uint32_t hash = drj_atom_get_hash(p->atom);
