@@ -52,8 +52,8 @@ file_size_from_fp(FILE* fp){
 
 
 static inline
-LongString
-read_file_streamed(FILE* fp){
+int
+read_file_streamed(FILE* fp, LongString* out){
     size_t nalloced = 1024;
     size_t used = 0;
     char* buff = malloc(nalloced);
@@ -65,7 +65,7 @@ read_file_streamed(FILE* fp){
             char* newbuff = realloc(buff, nalloced);
             if(!newbuff){
                 free(buff);
-                return (LongString){0};
+                return -1;
             }
             buff = newbuff;
         }
@@ -74,24 +74,25 @@ read_file_streamed(FILE* fp){
             if(feof(fp)) break;
             else{
                 free(buff);
-                return (LongString){0};
+                return -1;
             }
         }
     }
     buff = realloc(buff, used+1);
     buff[used] = 0;
-    return (LongString){used, buff};
+    *out = (LongString){used, buff};
+    return 0;
 }
 
 static inline
-LongString 
-read_file(const char* filepath){
-    LongString result = {0};
+int
+read_file(const char* filepath, LongString* out){
+    int status = -1;
     FILE* fp = fopen(filepath, "rb");
-    if(!fp) return result;
+    if(!fp) return -1;
     long long size = file_size_from_fp(fp);
     if(size <= 0){
-        result = read_file_streamed(fp);
+        status = read_file_streamed(fp, out);
         goto finally;
     }
     size_t nbytes = size;
@@ -103,11 +104,11 @@ read_file(const char* filepath){
         goto finally;
     }
     text[nbytes] = '\0';
-    result.text = text;
-    result.length = nbytes;
+    *out = (LongString){nbytes, text};
+    status = 0;
 finally:
     fclose(fp);
-    return result;
+    return status;
 }
 
 static GiTabCompletionFunc drj_completer;
@@ -255,15 +256,20 @@ main(int argc, const char* const* argv){
     if(indent)
         pretty = 1;
     LongString jsonstr = {0};
+    int read_status = -1;
     if(jsonpath.length){
-        jsonstr = read_file(jsonpath.text);
-        if(!jsonstr.text){
+        read_status = read_file(jsonpath.text, &jsonstr);
+        if(read_status != 0){
             fprintf(stderr, "Unable to read data from '%s': %s\n", jsonpath.text, strerror(errno));
             return 1;
         }
     }
     else {
-        jsonstr = read_file_streamed(stdin);
+        read_status = read_file_streamed(stdin, &jsonstr);
+        if(read_status != 0){
+            fprintf(stderr, "Unable to read data from stdin: %s\n", strerror(errno));
+            return 1;
+        }
     }
     DrJsonAllocator allocator = drjson_stdc_allocator();
     DrJsonContext* jctx = drjson_create_ctx(allocator);

@@ -240,8 +240,8 @@ file_size_from_fp(FILE* fp){
 
 
 static inline
-LongString
-read_file_streamed(FILE* fp){
+int
+read_file_streamed(FILE* fp, LongString* out){
     size_t nalloced = 1024;
     size_t used = 0;
     char* buff = malloc(nalloced);
@@ -253,7 +253,7 @@ read_file_streamed(FILE* fp){
             char* newbuff = realloc(buff, nalloced);
             if(!newbuff){
                 free(buff);
-                return (LongString){0};
+                return -1;
             }
             buff = newbuff;
         }
@@ -262,24 +262,25 @@ read_file_streamed(FILE* fp){
             if(feof(fp)) break;
             else{
                 free(buff);
-                return (LongString){0};
+                return -1;
             }
         }
     }
     buff = realloc(buff, used+1);
     buff[used] = 0;
-    return (LongString){used, buff};
+    *out = (LongString){used, buff};
+    return 0;
 }
 
 static inline
-LongString
-read_file(const char* filepath){
-    LongString result = {0};
+int
+read_file(const char* filepath, LongString* out){
+    int status = -1;
     FILE* fp = fopen(filepath, "rb");
-    if(!fp) return result;
+    if(!fp) return -1;
     long long size = file_size_from_fp(fp);
     if(size <= 0){
-        result = read_file_streamed(fp);
+        status = read_file_streamed(fp, out);
         goto finally;
     }
     size_t nbytes = size;
@@ -291,11 +292,11 @@ read_file(const char* filepath){
         goto finally;
     }
     text[nbytes] = '\0';
-    result.text = text;
-    result.length = nbytes;
+    *out = (LongString){nbytes, text};
+    status = 0;
 finally:
     fclose(fp);
-    return result;
+    return status;
 }
 
 //------------------------------------------------------------
@@ -1458,8 +1459,8 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
     memcpy(filepath, args, args_len);
     filepath[args_len] = '\0';
 
-    LongString file_content = read_file(filepath);
-    if(!file_content.text){
+    LongString file_content = {0};
+    if(read_file(filepath, &file_content) != 0){
         nav_set_message(nav, "Error: Could not read file '%s'", filepath);
         return CMD_ERROR;
     }
@@ -2032,15 +2033,10 @@ read_from_clipboard(LongString* out){
 
     if(!pipe) return -1;
 
-    LongString result = read_file_streamed(pipe);
+    int status = read_file_streamed(pipe, out);
     pclose(pipe);
 
-    if(!result.text){
-        return -1;
-    }
-
-    *out = result;
-    return 0;
+    return status;
 }
 #endif
 
@@ -4020,8 +4016,7 @@ main(int argc, const char* const* argv){
     begin_tui();
     atexit(end_tui);
     LongString jsonstr = {0};
-    jsonstr = read_file(jsonpath.text);
-    if(!jsonstr.text){
+    if(read_file(jsonpath.text, &jsonstr) != 0){
         fprintf(stderr, "Unable to read data from '%s': %s\n", jsonpath.text, strerror(errno));
         return 1;
     }
