@@ -1389,6 +1389,9 @@ nav_clear_message(JsonNav* nav){
     nav->has_message = 0;
 }
 
+static int parse_as_string(DrJsonContext* jctx, const char* txt, size_t len, DrJsonAtom* outatom);
+static int parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJsonValue* outvalue);
+
 //------------------------------------------------------------
 // Command Mode
 //------------------------------------------------------------
@@ -1404,7 +1407,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_query;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query;
 
 static const Command commands[] = {
     {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
@@ -1422,6 +1425,8 @@ static const Command commands[] = {
     {SV("cd"),    SV(":cd <dir>"), SV("  Change directory"), cmd_cd},
     {SV("yank"),  SV(":yank"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
     {SV("y"),     SV(":y"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
+    {SV("paste"), SV(":paste"), SV("  Paste from clipboard"), cmd_paste},
+    {SV("p"),     SV(":p"), SV("  Paste from clipboard"), cmd_paste},
     {SV("query"), SV(":query <path>"), SV("  Navigate to path (e.g., foo.bar[0].baz)"), cmd_query},
 };
 
@@ -1675,152 +1680,182 @@ copy_to_clipboard(const char* text, size_t len){
 #endif
 
 #ifdef __APPLE__
+// Cached Objective-C runtime state for clipboard operations
+typedef void* (*objc_getClass_t)(const char*);
+typedef void* (*sel_registerName_t)(const char*);
+typedef void* (*objc_msgSend_t)(void*, void*, ...);
+
+typedef struct ObjCClipboard ObjCClipboard;
+struct ObjCClipboard {
+    // Libraries
+    void* objc_lib;
+    void* appkit;
+
+    // Runtime functions
+    objc_getClass_t objc_getClass_fn;
+    sel_registerName_t sel_registerName_fn;
+    objc_msgSend_t objc_msgSend_fn;
+
+    // Classes
+    void* NSPasteboard;
+    void* NSString;
+    void* NSAutoreleasePool;
+
+    // Common selectors
+    void* sel_generalPasteboard;
+    void* sel_alloc;
+    void* sel_init;
+    void* sel_drain;
+    void* sel_retain;
+
+    // Write-specific selectors
+    void* sel_clearContents;
+    void* sel_setString;
+    void* sel_stringWithUTF8String;
+
+    // Read-specific selectors
+    void* sel_stringForType;
+    void* sel_UTF8String;
+
+    // Cached instances
+    void* pasteboard;
+    void* pasteboardType;
+};
+
+static 
+ObjCClipboard*
+get_objc_clipboard(void){
+    static ObjCClipboard cached = {0};
+    static _Bool initialized = 0;
+
+    if(initialized) return &cached;
+
+    // Load Objective-C runtime
+    cached.objc_lib = dlopen("/usr/lib/libobjc.dylib", RTLD_LAZY);
+    if(!cached.objc_lib){
+        LOG("Couldn't open objc_lib\n");
+        return NULL;
+    }
+
+    // Load AppKit framework
+    cached.appkit = dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", RTLD_LAZY);
+    if(!cached.appkit){
+        LOG("Couldn't open appkit\n");
+        return NULL;
+    }
+
+    // Get Objective-C runtime functions
+    cached.objc_getClass_fn = (objc_getClass_t)dlsym(cached.objc_lib, "objc_getClass");
+    cached.sel_registerName_fn = (sel_registerName_t)dlsym(cached.objc_lib, "sel_registerName");
+    cached.objc_msgSend_fn = (objc_msgSend_t)dlsym(cached.objc_lib, "objc_msgSend");
+
+    if(!cached.objc_getClass_fn || !cached.sel_registerName_fn || !cached.objc_msgSend_fn){
+        if(!cached.objc_getClass_fn) LOG("Couldn't get objc_getClass\n");
+        if(!cached.sel_registerName_fn) LOG("Couldn't get sel_registerName\n");
+        if(!cached.objc_msgSend_fn) LOG("Couldn't get objc_msgSend\n");
+        return NULL;
+    }
+
+    // Get classes
+    cached.NSPasteboard = cached.objc_getClass_fn("NSPasteboard");
+    cached.NSString = cached.objc_getClass_fn("NSString");
+    cached.NSAutoreleasePool = cached.objc_getClass_fn("NSAutoreleasePool");
+
+    if(!cached.NSPasteboard || !cached.NSString || !cached.NSAutoreleasePool){
+        if(!cached.NSPasteboard) LOG("Couldn't get NSPasteboard\n");
+        if(!cached.NSString) LOG("Couldn't get NSString\n");
+        if(!cached.NSAutoreleasePool) LOG("Couldn't get NSAutoreleasePool\n");
+        return NULL;
+    }
+
+    // Get common selectors
+    cached.sel_generalPasteboard = cached.sel_registerName_fn("generalPasteboard");
+    cached.sel_alloc = cached.sel_registerName_fn("alloc");
+    cached.sel_init = cached.sel_registerName_fn("init");
+    cached.sel_drain = cached.sel_registerName_fn("drain");
+    cached.sel_retain = cached.sel_registerName_fn("retain");
+
+    // Get write-specific selectors
+    cached.sel_clearContents = cached.sel_registerName_fn("clearContents");
+    cached.sel_setString = cached.sel_registerName_fn("setString:forType:");
+    cached.sel_stringWithUTF8String = cached.sel_registerName_fn("stringWithUTF8String:");
+
+    // Get read-specific selectors
+    cached.sel_stringForType = cached.sel_registerName_fn("stringForType:");
+    cached.sel_UTF8String = cached.sel_registerName_fn("UTF8String");
+
+    if(!cached.sel_generalPasteboard || !cached.sel_alloc || !cached.sel_init || !cached.sel_drain){
+        return NULL;
+    }
+
+    // Get general pasteboard instance
+    cached.pasteboard = ((void*(*)(void*, void*))cached.objc_msgSend_fn)(cached.NSPasteboard, cached.sel_generalPasteboard);
+    if(!cached.pasteboard){
+        LOG("couldn't get generalPasteboard\n");
+        return NULL;
+    }
+
+    // Try to get NSPasteboardTypeString constant
+    void** NSPasteboardTypeString_ptr = (void**)dlsym(cached.appkit, "NSPasteboardTypeString");
+    if(NSPasteboardTypeString_ptr && *NSPasteboardTypeString_ptr){
+        cached.pasteboardType = *NSPasteboardTypeString_ptr;
+    } else {
+        // Fallback: try old API
+        void** NSStringPboardType_ptr = (void**)dlsym(cached.appkit, "NSStringPboardType");
+        if(NSStringPboardType_ptr && *NSStringPboardType_ptr){
+            cached.pasteboardType = *NSStringPboardType_ptr;
+        } else {
+            // Last resort: create string with UTI
+            cached.pasteboardType = ((void*(*)(void*, void*, void*))cached.objc_msgSend_fn)(
+                cached.NSString, cached.sel_stringWithUTF8String, "public.utf8-plain-text"
+            );
+            cached.pasteboardType = ((void*(*)(void*, void*))cached.objc_msgSend_fn)(cached.pasteboardType, cached.sel_retain);
+        }
+    }
+
+    if(!cached.pasteboardType){
+        LOG("Couldn't get pasteboardType\n");
+        return NULL;
+    }
+
+    initialized = 1;
+    return &cached;
+}
+
 // macOS clipboard using Objective-C runtime via dlopen
 // Returns 0 on success, -1 on failure
 static
 int
 macos_copy_to_clipboard(const char* text, size_t len){
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
     // LOG("Copying '%s' to clipboard\n", text);
     (void)len; // Unused parameter
 
-    typedef void* (*objc_getClass_t)(const char*);
-    typedef void* (*sel_registerName_t)(const char*);
-    typedef void* (*objc_msgSend_t)(void*, void*, ...);
-
-    // Load Objective-C runtime
-    static void* objc_lib;
-    if(!objc_lib) objc_lib = dlopen("/usr/lib/libobjc.dylib", RTLD_LAZY);
-    if(!objc_lib){
-        LOG("Couldn't open objc_lib\n");
-        return -1;
-    }
-
-    // Load AppKit framework
-    static void* appkit;
-    if(!appkit) appkit = dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", RTLD_LAZY);
-    if(!appkit){
-        LOG("Couldn't open appkit\n");
-        return -1;
-    }
-
-    // Get Objective-C runtime functions
-    static objc_getClass_t objc_getClass_fn;
-    if(!objc_getClass_fn) objc_getClass_fn = (objc_getClass_t)dlsym(objc_lib, "objc_getClass");
-    static sel_registerName_t sel_registerName_fn;
-    if(!sel_registerName_fn) sel_registerName_fn = (sel_registerName_t)dlsym(objc_lib, "sel_registerName");
-    static objc_msgSend_t objc_msgSend_fn;
-    if(!objc_msgSend_fn) objc_msgSend_fn = (objc_msgSend_t)dlsym(objc_lib, "objc_msgSend");
-
-    if(!objc_getClass_fn || !sel_registerName_fn || !objc_msgSend_fn){
-        if(!objc_getClass_fn) LOG("Couldn't get objc_getClass\n");
-        if(!sel_registerName_fn) LOG("Couldn't get sel_registerName\n");
-        if(!objc_msgSend_fn) LOG("Couldn't get objc_msgSend\n");
-        return -1;
-    }
-
-    // Get classes
-    static void* NSPasteboard;
-    if(!NSPasteboard) NSPasteboard = objc_getClass_fn("NSPasteboard");
-    static void* NSString;
-    if(!NSString) NSString = objc_getClass_fn("NSString");
-
-
-    static void* NSAutoreleasePool;
-    if(!NSAutoreleasePool) NSAutoreleasePool = objc_getClass_fn("NSAutoreleasePool");
-
-    if(!NSPasteboard || !NSString || !NSAutoreleasePool){
-        if(!NSPasteboard) LOG("Couldn't get NSPasteboard\n");
-        if(!NSString) LOG("Couldn't get NSString\n");
-        if(!NSAutoreleasePool) LOG("Couldn't get NSAutoreleasePool\n");
-        return -1;
-    }
-
-    // Get selectors
-    static void* sel_generalPasteboard;
-    if(!sel_generalPasteboard) sel_generalPasteboard = sel_registerName_fn("generalPasteboard");
-    static void* sel_clearContents;
-    if(!sel_clearContents) sel_clearContents = sel_registerName_fn("clearContents");
-    static void* sel_setString;
-    if(!sel_setString) sel_setString = sel_registerName_fn("setString:forType:");
-    static void* sel_stringWithUTF8String;
-    if(!sel_stringWithUTF8String) sel_stringWithUTF8String = sel_registerName_fn("stringWithUTF8String:");
-    static void* sel_alloc;
-    if(!sel_alloc) sel_alloc = sel_registerName_fn("alloc");
-    static void* sel_init;
-    if(!sel_init) sel_init = sel_registerName_fn("init");
-    static void* sel_drain;
-    if(!sel_drain) sel_drain = sel_registerName_fn("drain");
-    static void* sel_retain;
-    if(!sel_retain) sel_retain = sel_registerName_fn("retain");
-
-
-    if(!sel_generalPasteboard || !sel_clearContents || !sel_setString || !sel_stringWithUTF8String || !sel_alloc || !sel_init || !sel_retain){
-        if(!sel_generalPasteboard) LOG("Couldn't get SEL(generalPasteboard)\n");
-        if(!sel_clearContents) LOG("Couldn't get SEL(clearContents)\n");
-        if(!sel_setString) LOG("Couldn't get SEL(setString)\n");
-        if(!sel_stringWithUTF8String) LOG("Couldn't get SEL(stringWithUTF8String)\n");
-        if(!sel_alloc) LOG("Couldn't get SEL(alloc)\n");
-        if(!sel_init) LOG("Couldn't get SEL(init)\n");
-        if(!sel_retain) LOG("Couldn't get SEL(retain)\n");
-        return -1;
-    }
-
-    // NSPasteboard.generalPasteboard
-    static void* pasteboard;
-    if(!pasteboard) pasteboard = ((void*(*)(void*, void*))objc_msgSend_fn)(NSPasteboard, sel_generalPasteboard);
-    if(!pasteboard){
-        LOG("couldn't get generalPasteboard\n");
-        return -1;
-    }
+    ObjCClipboard* objc = get_objc_clipboard();
+    if(!objc) return -1;
 
     int result = -1;
-    void* pool = ((void*(*)(void*, void*))objc_msgSend_fn)(NSAutoreleasePool, sel_alloc);
-    pool = ((void*(*)(void*, void*))objc_msgSend_fn)(pool, sel_init);
+    void* pool = ((void*(*)(void*, void*))objc->objc_msgSend_fn)(objc->NSAutoreleasePool, objc->sel_alloc);
+    pool = ((void*(*)(void*, void*))objc->objc_msgSend_fn)(pool, objc->sel_init);
     if(!pool){
         LOG("couldn't allocate a pool\n");
         return -1;
     }
+
     // Create NSString from C string
-    void* nsstring = ((void*(*)(void*, void*, const void*))objc_msgSend_fn)(NSString, sel_stringWithUTF8String, text);
+    void* nsstring = ((void*(*)(void*, void*, const void*))objc->objc_msgSend_fn)(objc->NSString, objc->sel_stringWithUTF8String, text);
     if(!nsstring){
         LOG("couldn't make an nsstring from '%s'\n", text);
         goto finally;
     }
 
-#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
     // Clear pasteboard
-    ((long(*)(void*, void*))objc_msgSend_fn)(pasteboard, sel_clearContents);
-
-    // Try to get NSPasteboardTypeString constant
-    static void** NSPasteboardTypeString_ptr;
-    if(!NSPasteboardTypeString_ptr) NSPasteboardTypeString_ptr = (void**)dlsym(appkit, "NSPasteboardTypeString");
-    static void* pasteboardType;
-
-    if(!pasteboardType){
-        if(NSPasteboardTypeString_ptr && *NSPasteboardTypeString_ptr){
-            pasteboardType = *NSPasteboardTypeString_ptr;
-        } else {
-            // Fallback: try old API
-            static void** NSStringPboardType_ptr;
-            if(!NSStringPboardType_ptr) NSStringPboardType_ptr = (void**)dlsym(appkit, "NSStringPboardType");
-            if(NSStringPboardType_ptr && *NSStringPboardType_ptr){
-                pasteboardType = *NSStringPboardType_ptr;
-            } else {
-                // Last resort: create string with UTI
-                pasteboardType = ((void*(*)(void*, void*, void*))objc_msgSend_fn)(NSString, sel_stringWithUTF8String, "public.utf8-plain-text");
-                pasteboardType = ((void*(*)(void*, void*))objc_msgSend_fn)(pasteboardType, sel_retain);
-
-            }
-        }
-    }
-
-    if(!pasteboardType){
-        LOG("Couldn't get pasteboardType\n");
-        goto finally;
-    }
+    ((long(*)(void*, void*))objc->objc_msgSend_fn)(objc->pasteboard, objc->sel_clearContents);
 
     // Set string on pasteboard
-    _Bool ok = ((_Bool(*)(void*, void*, void*, void*))objc_msgSend_fn)(pasteboard, sel_setString, nsstring, pasteboardType);
+    _Bool ok = ((_Bool(*)(void*, void*, void*, void*))objc->objc_msgSend_fn)(objc->pasteboard, objc->sel_setString, nsstring, objc->pasteboardType);
+
     if(!ok){
         LOG("Failed to setstring the pasteboard\n");
         goto finally;
@@ -1828,7 +1863,8 @@ macos_copy_to_clipboard(const char* text, size_t len){
 
     result = 0;
     finally:;
-    ((void(*)(void*, void*))objc_msgSend_fn)(pool, sel_drain);
+    ((void(*)(void*, void*))objc->objc_msgSend_fn)(pool, objc->sel_drain);
+#pragma clang diagnostic pop
     LOG("copied to clipboard?: result=%d\n", result);
     return result;
 }
@@ -1863,6 +1899,147 @@ membuf_write(void* user_data, const void* data, size_t len){
 
     memcpy(buf->data + buf->size, data, len);
     buf->size += len;
+    return 0;
+}
+#endif
+
+// Read text from system clipboard into LongString
+// Returns 0 on success, -1 on failure
+#ifdef _WIN32
+static
+int
+read_from_clipboard(LongString* out){
+    if(!OpenClipboard(NULL)){
+        return -1;
+    }
+
+    HANDLE hData = GetClipboardData(CF_TEXT);
+    if(!hData){
+        CloseClipboard();
+        return -1;
+    }
+
+    char* clipboard_data = (char*)GlobalLock(hData);
+    if(!clipboard_data){
+        CloseClipboard();
+        return -1;
+    }
+
+    size_t len = strlen(clipboard_data);
+    char* result = malloc(len + 1);
+    if(!result){
+        GlobalUnlock(hData);
+        CloseClipboard();
+        return -1;
+    }
+
+    memcpy(result, clipboard_data, len + 1);
+
+    GlobalUnlock(hData);
+    CloseClipboard();
+
+    *out = (LongString){len, result};
+    return 0;
+}
+#elif defined(__APPLE__)
+static
+int
+read_from_clipboard(LongString* out){
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+    ObjCClipboard* objc = get_objc_clipboard();
+    if(!objc) return -1;
+
+    int result = -1;
+    void* pool = ((void*(*)(void*, void*))objc->objc_msgSend_fn)(objc->NSAutoreleasePool, objc->sel_alloc);
+    pool = ((void*(*)(void*, void*))objc->objc_msgSend_fn)(pool, objc->sel_init);
+    if(!pool){
+        return -1;
+    }
+
+    // Get string from pasteboard
+    void* nsstring = ((void*(*)(void*, void*, void*))objc->objc_msgSend_fn)(objc->pasteboard, objc->sel_stringForType, objc->pasteboardType);
+
+    if(!nsstring){
+        // No string on clipboard
+        goto finally;
+    }
+
+    // Convert NSString to C string
+    const char* utf8_str = ((const char*(*)(void*, void*))objc->objc_msgSend_fn)(nsstring, objc->sel_UTF8String);
+    if(!utf8_str){
+        goto finally;
+    }
+
+    // Copy to LongString
+    size_t len = strlen(utf8_str);
+    char* copy = malloc(len + 1);
+    if(!copy){
+        goto finally;
+    }
+
+    memcpy(copy, utf8_str, len + 1);
+    *out = (LongString){len, copy};
+    result = 0;
+
+    finally:;
+    ((void(*)(void*, void*))objc->objc_msgSend_fn)(pool, objc->sel_drain);
+    return result;
+#pragma clang diagnostic pop
+}
+#else
+static
+int
+read_from_clipboard(LongString* out){
+    // Linux - try tmux, then xclip, then xsel
+    FILE* pipe = NULL;
+
+    // Try tmux
+    if(getenv("TMUX")){
+        pipe = popen("tmux show-buffer 2>/dev/null", "r");
+        if(pipe){
+            // Check if command succeeded
+            int c = fgetc(pipe);
+            if(c == EOF){
+                pclose(pipe);
+                pipe = NULL;
+            }
+            else {
+                ungetc(c, pipe);
+            }
+        }
+    }
+
+    // Try xclip
+    if(!pipe){
+        pipe = popen("xclip -selection clipboard -o 2>/dev/null", "r");
+        if(pipe){
+            int c = fgetc(pipe);
+            if(c == EOF){
+                pclose(pipe);
+                pipe = NULL;
+            }
+            else {
+                ungetc(c, pipe);
+            }
+        }
+    }
+
+    // Try xsel
+    if(!pipe){
+        pipe = popen("xsel --clipboard --output 2>/dev/null", "r");
+    }
+
+    if(!pipe) return -1;
+
+    LongString result = read_file_streamed(pipe);
+    pclose(pipe);
+
+    if(!result.text){
+        return -1;
+    }
+
+    *out = result;
     return 0;
 }
 #endif
@@ -1984,6 +2161,103 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
 
     nav_set_message(nav, "Yanked to clipboard");
     return CMD_OK;
+}
+
+static
+int
+do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
+    DrJsonValue paste_value;
+    {
+        // Read from clipboard
+        LongString clipboard_text = {0};
+        if(read_from_clipboard(&clipboard_text) != 0){
+            nav_set_message(nav, "Error: Could not read from clipboard");
+            return CMD_ERROR;
+        }
+
+        if(clipboard_text.length == 0){
+            free((void*)clipboard_text.text);
+            nav_set_message(nav, "Error: Clipboard is empty");
+            return CMD_ERROR;
+        }
+
+        int err = parse_as_value(nav->jctx, clipboard_text.text, clipboard_text.length, &paste_value);
+        free((void*)clipboard_text.text);
+        if(err || paste_value.kind == DRJSON_ERROR){
+            nav_set_message(nav, "Error: Clipboard does not contain valid JSON");
+            return CMD_ERROR;
+        }
+        LOG("Read %zu bytes from clipboard\n", clipboard_text.length);
+    }
+    NavItem* parent = NULL;
+    size_t insert_idx = 0;
+    {
+        NavItem* item = &nav->items[cursor_pos];
+        // If cursor is on an expanded container, insert into it
+        if(nav_is_expanded(nav, item->value)){
+            parent = item;
+            insert_idx = after?drjson_len(nav->jctx, parent->value):0;
+        }
+        else {
+            // Find parent object
+            for(size_t i = cursor_pos; i > 0; i--){
+                if(nav->items[i-1].depth == item->depth)
+                    insert_idx++;
+                if(nav->items[i - 1].depth < item->depth){
+                    parent = &nav->items[i - 1];
+                    break;
+                }
+            }
+            if(!parent){
+                nav_set_message(nav, "Error: can't find parent");
+                return CMD_ERROR;
+            }
+            if(after) insert_idx++;
+        }
+    }
+    if(parent->value.kind == DRJSON_ARRAY){
+        int err = drjson_array_insert_item(nav->jctx, parent->value, insert_idx, paste_value);
+        if(err){
+            nav_set_message(nav, "Error: couldn't insert into array at index %zu", insert_idx);
+            return CMD_ERROR;
+        }
+    }
+    else {
+        if(parent->value.kind != DRJSON_OBJECT)
+            return CMD_ERROR;
+        if(paste_value.kind != DRJSON_OBJECT){
+            nav_set_message(nav, "Error: can only paste objects into objects");
+            return CMD_ERROR;
+        }
+        size_t len = drjson_len(nav->jctx, paste_value);
+        for(size_t i = 0; i < len; i++){
+            DrJsonValue key = drjson_get_by_index(nav->jctx, drjson_object_keys(paste_value), i);
+            DrJsonValue value = drjson_get_by_index(nav->jctx, drjson_object_values(paste_value), i);
+            int err = drjson_object_insert_item_at_index(nav->jctx, parent->value, key.atom, value, insert_idx);
+            if(err){
+                nav_set_message(nav, "Error: failed to insert key");
+            }
+            else {
+                insert_idx++;
+            }
+        }
+    }
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+    return CMD_OK;
+}
+
+static
+int
+cmd_paste(JsonNav* nav, const char* args, size_t args_len){
+    (void)args;
+    (void)args_len;
+
+    if(nav->item_count == 0){
+        nav_set_message(nav, "Error: Nothing to paste into");
+        return CMD_ERROR;
+    }
+    return do_paste(nav, nav->cursor_pos, 0);
 }
 
 static
@@ -2789,6 +3063,8 @@ static const StringView HELP_LINES[] = {
     SV("Clipboard:"),
     SV("  y/Y         Yank (copy) current value to clipboard"),
     SV("  :yank/:y    Same as y key"),
+    SV("  p/P         Paste from clipboard"),
+    SV("  :paste/:p   Same as p key"),
     SV(""),
     SV("Mouse:"),
     SV("  Click       Jump to item and toggle expand"),
@@ -3579,6 +3855,7 @@ sighandler(int sig){
     }
 }
 #endif
+
 
 static
 int
@@ -4496,9 +4773,14 @@ main(int argc, const char* const* argv){
                 cmd_yank(&nav, NULL, 0);
                 break;
 
+            case 'p':
+            case 'P':
+                // Paste from clipboard
+                do_paste(&nav, nav.cursor_pos, c=='p');
+                break;
+
             case 'o':
             case 'O':
-                // Insert into array
                 if(!nav.item_count) break;
 
                 {
