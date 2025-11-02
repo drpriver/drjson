@@ -134,8 +134,8 @@ struct NavItem {
     DrJsonValue value;        // The JSON value at this position
     DrJsonAtom key;           // Key if this is an object member (0 if array element)
     int depth;                // Indentation depth (for rendering)
-    int64_t index;            // Array/object index (if key.bits==0/!=0), or flat row index (if is_flat_view), -1 if neither
     _Bool is_flat_view;       // If true, this is a synthetic flat array view child
+    int64_t index;            // Array/object index (if key.bits==0/!=0), or flat row index (if is_flat_view), -1 if neither
 };
 
 // Tracks which containers (objects/arrays) are expanded
