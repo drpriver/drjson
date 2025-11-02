@@ -83,9 +83,7 @@ static struct {
     int screenw, screenh;
     _Bool intern;
     Drt drt;
-} globals = {
-    .needs_recalc = 1, .needs_rescale = 1, .needs_redisplay = 1,
-};
+} globals;
 
 enum {ITEMS_PER_ROW=16};
 
@@ -1386,7 +1384,7 @@ nav_get_current_value(const JsonNav* nav){
 // Set a message to display to the user
 static
 void
-nav_set_message(JsonNav* nav, const char* fmt, ...){
+nav_set_messagef(JsonNav* nav, const char* fmt, ...){
     va_list args;
     va_start(args, fmt);
     vsnprintf(nav->message, sizeof(nav->message), fmt, args);
@@ -1457,14 +1455,14 @@ static
 int
 cmd_open(JsonNav* nav, const char* args, size_t args_len){
     if(args_len == 0){
-        nav_set_message(nav, "Error: No filename provided");
+        nav_set_messagef(nav, "Error: No filename provided");
         return CMD_ERROR;
     }
 
     // Copy filename to null-terminated buffer
     char filepath[1024];
     if(args_len >= sizeof(filepath)){
-        nav_set_message(nav, "Error: Filename too long");
+        nav_set_messagef(nav, "Error: Filename too long");
         return CMD_ERROR;
     }
     memcpy(filepath, args, args_len);
@@ -1472,7 +1470,7 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
 
     LongString file_content = {0};
     if(read_file(filepath, &file_content) != 0){
-        nav_set_message(nav, "Error: Could not read file '%s'", filepath);
+        nav_set_messagef(nav, "Error: Could not read file '%s'", filepath);
         return CMD_ERROR;
     }
 
@@ -1492,7 +1490,7 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
     if(new_root.kind == DRJSON_ERROR){
         size_t line=0, col=0;
         drjson_get_line_column(&pctx, &line, &col);
-        nav_set_message(nav, "Error parsing '%s': %s at line %zu col %zu", filepath, new_root.err_mess, line, col);
+        nav_set_messagef(nav, "Error parsing '%s': %s at line %zu col %zu", filepath, new_root.err_mess, line, col);
         drjson_gc(nav->jctx, &nav->root, 1);
         return CMD_ERROR;
     }
@@ -1505,7 +1503,7 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
     LOG("nav->jctx->objects.count: %zu\n", nav->jctx->objects.count);
     LOG("nav->jctx->free_object: %zu\n", nav->jctx->objects.free_object);
 
-    nav_set_message(nav, "Opened '%s'", filepath);
+    nav_set_messagef(nav, "Opened '%s'", filepath);
     return CMD_OK;
 }
 
@@ -1513,14 +1511,14 @@ static
 int
 cmd_write(JsonNav* nav, const char* args, size_t args_len){
     if(args_len == 0){
-        nav_set_message(nav, "Error: No filename provided");
+        nav_set_messagef(nav, "Error: No filename provided");
         return CMD_ERROR;
     }
 
     // Copy filename to null-terminated buffer
     char filepath[1024];
     if(args_len >= sizeof(filepath)){
-        nav_set_message(nav, "Error: Filename too long");
+        nav_set_messagef(nav, "Error: Filename too long");
         return CMD_ERROR;
     }
     memcpy(filepath, args, args_len);
@@ -1529,7 +1527,7 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
     // Write JSON to file
     FILE* fp = fopen(filepath, "wb");
     if(!fp){
-        nav_set_message(nav, "Error: Could not open file '%s' for writing", filepath);
+        nav_set_messagef(nav, "Error: Could not open file '%s' for writing", filepath);
         return CMD_ERROR;
     }
 
@@ -1537,11 +1535,11 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
     int close_err = fclose(fp);
 
     if(print_err || close_err){
-        nav_set_message(nav, "Error: Failed to write to '%s'", filepath);
+        nav_set_messagef(nav, "Error: Failed to write to '%s'", filepath);
         return CMD_ERROR;
     }
 
-    nav_set_message(nav, "Wrote to '%s'", filepath);
+    nav_set_messagef(nav, "Wrote to '%s'", filepath);
     return CMD_OK;
 }
 
@@ -1579,17 +1577,17 @@ cmd_pwd(JsonNav* nav, const char* args, size_t args_len){
     #ifdef _WIN32
     DWORD len = GetCurrentDirectoryA(sizeof(cwd), cwd);
     if(len == 0 || len >= sizeof(cwd)){
-        nav_set_message(nav, "Error: Could not get current directory");
+        nav_set_messagef(nav, "Error: Could not get current directory");
         return CMD_ERROR;
     }
     #else
     if(getcwd(cwd, sizeof(cwd)) == NULL){
-        nav_set_message(nav, "Error: Could not get current directory: %s", strerror(errno));
+        nav_set_messagef(nav, "Error: Could not get current directory: %s", strerror(errno));
         return CMD_ERROR;
     }
     #endif
 
-    nav_set_message(nav, "%s", cwd);
+    nav_set_messagef(nav, "%s", cwd);
     return CMD_OK;
 }
 
@@ -1606,30 +1604,30 @@ cmd_cd(JsonNav* nav, const char* args, size_t args_len){
         #endif
 
         if(!home){
-            nav_set_message(nav, "Error: Could not determine home directory");
+            nav_set_messagef(nav, "Error: Could not determine home directory");
             return CMD_ERROR;
         }
 
         #ifdef _WIN32
         if(!SetCurrentDirectoryA(home)){
-            nav_set_message(nav, "Error: Could not change to home directory");
+            nav_set_messagef(nav, "Error: Could not change to home directory");
             return CMD_ERROR;
         }
         #else
         if(chdir(home) != 0){
-            nav_set_message(nav, "Error: Could not change to home directory: %s", strerror(errno));
+            nav_set_messagef(nav, "Error: Could not change to home directory: %s", strerror(errno));
             return CMD_ERROR;
         }
         #endif
 
-        nav_set_message(nav, "Changed to %s", home);
+        nav_set_messagef(nav, "Changed to %s", home);
         return CMD_OK;
     }
 
     // Copy directory path to null-terminated buffer
     char dirpath[1024];
     if(args_len >= sizeof(dirpath)){
-        nav_set_message(nav, "Error: Directory path too long");
+        nav_set_messagef(nav, "Error: Directory path too long");
         return CMD_ERROR;
     }
     memcpy(dirpath, args, args_len);
@@ -1637,17 +1635,17 @@ cmd_cd(JsonNav* nav, const char* args, size_t args_len){
 
     #ifdef _WIN32
     if(!SetCurrentDirectoryA(dirpath)){
-        nav_set_message(nav, "Error: Could not change directory to '%s'", dirpath);
+        nav_set_messagef(nav, "Error: Could not change directory to '%s'", dirpath);
         return CMD_ERROR;
     }
     #else
     if(chdir(dirpath) != 0){
-        nav_set_message(nav, "Error: Could not change directory to '%s': %s", dirpath, strerror(errno));
+        nav_set_messagef(nav, "Error: Could not change directory to '%s': %s", dirpath, strerror(errno));
         return CMD_ERROR;
     }
     #endif
 
-    nav_set_message(nav, "Changed to %s", dirpath);
+    nav_set_messagef(nav, "Changed to %s", dirpath);
     return CMD_OK;
 }
 
@@ -2058,7 +2056,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
     (void)args_len;
 
     if(nav->item_count == 0){
-        nav_set_message(nav, "Error: Nothing to yank");
+        nav_set_messagef(nav, "Error: Nothing to yank");
         return CMD_ERROR;
     }
 
@@ -2086,13 +2084,13 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
 
     if(print_err){
         free(buf.data);
-        nav_set_message(nav, "Error: Could not serialize value");
+        nav_set_messagef(nav, "Error: Could not serialize value");
         return CMD_ERROR;
     }
 
     if(buf.size > 10*1024*1024){  // 10MB limit
         free(buf.data);
-        nav_set_message(nav, "Error: Value too large to yank");
+        nav_set_messagef(nav, "Error: Value too large to yank");
         return CMD_ERROR;
     }
 
@@ -2100,7 +2098,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
     free(buf.data);
 
     if(result != 0){
-        nav_set_message(nav, "Error: Could not copy to clipboard");
+        nav_set_messagef(nav, "Error: Could not copy to clipboard");
         return CMD_ERROR;
     }
 
@@ -2116,14 +2114,14 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
 
     if(print_err){
         free(buf.data);
-        nav_set_message(nav, "Error: Could not serialize value");
+        nav_set_messagef(nav, "Error: Could not serialize value");
         return CMD_ERROR;
     }
 
     if(0)
     if(buf.size > 10*1024*1024){  // 10MB limit
         free(buf.data);
-        nav_set_message(nav, "Error: Value too large to yank");
+        nav_set_messagef(nav, "Error: Value too large to yank");
         return CMD_ERROR;
     }
 
@@ -2131,7 +2129,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
     free(buf.data);
 
     if(result != 0){
-        nav_set_message(nav, "Error: Could not copy to clipboard");
+        nav_set_messagef(nav, "Error: Could not copy to clipboard");
         return CMD_ERROR;
     }
 
@@ -2153,7 +2151,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
     }
 
     if(!pipe){
-        nav_set_message(nav, "Error: Could not open clipboard command (tried tmux, xclip, xsel)");
+        nav_set_messagef(nav, "Error: Could not open clipboard command (tried tmux, xclip, xsel)");
         return CMD_ERROR;
     }
 
@@ -2161,12 +2159,12 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
     int status = pclose(pipe);
 
     if(print_err || status != 0){
-        nav_set_message(nav, "Error: Could not copy to clipboard");
+        nav_set_messagef(nav, "Error: Could not copy to clipboard");
         return CMD_ERROR;
     }
     #endif
 
-    nav_set_message(nav, "Yanked to clipboard");
+    nav_set_messagef(nav, "Yanked to clipboard");
     return CMD_OK;
 }
 
@@ -2178,20 +2176,20 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
         // Read from clipboard
         LongString clipboard_text = {0};
         if(read_from_clipboard(&clipboard_text) != 0){
-            nav_set_message(nav, "Error: Could not read from clipboard");
+            nav_set_messagef(nav, "Error: Could not read from clipboard");
             return CMD_ERROR;
         }
 
         if(clipboard_text.length == 0){
             free((void*)clipboard_text.text);
-            nav_set_message(nav, "Error: Clipboard is empty");
+            nav_set_messagef(nav, "Error: Clipboard is empty");
             return CMD_ERROR;
         }
 
         int err = parse_as_value(nav->jctx, clipboard_text.text, clipboard_text.length, &paste_value);
         free((void*)clipboard_text.text);
         if(err || paste_value.kind == DRJSON_ERROR){
-            nav_set_message(nav, "Error: Clipboard does not contain valid JSON");
+            nav_set_messagef(nav, "Error: Clipboard does not contain valid JSON");
             return CMD_ERROR;
         }
         LOG("Read %zu bytes from clipboard\n", clipboard_text.length);
@@ -2216,7 +2214,7 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
                 }
             }
             if(!parent){
-                nav_set_message(nav, "Error: can't find parent");
+                nav_set_messagef(nav, "Error: can't find parent");
                 return CMD_ERROR;
             }
             if(after) insert_idx++;
@@ -2225,7 +2223,7 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
     if(parent->value.kind == DRJSON_ARRAY){
         int err = drjson_array_insert_item(nav->jctx, parent->value, insert_idx, paste_value);
         if(err){
-            nav_set_message(nav, "Error: couldn't insert into array at index %zu", insert_idx);
+            nav_set_messagef(nav, "Error: couldn't insert into array at index %zu", insert_idx);
             return CMD_ERROR;
         }
     }
@@ -2233,7 +2231,7 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
         if(parent->value.kind != DRJSON_OBJECT)
             return CMD_ERROR;
         if(paste_value.kind != DRJSON_OBJECT){
-            nav_set_message(nav, "Error: can only paste objects into objects");
+            nav_set_messagef(nav, "Error: can only paste objects into objects");
             return CMD_ERROR;
         }
         size_t len = drjson_len(nav->jctx, paste_value);
@@ -2242,7 +2240,7 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
             DrJsonValue value = drjson_get_by_index(nav->jctx, drjson_object_values(paste_value), i);
             int err = drjson_object_insert_item_at_index(nav->jctx, parent->value, key.atom, value, insert_idx);
             if(err){
-                nav_set_message(nav, "Error: failed to insert key");
+                nav_set_messagef(nav, "Error: failed to insert key");
             }
             else {
                 insert_idx++;
@@ -2261,7 +2259,7 @@ cmd_paste(JsonNav* nav, const char* args, size_t args_len){
     (void)args_len;
 
     if(nav->item_count == 0){
-        nav_set_message(nav, "Error: Nothing to paste into");
+        nav_set_messagef(nav, "Error: Nothing to paste into");
         return CMD_ERROR;
     }
     return do_paste(nav, nav->cursor_pos, 0);
@@ -2271,12 +2269,12 @@ static
 int
 cmd_query(JsonNav* nav, const char* args, size_t args_len){
     if(args_len == 0){
-        nav_set_message(nav, "Error: No query path provided");
+        nav_set_messagef(nav, "Error: No query path provided");
         return CMD_ERROR;
     }
 
     if(nav->item_count == 0){
-        nav_set_message(nav, "Error: No JSON loaded");
+        nav_set_messagef(nav, "Error: No JSON loaded");
         return CMD_ERROR;
     }
 
@@ -2284,7 +2282,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
     DrJsonPath path;
     int parse_err = drjson_path_parse(nav->jctx, args, args_len, &path);
     if(parse_err){
-        nav_set_message(nav, "Error: Invalid path syntax: %.*s", (int)args_len, args);
+        nav_set_messagef(nav, "Error: Invalid path syntax: %.*s", (int)args_len, args);
         return CMD_ERROR;
     }
 
@@ -2299,7 +2297,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
         if(seg->kind == DRJSON_PATH_KEY){
             // Navigate by key (object member)
             if(current.kind != DRJSON_OBJECT){
-                nav_set_message(nav, "Error: Cannot index non-object with key at segment %zu", seg_idx);
+                nav_set_messagef(nav, "Error: Cannot index non-object with key at segment %zu", seg_idx);
                 return CMD_ERROR;
             }
 
@@ -2308,7 +2306,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
                 const char* key_str;
                 size_t key_len;
                 drjson_get_atom_str_and_length(nav->jctx, seg->key, &key_str, &key_len);
-                nav_set_message(nav, "Error: Key '%.*s' not found", (int)key_len, key_str);
+                nav_set_messagef(nav, "Error: Key '%.*s' not found", (int)key_len, key_str);
                 return CMD_ERROR;
             }
 
@@ -2322,13 +2320,13 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
         else if(seg->kind == DRJSON_PATH_INDEX){
             // Navigate by index (array element)
             if(current.kind != DRJSON_ARRAY){
-                nav_set_message(nav, "Error: Cannot index non-array with [%lld] at segment %zu", (long long)seg->index, seg_idx);
+                nav_set_messagef(nav, "Error: Cannot index non-array with [%lld] at segment %zu", (long long)seg->index, seg_idx);
                 return CMD_ERROR;
             }
 
             DrJsonValue next = drjson_get_by_index(nav->jctx, current, seg->index);
             if(next.kind == DRJSON_ERROR){
-                nav_set_message(nav, "Error: Index [%lld] out of bounds", (long long)seg->index);
+                nav_set_messagef(nav, "Error: Index [%lld] out of bounds", (long long)seg->index);
                 return CMD_ERROR;
             }
 
@@ -2349,13 +2347,13 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
     for(size_t i = 0; i < nav->item_count; i++){
         if(drjson_eq(nav->items[i].value, current)){
             nav->cursor_pos = i;
-            nav_set_message(nav, "Navigated to: %.*s", (int)args_len, args);
+            nav_set_messagef(nav, "Navigated to: %.*s", (int)args_len, args);
             return CMD_OK;
         }
     }
 
     // This shouldn't happen, but handle it just in case
-    nav_set_message(nav, "Error: Found value but couldn't locate it in view");
+    nav_set_messagef(nav, "Error: Found value but couldn't locate it in view");
     return CMD_ERROR;
 }
 
@@ -2700,7 +2698,7 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
     }
 
     // Unknown command
-    nav_set_message(nav, "Unknown command: %.*s", (int)cmd_len, command);
+    nav_set_messagef(nav, "Unknown command: %.*s", (int)cmd_len, command);
     return CMD_ERROR;
 }
 
@@ -3920,6 +3918,10 @@ parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJsonValue* ou
 
 int
 main(int argc, const char* const* argv){
+    // Set these here instead of in static storage for bss optimization.
+    globals.needs_recalc = 1;
+    globals.needs_rescale = 1;
+    globals.needs_redisplay = 1;
     Args args = {argc?argc-1:0, argc?argv+1:NULL};
     LongString jsonpath = {0};
     ArgToParse pos_args[] = {
@@ -4277,7 +4279,7 @@ main(int argc, const char* const* argv){
                     if(parent->value.kind == DRJSON_OBJECT){
                         err = drjson_object_replace_key_atom(nav.jctx, parent->value, item->key, new_key);
                         if(err){
-                            nav_set_message(&nav, "Error: Key already exists or cannot be replaced");
+                            nav_set_messagef(&nav, "Error: Key already exists or cannot be replaced");
                             goto exit_edit_mode;
                         }
                         nav.needs_rebuild = 1;
@@ -4290,7 +4292,7 @@ main(int argc, const char* const* argv){
                 DrJsonValue new_value;
                 err = parse_as_value(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_value);
                 if(err){
-                    nav_set_message(&nav, "Error: Invalid value syntax");
+                    nav_set_messagef(&nav, "Error: Invalid value syntax");
                     goto exit_edit_mode;
                 }
                 if(nav.insert_mode == INSERT_ARRAY){
@@ -4298,7 +4300,7 @@ main(int argc, const char* const* argv){
                     NavItem* array_item = &nav.items[nav.insert_container_pos];
                     DrJsonValue array = array_item->value;
                     if(array.kind != DRJSON_ARRAY){
-                        nav_set_message(&nav, "Error: Not an array");
+                        nav_set_messagef(&nav, "Error: Not an array");
                         goto exit_edit_mode;
                     }
                     if(nav.insert_index == SIZE_MAX)
@@ -4306,10 +4308,10 @@ main(int argc, const char* const* argv){
                     else
                         err = drjson_array_insert_item(nav.jctx, array, nav.insert_index, new_value); // Insert at specific index
                     if(err){
-                        nav_set_message(&nav, "Error: Could not insert into array");
+                        nav_set_messagef(&nav, "Error: Could not insert into array");
                         goto exit_edit_mode;
                     }
-                    nav_set_message(&nav, "Item inserted");
+                    nav_set_messagef(&nav, "Item inserted");
                     nav.needs_rebuild = 1;
                     nav_rebuild(&nav);
                     goto exit_edit_mode;
@@ -4319,17 +4321,17 @@ main(int argc, const char* const* argv){
                     NavItem* object_item = &nav.items[nav.insert_container_pos];
                     DrJsonValue object = object_item->value;
                     if(object.kind != DRJSON_OBJECT){
-                        nav_set_message(&nav, "Error: Not an object");
+                        nav_set_messagef(&nav, "Error: Not an object");
                         goto exit_edit_mode;
                     }
                     size_t insert_index = nav.insert_index;
                     if(insert_index == SIZE_MAX) insert_index = drjson_len(nav.jctx, object);
                     int err = drjson_object_insert_item_at_index(nav.jctx, object, nav.insert_object_key, new_value, insert_index);
                     if(err){
-                        nav_set_message(&nav, "Error: Could not insert into object (key may already exist)");
+                        nav_set_messagef(&nav, "Error: Could not insert into object (key may already exist)");
                         goto exit_edit_mode;
                     }
-                    nav_set_message(&nav, "Item inserted");
+                    nav_set_messagef(&nav, "Item inserted");
                     nav.needs_rebuild = 1;
                     nav_rebuild(&nav);
                     goto exit_edit_mode;
@@ -4340,7 +4342,7 @@ main(int argc, const char* const* argv){
                     nav.root = new_value;
                     nav.needs_rebuild = 1;
                     nav_rebuild(&nav);
-                    nav_set_message(&nav, "Root value updated");
+                    nav_set_messagef(&nav, "Root value updated");
                     goto exit_edit_mode;
                 }
                 NavItem* parent = &nav.items[parent_idx];
@@ -4348,10 +4350,10 @@ main(int argc, const char* const* argv){
                     NavItem* item = &nav.items[nav.cursor_pos];
                     err = drjson_object_set_item_atom(nav.jctx, parent->value, item->key, new_value);
                     if(err){
-                        nav_set_message(&nav, "Error: Could not update value");
+                        nav_set_messagef(&nav, "Error: Could not update value");
                         goto exit_edit_mode;
                     }
-                    nav_set_message(&nav, "Value updated");
+                    nav_set_messagef(&nav, "Value updated");
                     nav.needs_rebuild = 1;
                     nav_rebuild(&nav);
                     goto exit_edit_mode;
@@ -4359,15 +4361,15 @@ main(int argc, const char* const* argv){
                 if(parent->value.kind == DRJSON_ARRAY){
                     NavItem* item = &nav.items[nav.cursor_pos];
                     if(item->is_flat_view){
-                        nav_set_message(&nav, "Error: Array element editing of flat views not yet supported");
+                        nav_set_messagef(&nav, "Error: Array element editing of flat views not yet supported");
                         goto exit_edit_mode;
                     }
                     err = drjson_array_set_by_index(nav.jctx, parent->value, item->index, new_value);
                     if(err){
-                        nav_set_message(&nav, "Error: Could not update value");
+                        nav_set_messagef(&nav, "Error: Could not update value");
                         goto exit_edit_mode;
                     }
-                    nav_set_message(&nav, "Value updated");
+                    nav_set_messagef(&nav, "Value updated");
                     nav.needs_rebuild = 1;
                     nav_rebuild(&nav);
                 }
@@ -4473,7 +4475,7 @@ main(int argc, const char* const* argv){
                             le_clear(&nav.edit_buffer);
                         }
                         else {
-                            nav_set_message(&nav, "Can only rename keys on object members");
+                            nav_set_messagef(&nav, "Can only rename keys on object members");
                         }
                     }
                     continue;
@@ -4502,7 +4504,7 @@ main(int argc, const char* const* argv){
                 if(c2 == 'd'){ // dd - delete current item
                     size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
                     if(parent_idx == SIZE_MAX){
-                        nav_set_message(&nav, "Cannot delete root value");
+                        nav_set_messagef(&nav, "Cannot delete root value");
                         continue;
                     }
                     NavItem* parent = &nav.items[parent_idx];
@@ -4510,10 +4512,10 @@ main(int argc, const char* const* argv){
                     if(parent->value.kind == DRJSON_OBJECT){
                         int err = drjson_object_delete_item_atom(nav.jctx, parent->value, item->key);
                         if(err){
-                            nav_set_message(&nav, "Error: Could not delete item");
+                            nav_set_messagef(&nav, "Error: Could not delete item");
                             continue;
                         }
-                        nav_set_message(&nav, "Item deleted");
+                        nav_set_messagef(&nav, "Item deleted");
                         nav.needs_rebuild = 1;
                         nav_rebuild(&nav);
                         // Move cursor up if we deleted the last item
@@ -4524,10 +4526,10 @@ main(int argc, const char* const* argv){
                     if(parent->value.kind == DRJSON_ARRAY){
                         DrJsonValue result = drjson_array_del_item(nav.jctx, parent->value, (size_t)item->index);
                         if(result.kind == DRJSON_ERROR){
-                            nav_set_message(&nav, "Error: Could not delete item");
+                            nav_set_messagef(&nav, "Error: Could not delete item");
                             continue;
                         }
-                        nav_set_message(&nav, "Item deleted");
+                        nav_set_messagef(&nav, "Item deleted");
                         nav.needs_rebuild = 1;
                         nav_rebuild(&nav);
                         // Move cursor up if we deleted the last item
@@ -4707,7 +4709,7 @@ main(int argc, const char* const* argv){
                         }
                     }
                     else {
-                        nav_set_message(&nav, "Can only rename keys on object members");
+                        nav_set_messagef(&nav, "Can only rename keys on object members");
                     }
                 }
                 break;
