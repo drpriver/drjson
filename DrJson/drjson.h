@@ -8,9 +8,9 @@
 #include <string.h>
 
 #define DRJSON_VERSION_MAJOR 3
-#define DRJSON_VERSION_MINOR 1
+#define DRJSON_VERSION_MINOR 3
 #define DRJSON_VERSION_MICRO 0
-#define DRJSON_VERSION "3.2.0"
+#define DRJSON_VERSION "3.3.0"
 
 #ifndef drj_memcpy
 #if !defined(__GNUC__) || defined(__IMPORTC__)

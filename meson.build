@@ -1,4 +1,4 @@
-project('DrJson', 'c', version: '3.2.0')
+project('DrJson', 'c', version: '3.3.0')
 COMPAT_VERSION='3.0.0' # for macos dylib
 
 if host_machine.system() == 'windows'

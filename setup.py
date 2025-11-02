@@ -25,7 +25,7 @@ with open('PyDrJson/README-pypi.md', encoding='utf-8') as fp:
 
 setup(
     name='drjson',
-    version='3.2.0',
+    version='3.3.0',
     license='Proprietary',
     description='fast json parsing',
     long_description=LONG_DESCRIPTION,
