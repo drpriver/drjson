@@ -1880,6 +1880,16 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
 
     NavItem* item = &nav->items[nav->cursor_pos];
 
+    // Determine what to yank: if item has a key, yank {key: value}, else just value
+    DrJsonValue yank_value = item->value;
+
+    if(item->key.bits != 0){
+        // Create a temporary object with {key: value}
+        DrJsonValue temp_obj = drjson_make_object(nav->jctx);
+        drjson_object_set_item_atom(nav->jctx, temp_obj, item->key, item->value);
+        yank_value = temp_obj;
+    }
+
     #ifdef _WIN32
     // Windows: use in-memory buffer
     MemBuffer buf = {0};
@@ -1888,7 +1898,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
         .write = membuf_write,
     };
 
-    int print_err = drjson_print_value(nav->jctx, &writer, item->value, 0, 0);
+    int print_err = drjson_print_value(nav->jctx, &writer, yank_value, 0, 0);
 
     if(print_err){
         free(buf.data);
@@ -1918,7 +1928,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
         .write = membuf_write,
     };
 
-    int print_err = drjson_print_value(nav->jctx, &writer, item->value, 0, DRJSON_APPEND_ZERO);
+    int print_err = drjson_print_value(nav->jctx, &writer, yank_value, 0, DRJSON_APPEND_ZERO);
 
     if(print_err){
         free(buf.data);
@@ -1963,7 +1973,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
-    int print_err = drjson_print_value_fp(nav->jctx, pipe, item->value, 0, 0);
+    int print_err = drjson_print_value_fp(nav->jctx, pipe, yank_value, 0, 0);
     int status = pclose(pipe);
 
     if(print_err || status != 0){
