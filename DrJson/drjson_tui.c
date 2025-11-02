@@ -4549,10 +4549,6 @@ main(int argc, const char* const* argv){
 
         // Handle input
         switch(c){
-            case 'q':
-            case 'Q':
-                goto finally;
-
             case CTRL_Z:
                 #ifdef _WIN32
                 #else
