@@ -3111,6 +3111,21 @@ static const StringView HELP_LINES[] = {
     SV("  Any other   Close help"),
 };
 
+// Calculate display width of UTF-8 string (counts code points, not bytes)
+static
+int
+utf8_display_width(const char* str, size_t byte_len){
+    int width = 0;
+    for(size_t i = 0; i < byte_len; i++){
+        unsigned char c = str[i];
+        // Skip UTF-8 continuation bytes (10xxxxxx)
+        if((c & 0xC0) == 0x80) continue;
+        // This is a code point start
+        width++;
+    }
+    return width;
+}
+
 // Shared help rendering function
 // Takes an array of StringView lines and renders them with pagination
 static
@@ -3135,60 +3150,94 @@ nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages
     if(end_line > total_lines) end_line = total_lines;
     int num_lines = end_line - start_line;
 
-    // Find max width needed
+    // Find max display width needed (using UTF-8 code point count)
     int max_width = 0;
     for(int i = 0; i < total_lines; i++){
-        int len = (int)help_lines[i].length;
-        if(len > max_width) max_width = len;
+        int width = utf8_display_width(help_lines[i].text, help_lines[i].length);
+        if(width > max_width) max_width = width;
     }
 
     int box_height = num_lines + 3;  // +3 for top border, bottom border, and page indicator
     int start_y = (screenh - box_height) / 2;
     if(start_y < 1) start_y = 1;
 
-    int start_x = (screenw - max_width - 4) / 2;
+    int box_width = max_width + 4;  // +4 for left/right borders and padding
+    int start_x = (screenw - box_width) / 2;
     if(start_x < 0) start_x = 0;
 
-    // Draw box background
-    for(int y = 0; y < box_height && start_y + y < screenh; y++){
-        drt_move(drt, start_x, start_y + y);
-        drt_push_state(drt);
-        drt_bg_set_8bit_color(drt, 235);
-        drt_set_8bit_color(drt, 15);
-        for(int x = 0; x < max_width + 4; x++){
-            drt_putc(drt, ' ');
-        }
-        drt_pop_state(drt);
+    // Draw top border: ┌───...───┐
+    drt_move(drt, start_x, start_y);
+    drt_puts(drt, "┌", 3);
+    for(int x = 0; x < box_width - 2; x++){
+        drt_puts(drt, "─", 3);
     }
+    drt_puts(drt, "┐", 3);
 
-    // Draw help text for current page
+    // Draw help text with side borders
     for(int i = 0; i < num_lines && start_y + i + 1 < screenh; i++){
         int line_idx = start_line + i;
-        drt_move(drt, start_x + 2, start_y + i + 1);
-        drt_push_state(drt);
-        drt_bg_set_8bit_color(drt, 235);
 
-        // Highlight headers
+        // Left border
+        drt_move(drt, start_x, start_y + i + 1);
+        drt_puts(drt, "│", 3);
+
+        // Content
+        drt_putc(drt, ' ');
+        drt_push_state(drt);
+
+        // Highlight headers with bold
         if(help_lines[line_idx].length && (help_lines[line_idx].text[help_lines[line_idx].length-1] == ':' || help_lines[line_idx].text[0] == ':')){
-            drt_set_8bit_color(drt, 11); // bright yellow
             drt_set_style(drt, DRT_STYLE_BOLD);
-        } else {
-            drt_set_8bit_color(drt, 15);
         }
 
         drt_puts_utf8(drt, help_lines[line_idx].text, help_lines[line_idx].length);
         drt_pop_state(drt);
+
+        // Padding and right border
+        int content_width = utf8_display_width(help_lines[line_idx].text, help_lines[line_idx].length);
+        int padding = box_width - 2 - 1 - content_width;  // -2 for borders, -1 for left space
+        for(int p = 0; p < padding; p++){
+            drt_putc(drt, ' ');
+        }
+        drt_puts(drt, "│", 3);
     }
 
-    // Draw page indicator at bottom
+    // Draw bottom border with optional page indicator
+    int bottom_y = start_y + num_lines + 1;
     if(num_pages > 1){
-        drt_move(drt, start_x + 2, start_y + num_lines + 1);
-        drt_push_state(drt);
-        drt_bg_set_8bit_color(drt, 235);
-        drt_set_8bit_color(drt, 8);  // gray
+        // Left border
+        drt_move(drt, start_x, bottom_y);
+        drt_puts(drt, "│", 3);
+
+        // Page indicator
+        drt_putc(drt, ' ');
+        int before_x, before_y;
+        drt_cursor(drt, &before_x, &before_y);
         drt_printf(drt, "Page %d/%d", page + 1, num_pages);
-        drt_pop_state(drt);
+        int after_x, after_y;
+        drt_cursor(drt, &after_x, &after_y);
+        int indicator_len = after_x - before_x;
+
+        // Padding
+        int padding = box_width - 2 - 1 - indicator_len;
+        for(int p = 0; p < padding; p++){
+            drt_putc(drt, ' ');
+        }
+
+        // Right border
+        drt_puts(drt, "│", 3);
+
+        // Final bottom border line
+        bottom_y++;
     }
+
+    // Draw bottom border: └───...───┘
+    drt_move(drt, start_x, bottom_y);
+    drt_puts(drt, "└", 3);
+    for(int x = 0; x < box_width - 2; x++){
+        drt_puts(drt, "─", 3);
+    }
+    drt_puts(drt, "┘", 3);
 }
 
 static
@@ -3345,7 +3394,7 @@ nav_render_flat_array_row(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int ro
 
     // Show index range with padding
     drt_push_state(drt);
-    drt_set_8bit_color(drt, 220); // yellow/gold like array indices
+    drt_set_8bit_color(drt, 3); // yellow for array indices
     drt_printf(drt, "%*lld – %*lld", max_width, (long long)start_idx, max_width, (long long)(end_idx - 1));
     drt_pop_state(drt);
     drt_puts(drt, ": ", 2);
@@ -3473,7 +3522,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
                 if(nav->insert_mode == INSERT_ARRAY){
                     // Show array index
                     drt_push_state(drt);
-                    drt_set_8bit_color(drt, 220); // yellow/gold
+                    drt_set_8bit_color(drt, 3); // yellow
                     drt_printf(drt, "%zu", nav->insert_index == SIZE_MAX ?
                               (size_t)drjson_len(nav->jctx, parent->value) : nav->insert_index);
                     drt_pop_state(drt);
@@ -3505,7 +3554,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
                         drjson_get_atom_str_and_length(nav->jctx, nav->insert_object_key, &key_str, &key_len);
 
                         drt_push_state(drt);
-                        drt_set_8bit_color(drt, 45); // cyan
+                        drt_set_8bit_color(drt, 6); // cyan
                         drt_puts(drt, key_str, key_len);
                         drt_pop_state(drt);
                         drt_puts(drt, ": ", 2);
@@ -3583,7 +3632,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
                     drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
                     if(key_str){
                         drt_push_state(drt);
-                        drt_set_8bit_color(drt, 45); // cyan
+                        drt_set_8bit_color(drt, 6); // cyan
                         drt_puts(drt, key_str, key_len);
                         drt_pop_state(drt);
                         drt_puts(drt, ": ", 2);
@@ -3592,7 +3641,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
             }
             else if(item->index >= 0){
                 drt_push_state(drt);
-                drt_set_8bit_color(drt, 220); // yellow/gold
+                drt_set_8bit_color(drt, 3); // yellow
                 drt_printf(drt, "%lld", (long long)item->index);
                 drt_pop_state(drt);
                 drt_puts(drt, ": ", 2);
@@ -3657,7 +3706,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
             if(nav->insert_mode == INSERT_ARRAY){
                 // Show array index
                 drt_push_state(drt);
-                drt_set_8bit_color(drt, 220); // yellow/gold
+                drt_set_8bit_color(drt, 3); // yellow
                 drt_printf(drt, "%zu", nav->insert_index == SIZE_MAX ?
                           (size_t)drjson_len(nav->jctx, parent->value) : nav->insert_index);
                 drt_pop_state(drt);
@@ -3689,7 +3738,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
                     drjson_get_atom_str_and_length(nav->jctx, nav->insert_object_key, &key_str, &key_len);
 
                     drt_push_state(drt);
-                    drt_set_8bit_color(drt, 45); // cyan
+                    drt_set_8bit_color(drt, 6); // cyan
                     drt_puts(drt, key_str, key_len);
                     drt_pop_state(drt);
                     drt_puts(drt, ": ", 2);
@@ -3733,14 +3782,9 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
             drt_move(drt, 0, y);
             drt_push_state(drt);
 
-            // Highlight selected item
+            // Highlight selected item with bold and underline
             if(match_idx == nav->completion_selected){
-                drt_bg_set_8bit_color(drt, 240); // lighter gray
-                drt_set_8bit_color(drt, 15);     // white text
-            }
-            else {
-                drt_bg_set_8bit_color(drt, 235); // dark gray
-                drt_set_8bit_color(drt, 250);    // light gray text
+                drt_set_style(drt, DRT_STYLE_BOLD | DRT_STYLE_UNDERLINE);
             }
 
             drt_putc(drt, ' ');
@@ -3754,7 +3798,6 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     // Render breadcrumb (JSON path) or command prompt at bottom
     drt_move(drt, 0, screenh - 1);
     drt_push_state(drt);
-    drt_bg_set_8bit_color(drt, 235); // dark gray background
 
     if(nav->command_mode){
         // Show command prompt
@@ -3766,9 +3809,9 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         show_cursor = 1;
     }
     else if(nav->has_message){
-        // Show message to user
+        // Show message to user (bold for visibility)
         drt_putc(drt, ' ');
-        drt_set_8bit_color(drt, 226); // bright yellow text for visibility
+        drt_set_style(drt, DRT_STYLE_BOLD);
         drt_puts(drt, nav->message, strlen(nav->message));
         drt_putc(drt, ' ');
     }
@@ -3778,7 +3821,6 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         size_t path_len = nav_build_json_path(nav, path_buf, sizeof(path_buf));
         if(path_len > 0){
             drt_putc(drt, ' ');
-            drt_set_8bit_color(drt, 250); // light gray text
             drt_puts(drt, path_buf, path_len);
             drt_putc(drt, ' ');
         }
