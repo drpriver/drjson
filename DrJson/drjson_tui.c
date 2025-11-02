@@ -60,6 +60,22 @@ typedef long long ssize_t;
 #endif
 #endif
 
+static inline
+void
+strip_whitespace(const char** ptext, size_t *pcount){
+    size_t count = *pcount;
+    const char* text = *ptext;
+    while(count && text[0] == ' '){
+        text++;
+        count--;
+    }
+    while(count && text[count-1] == ' '){
+        count--;
+    }
+    *ptext = text;
+    *pcount = count;
+}
+
 
 static struct {
     TermState TS;
@@ -118,10 +134,8 @@ struct NavItem {
     DrJsonValue value;        // The JSON value at this position
     DrJsonAtom key;           // Key if this is an object member (0 if array element)
     int depth;                // Indentation depth (for rendering)
-    int64_t array_index;      // Index if this is an array element (-1 if not)
-    _Bool has_key;            // Whether this item has a key (object member vs array element)
+    int64_t index;            // Array/object index (if key.bits==0/!=0), or flat row index (if is_flat_view), -1 if neither
     _Bool is_flat_view;       // If true, this is a synthetic flat array view child
-    int flat_row_index;       // For flat view items, which row (0, 1, 2, ...)
 };
 
 // Tracks which containers (objects/arrays) are expanded
@@ -187,6 +201,18 @@ struct JsonNav {
     // Inline edit mode
     _Bool edit_mode;                // In inline edit mode
     _Bool edit_key_mode;            // If true, editing key; if false, editing value
+
+    // Insert mode (for both arrays and objects)
+    enum {
+        INSERT_NONE,
+        INSERT_ARRAY,
+        INSERT_OBJECT
+    } insert_mode;
+    size_t insert_container_pos;    // Position of container (array/object) to insert into
+    size_t insert_index;            // Index to insert at (SIZE_MAX for append)
+    size_t insert_visual_pos;       // Visual position where insert buffer should render
+    DrJsonAtom insert_object_key;   // Key atom after first phase of object insertion (object-only)
+
     LineEditor edit_buffer;         // Buffer for editing value
 };
 
@@ -371,8 +397,23 @@ nav_append_item(JsonNav* nav, NavItem item){
     nav->items[nav->item_count++] = item;
 }
 
-static void nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
-                                   DrJsonAtom key, _Bool has_key, int64_t array_index);
+static
+size_t
+nav_find_parent(JsonNav* nav, size_t pos){
+    if(!pos) return SIZE_MAX;
+    if(pos >= nav->item_count) return SIZE_MAX;
+    NavItem* item = &nav->items[pos];
+    int depth = item->depth;
+    if(depth<=0) return SIZE_MAX;
+    int parent_depth = depth-1;
+    while(pos--){
+        NavItem* p = &nav->items[pos];
+        if(p->depth == parent_depth) return (size_t)(p - nav->items);
+    }
+    return SIZE_MAX;
+}
+
+static void nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth, DrJsonAtom key, int64_t index);
 
 // Check if an array should be rendered as a flat wrapped list
 // Returns true if all elements are numbers (or other simple primitives)
@@ -400,7 +441,7 @@ static
 void
 nav_rebuild(JsonNav* nav){
     nav->item_count = 0;
-    nav_rebuild_recursive(nav, nav->root, 0, (DrJsonAtom){0}, 0, -1);
+    nav_rebuild_recursive(nav, nav->root, 0, (DrJsonAtom){0}, -1);
     nav->needs_rebuild = 0;
 
     // Clamp cursor to valid range
@@ -412,8 +453,7 @@ nav_rebuild(JsonNav* nav){
 
 static
 void
-nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
-                      DrJsonAtom key, _Bool has_key, int64_t array_index){
+nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth, DrJsonAtom key, int64_t index){
     // Check if this should be rendered flat
     _Bool render_flat = 0;
     if(val.kind == DRJSON_ARRAY && nav_is_expanded(nav, val)){
@@ -425,10 +465,8 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
         .value = val,
         .key = key,
         .depth = depth,
-        .array_index = array_index,
-        .has_key = has_key,
-        .is_flat_view = 0,
-        .flat_row_index = 0
+        .index = index,
+        .is_flat_view = 0
     };
     nav_append_item(nav, item);
 
@@ -444,10 +482,8 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
                     .value = val,  // Same array value
                     .key = (DrJsonAtom){0},
                     .depth = depth + 1,
-                    .array_index = -1,
-                    .has_key = 0,
-                    .is_flat_view = 1,
-                    .flat_row_index = row
+                    .index = row,
+                    .is_flat_view = 1
                 };
                 nav_append_item(nav, flat_item);
             }
@@ -458,7 +494,7 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
             if(val.kind == DRJSON_ARRAY){
                 for(int64_t i = 0; i < len; i++){
                     DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
-                    nav_rebuild_recursive(nav, child, depth + 1, (DrJsonAtom){0}, 0, i);
+                    nav_rebuild_recursive(nav, child, depth + 1, (DrJsonAtom){0}, i);
                 }
             }
             else { // DRJSON_OBJECT
@@ -467,7 +503,7 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth,
                 for(int64_t i = 0; i < items_len; i += 2){
                     DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
                     DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
-                    nav_rebuild_recursive(nav, v, depth + 1, k.atom, 1, -1);
+                    nav_rebuild_recursive(nav, v, depth + 1, k.atom, i / 2);
                 }
             }
         }
@@ -600,7 +636,8 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
 }
 
 // Helper to recursively expand a value and all its descendants
-static void
+static
+void
 nav_expand_recursive_helper(JsonNav* nav, DrJsonValue val){
     if(!nav_is_container(val))
         return;
@@ -644,7 +681,8 @@ nav_expand_recursive(JsonNav* nav){
 }
 
 // Helper to recursively collapse a value and all its descendants
-static void
+static
+void
 nav_collapse_recursive_helper(JsonNav* nav, DrJsonValue val){
     if(!nav_is_container(val))
         return;
@@ -713,6 +751,50 @@ nav_collapse_recursive(JsonNav* nav){
     nav_rebuild(nav);
 }
 
+// Calculate visual position for container insertion
+static
+size_t
+nav_calc_insert_visual_pos(JsonNav* nav, size_t pos, size_t insert_index){
+    if(nav->item_count == 0) return 0;
+
+    NavItem* item = &nav->items[pos];
+    int depth = item->depth;
+
+    // If inserting at beginning (index 0 or O command)
+    if(insert_index == 0){
+        return pos + 1;
+    }
+
+    // If appending (index SIZE_MAX or o on container itself), find last child
+    if(insert_index == SIZE_MAX){
+        // Scan forward to find last child of this container
+        for(size_t i = pos + 1; i < nav->item_count; i++){
+            if(nav->items[i].depth <= depth){
+                // Found item at same or lower depth - insert before it
+                return i;
+            }
+        }
+        // container is last item, append at end
+        return nav->item_count;
+    }
+
+    // Inserting at specific index - find the item at insert_index
+    // and return position after it
+    for(size_t i = pos + 1; i < nav->item_count; i++){
+        NavItem* item = &nav->items[i];
+        if(item->depth <= depth){
+            // Exited the array without finding the index
+            return i;
+        }
+        if(item->depth == depth + 1 && item->index == (int64_t)insert_index){
+            // Found the item we want to insert before
+            return i;
+        }
+    }
+
+    return nav->item_count;
+}
+
 static inline
 void
 nav_jump_to_parent(JsonNav* nav, _Bool collapse){
@@ -768,7 +850,7 @@ nav_jump_to_nth_child(JsonNav* nav, int n){
 
         // Now find the target row among the flat view children
         for(size_t i = parent_pos + 1; i < nav->item_count; i++){
-            if(nav->items[i].is_flat_view && nav->items[i].flat_row_index == target_row){
+            if(nav->items[i].is_flat_view && nav->items[i].index == target_row){
                 nav->cursor_pos = i;
                 return;
             }
@@ -792,7 +874,7 @@ nav_jump_to_nth_child(JsonNav* nav, int n){
             for(size_t i = start_pos; i < nav->item_count; i++){
                 if(nav->items[i].depth < target_depth)
                     break; // Left the container
-                if(nav->items[i].is_flat_view && nav->items[i].flat_row_index == target_row){
+                if(nav->items[i].is_flat_view && nav->items[i].index == target_row){
                     nav->cursor_pos = i;
                     return;
                 }
@@ -859,7 +941,7 @@ nav_jump_to_nth_child(JsonNav* nav, int n){
                 for(size_t i = start_pos; i < nav->item_count; i++){
                     if(nav->items[i].depth < target_depth)
                         break; // Left the container
-                    if(nav->items[i].is_flat_view && nav->items[i].flat_row_index == target_row){
+                    if(nav->items[i].is_flat_view && nav->items[i].index == target_row){
                         nav->cursor_pos = i;
                         return;
                     }
@@ -1022,7 +1104,7 @@ nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t qu
     if(query_len == 0) return 0;
 
     // Check key if present
-    if(item->has_key){
+    if(item->key.bits != 0){
         const char* key_str = NULL;
         size_t key_len = 0;
         DrJsonValue key_val = drjson_atom_to_value(item->key);
@@ -1076,10 +1158,10 @@ nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t qu
 // Helper to check if a DrJsonValue matches the query
 static
 _Bool
-nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, _Bool has_key,
+nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key,
                          const char* query, size_t query_len){
     // Check key if present
-    if(has_key){
+    if(key.bits != 0){
         const char* key_str = NULL;
         size_t key_len = 0;
         DrJsonValue key_val = drjson_atom_to_value(key);
@@ -1132,12 +1214,12 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, _Bool has
 // Returns true if this value or any descendant matches the query
 static
 _Bool
-nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, _Bool has_key,
+nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key,
                               const char* query, size_t query_len){
     _Bool found_match = 0;
 
     // Check if this value matches
-    if(nav_value_matches_query(nav, val, key, has_key, query, query_len)){
+    if(nav_value_matches_query(nav, val, key, query, query_len)){
         found_match = 1;
         // Expand this container if it's a container
         if(nav_is_container(val)){
@@ -1153,7 +1235,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, _Bool
             for(int64_t i = 0; i < len; i++){
                 DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
                 // Recursively search child - if it or its descendants match, expand this container
-                if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, 0, query, query_len)){
+                if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, query, query_len)){
                     found_match = 1;
                     expansion_add(&nav->expanded, nav_get_container_id(val));
                 }
@@ -1166,7 +1248,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, _Bool
                 DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
                 DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
                 // Recursively search child - if it or its descendants match, expand this container
-                if(nav_search_recursive_helper(nav, v, k.atom, 1, query, query_len)){
+                if(nav_search_recursive_helper(nav, v, k.atom, query, query_len)){
                     found_match = 1;
                     expansion_add(&nav->expanded, nav_get_container_id(val));
                 }
@@ -1215,7 +1297,7 @@ nav_search_recursive(JsonNav* nav){
     if(nav->search_buffer.length == 0) return;
 
     // Recursively search the entire tree and expand containers with matches
-    nav_search_recursive_helper(nav, nav->root, (DrJsonAtom){0}, 0,
+    nav_search_recursive_helper(nav, nav->root, (DrJsonAtom){0},
                                  nav->search_buffer.data, nav->search_buffer.length);
 
     // Rebuild to show expanded items
@@ -1357,15 +1439,6 @@ enum {
 static
 int
 cmd_open(JsonNav* nav, const char* args, size_t args_len){
-    // Skip leading whitespace
-    while(args_len > 0 && args[0] == ' '){
-        args++;
-        args_len--;
-    }
-    while(args_len > 0 && args[args_len - 1] == ' '){
-        args_len--;
-    }
-
     if(args_len == 0){
         nav_set_message(nav, "Error: No filename provided");
         return CMD_ERROR;
@@ -1422,15 +1495,6 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
 static
 int
 cmd_write(JsonNav* nav, const char* args, size_t args_len){
-    // Skip leading whitespace
-    while(args_len > 0 && args[0] == ' '){
-        args++;
-        args_len--;
-    }
-    while(args_len > 0 && args[args_len - 1] == ' '){
-        args_len--;
-    }
-
     if(args_len == 0){
         nav_set_message(nav, "Error: No filename provided");
         return CMD_ERROR;
@@ -1515,15 +1579,6 @@ cmd_pwd(JsonNav* nav, const char* args, size_t args_len){
 static
 int
 cmd_cd(JsonNav* nav, const char* args, size_t args_len){
-    // Skip leading whitespace
-    while(args_len > 0 && args[0] == ' '){
-        args++;
-        args_len--;
-    }
-    while(args_len > 0 && args[args_len - 1] == ' '){
-        args_len--;
-    }
-
     if(args_len == 0){
         // No argument - change to home directory
         #ifdef _WIN32
@@ -1924,15 +1979,6 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
 static
 int
 cmd_query(JsonNav* nav, const char* args, size_t args_len){
-    // Skip leading whitespace
-    while(args_len > 0 && args[0] == ' '){
-        args++;
-        args_len--;
-    }
-    while(args_len > 0 && args[args_len - 1] == ' '){
-        args_len--;
-    }
-
     if(args_len == 0){
         nav_set_message(nav, "Error: No query path provided");
         return CMD_ERROR;
@@ -2327,14 +2373,7 @@ int
 nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
     if(command_len == 0) return CMD_OK;
 
-    // Skip leading/trailing whitespace
-    while(command_len > 0 && command[0] == ' '){
-        command++;
-        command_len--;
-    }
-    while(command_len > 0 && command[command_len - 1] == ' '){
-        command_len--;
-    }
+    strip_whitespace(&command, &command_len);
     if(command_len == 0) return CMD_OK;
 
     // Parse command and arguments
@@ -2364,6 +2403,7 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
             // Found matching command, call handler
             const char* args = arg_start ? arg_start : "";
             size_t args_len = arg_start ? arg_len : 0;
+            strip_whitespace(&args, &args_len);
             return commands[i].handler(nav, args, args_len);
         }
     }
@@ -2692,6 +2732,9 @@ static const StringView HELP_LINES[] = {
     SV("  cv          Edit value (empty buffer)"),
     SV("  Enter       Edit current value (prefilled)"),
     SV("  r/R         Rename key (prefilled, object members only)"),
+    SV("  dd          Delete current item"),
+    SV("  o           Insert after cursor (arrays/objects)"),
+    SV("  O           Insert before cursor (arrays/objects)"),
     SV(""),
     SV("Expand/Collapse:"),
     SV("  Space       Toggle expand/collapse"),
@@ -2915,14 +2958,14 @@ nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
 
     // Add the cursor item itself
     if(current_depth > 0 && component_count < 64){
-        if(cursor_item->has_key){
+        if(cursor_item->key.bits != 0){
             components[component_count].is_array_index = 0;
             components[component_count].key = cursor_item->key;
             component_count++;
         }
-        else if(cursor_item->array_index >= 0){
+        else if(cursor_item->index >= 0){
             components[component_count].is_array_index = 1;
-            components[component_count].index = cursor_item->array_index;
+            components[component_count].index = cursor_item->index;
             component_count++;
         }
     }
@@ -2933,14 +2976,14 @@ nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
         if(item->depth < current_depth){
             // Found a parent
             if(item->depth > 0 && component_count < 64){
-                if(item->has_key){
+                if(item->key.bits != 0){
                     components[component_count].is_array_index = 0;
                     components[component_count].key = item->key;
                     component_count++;
                 }
-                else if(item->array_index >= 0){
+                else if(item->index >= 0){
                     components[component_count].is_array_index = 1;
-                    components[component_count].index = item->array_index;
+                    components[component_count].index = item->index;
                     component_count++;
                 }
             }
@@ -3110,9 +3153,92 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     if(end_idx > nav->item_count)
         end_idx = nav->item_count;
 
+    int y_offset = 0; // Track extra lines inserted for array insertion
     for(size_t i = nav->scroll_offset; i < end_idx; i++){
         NavItem* item = &nav->items[i];
-        int y = 1 + (int)(i - nav->scroll_offset);
+        int y = 1 + (int)(i - nav->scroll_offset) + y_offset;
+
+        // Check if we should render an insert line before this item
+        if(nav->insert_mode != INSERT_NONE && nav->insert_visual_pos == i){
+            if(y < screenh - 1){ // Make sure we have room
+                drt_move(drt, 0, y);
+
+                // Get parent container depth for indentation
+                NavItem* parent = &nav->items[nav->insert_container_pos];
+                int insert_depth = parent->depth + 1;
+
+                // Indentation
+                for(int d = 0; d < insert_depth; d++){
+                    drt_puts(drt, "  ", 2);
+                }
+
+                // No expansion indicator (leaf item)
+                drt_puts(drt, "  ", 2);
+
+                // Highlight as this is where we're inserting
+                drt_push_state(drt);
+                drt_set_style(drt, DRT_STYLE_BOLD|DRT_STYLE_UNDERLINE);
+
+                if(nav->insert_mode == INSERT_ARRAY){
+                    // Show array index
+                    drt_push_state(drt);
+                    drt_set_8bit_color(drt, 220); // yellow/gold
+                    drt_printf(drt, "%zu", nav->insert_index == SIZE_MAX ?
+                              (size_t)drjson_len(nav->jctx, parent->value) : nav->insert_index);
+                    drt_pop_state(drt);
+                    drt_puts(drt, ": ", 2);
+
+                    // Render edit buffer (value)
+                    int start_x, start_y;
+                    drt_cursor(drt, &start_x, &start_y);
+                    le_render(drt, &nav->edit_buffer);
+                    cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
+                    cursor_y = y;
+                    show_cursor = 1;
+                }
+                else if(nav->insert_mode == INSERT_OBJECT){
+                    if(nav->edit_key_mode){
+                        // Entering key - show the key being typed
+                        int start_x, start_y;
+                        drt_cursor(drt, &start_x, &start_y);
+                        le_render(drt, &nav->edit_buffer);
+                        cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
+                        cursor_y = y;
+                        show_cursor = 1;
+                        drt_puts(drt, ": ", 2);
+                    }
+                    else {
+                        // Entering value - show the key we already entered
+                        const char* key_str;
+                        size_t key_len;
+                        drjson_get_atom_str_and_length(nav->jctx, nav->insert_object_key, &key_str, &key_len);
+
+                        drt_push_state(drt);
+                        drt_set_8bit_color(drt, 45); // cyan
+                        drt_puts(drt, key_str, key_len);
+                        drt_pop_state(drt);
+                        drt_puts(drt, ": ", 2);
+
+                        // Render edit buffer (value)
+                        int start_x, start_y;
+                        drt_cursor(drt, &start_x, &start_y);
+                        le_render(drt, &nav->edit_buffer);
+                        cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
+                        cursor_y = y;
+                        show_cursor = 1;
+                    }
+                }
+
+                drt_clear_to_end_of_row(drt);
+                drt_pop_state(drt);
+
+                y_offset++;
+                y++;
+
+                // Don't render more items if we've filled the screen
+                if(y >= screenh - 1) break;
+            }
+        }
 
         drt_move(drt, 0, y);
 
@@ -3147,9 +3273,9 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
 
         // Key if object member, or index if array element (skip for flat view)
         if(!item->is_flat_view){
-            if(item->has_key){
-                // If editing the key, show edit buffer here
-                if(i == nav->cursor_pos && nav->edit_mode && nav->edit_key_mode){
+            if(item->key.bits != 0){
+                // If editing the key, show edit buffer here (but not in insert mode, which renders at insertion position)
+                if(i == nav->cursor_pos && nav->edit_mode && nav->edit_key_mode && nav->insert_mode == INSERT_NONE){
                     int start_x, start_y;
                     drt_cursor(drt, &start_x, &start_y);
                     le_render(drt, &nav->edit_buffer);
@@ -3173,10 +3299,10 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
                     }
                 }
             }
-            else if(item->array_index >= 0){
+            else if(item->index >= 0){
                 drt_push_state(drt);
                 drt_set_8bit_color(drt, 220); // yellow/gold
-                drt_printf(drt, "%lld", (long long)item->array_index);
+                drt_printf(drt, "%lld", (long long)item->index);
                 drt_pop_state(drt);
                 drt_puts(drt, ": ", 2);
             }
@@ -3189,7 +3315,8 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         if(remaining < 10) remaining = 10;
 
         // Show edit buffer if this is the cursor line and we're in value edit mode
-        if(i == nav->cursor_pos && nav->edit_mode && !nav->edit_key_mode){
+        // (but not in insert mode, which renders the buffer at the insert position)
+        if(i == nav->cursor_pos && nav->edit_mode && !nav->edit_key_mode && nav->insert_mode == INSERT_NONE){
             int start_x = cx;
             le_render(drt, &nav->edit_buffer);
             cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
@@ -3199,7 +3326,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         else {
             // Use flat rendering for flat view items
             if(item->is_flat_view){
-                nav_render_flat_array_row(drt, nav->jctx, item->value, item->flat_row_index);
+                nav_render_flat_array_row(drt, nav->jctx, item->value, (int)item->index);
             }
             else {
                 nav_render_value_summary(drt, nav->jctx, item->value, remaining);
@@ -3214,8 +3341,87 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         }
     }
 
+    // Check if we should render insert line at the end (appending)
+    if(nav->insert_mode != INSERT_NONE && nav->insert_visual_pos >= end_idx && nav->insert_visual_pos >= nav->scroll_offset){
+        int y = 1 + (int)(end_idx - nav->scroll_offset) + y_offset;
+        if(y < screenh - 1){
+            drt_move(drt, 0, y);
+
+            // Get parent container depth for indentation
+            NavItem* parent = &nav->items[nav->insert_container_pos];
+            int insert_depth = parent->depth + 1;
+
+            // Indentation
+            for(int d = 0; d < insert_depth; d++){
+                drt_puts(drt, "  ", 2);
+            }
+
+            // No expansion indicator (leaf item)
+            drt_puts(drt, "  ", 2);
+
+            // Highlight as this is where we're inserting
+            drt_push_state(drt);
+            drt_set_style(drt, DRT_STYLE_BOLD|DRT_STYLE_UNDERLINE);
+
+            if(nav->insert_mode == INSERT_ARRAY){
+                // Show array index
+                drt_push_state(drt);
+                drt_set_8bit_color(drt, 220); // yellow/gold
+                drt_printf(drt, "%zu", nav->insert_index == SIZE_MAX ?
+                          (size_t)drjson_len(nav->jctx, parent->value) : nav->insert_index);
+                drt_pop_state(drt);
+                drt_puts(drt, ": ", 2);
+
+                // Render edit buffer (value)
+                int start_x, start_y;
+                drt_cursor(drt, &start_x, &start_y);
+                le_render(drt, &nav->edit_buffer);
+                cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
+                cursor_y = y;
+                show_cursor = 1;
+            }
+            else if(nav->insert_mode == INSERT_OBJECT){
+                if(nav->edit_key_mode){
+                    // Entering key - show the key being typed
+                    int start_x, start_y;
+                    drt_cursor(drt, &start_x, &start_y);
+                    le_render(drt, &nav->edit_buffer);
+                    cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
+                    cursor_y = y;
+                    show_cursor = 1;
+                    drt_puts(drt, ": ", 2);
+                }
+                else {
+                    // Entering value - show the key we already entered
+                    const char* key_str;
+                    size_t key_len;
+                    drjson_get_atom_str_and_length(nav->jctx, nav->insert_object_key, &key_str, &key_len);
+
+                    drt_push_state(drt);
+                    drt_set_8bit_color(drt, 45); // cyan
+                    drt_puts(drt, key_str, key_len);
+                    drt_pop_state(drt);
+                    drt_puts(drt, ": ", 2);
+
+                    // Render edit buffer (value)
+                    int start_x, start_y;
+                    drt_cursor(drt, &start_x, &start_y);
+                    le_render(drt, &nav->edit_buffer);
+                    cursor_x = start_x + (int)nav->edit_buffer.cursor_pos;
+                    cursor_y = y;
+                    show_cursor = 1;
+                }
+            }
+
+            drt_clear_to_end_of_row(drt);
+            drt_pop_state(drt);
+
+            y_offset++;
+        }
+    }
+
     // Clear remaining lines (but not the bottom line - that's for breadcrumb)
-    for(int y = 1 + (int)(end_idx - nav->scroll_offset); y < screenh - 1; y++){
+    for(int y = 1 + (int)(end_idx - nav->scroll_offset) + y_offset; y < screenh - 1; y++){
         drt_move(drt, 0, y);
         drt_clear_to_end_of_row(drt);
     }
@@ -3363,6 +3569,59 @@ sighandler(int sig){
     }
 }
 #endif
+
+static
+int
+parse_as_string(DrJsonContext* jctx, const char* txt, size_t len, DrJsonAtom* outatom){
+    strip_whitespace(&txt, &len);
+    if(!len || (*txt != '"' && *txt != '\''))
+        return drjson_atomize(jctx, txt, len, outatom);
+    DrJsonParseContext pctx = {
+        .cursor = txt,
+        .begin = txt,
+        .end = txt + len,
+        .depth = 0,
+        .ctx = jctx,
+    };
+    DrJsonValue new_value = drjson_parse(&pctx, 0);
+    if(new_value.kind == DRJSON_ERROR)
+        return 1;
+    if(pctx.cursor == pctx.end && new_value.kind == DRJSON_STRING){
+        *outatom = new_value.atom;
+        return 0;
+    }
+    return drjson_atomize(jctx, txt, len, outatom);
+}
+
+static
+int
+parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJsonValue* outvalue){
+    strip_whitespace(&txt, &len);
+    if(!len) return 1;
+    DrJsonParseContext pctx = {
+        .cursor = txt,
+        .begin = txt,
+        .end = txt + len,
+        .depth = 0,
+        .ctx = jctx,
+    };
+    DrJsonValue new_value = drjson_parse(&pctx, 0);
+    if(new_value.kind == DRJSON_ERROR)
+        return 1;
+    if(pctx.cursor != pctx.end){
+        if(len && (*txt != '"' && *txt != '\\') && new_value.kind == DRJSON_STRING){
+            DrJsonAtom at;
+            int err = drjson_atomize(jctx, txt, len, &at);
+            if(err) return err;
+            new_value = drjson_atom_to_value(at);
+        }
+        else {
+            return 1;
+        }
+    }
+    *outvalue = new_value;
+    return 0;
+}
 
 
 int
@@ -3588,12 +3847,10 @@ main(int argc, const char* const* argv){
                 // Perform search (recursive if in recursive mode)
                 _Bool recursive = (nav.search_mode == SEARCH_RECURSIVE);
                 nav.search_mode = SEARCH_INACTIVE;
-                if(recursive){
+                if(recursive)
                     nav_search_recursive(&nav);
-                }
-                else {
+                else
                     nav_search(&nav);
-                }
                 nav_center_cursor(&nav, globals.screenh);
                 continue;
             }
@@ -3703,192 +3960,129 @@ main(int argc, const char* const* argv){
                 // Cancel edit
                 nav.edit_mode = 0;
                 nav.edit_key_mode = 0;
+                nav.insert_mode = INSERT_NONE;
                 le_clear(&nav.edit_buffer);
                 continue;
             }
             else if(c == ENTER || c == CTRL_J){
-                // Commit the edit
-                if(nav.item_count > 0){
+                int err;
+                if(nav.edit_key_mode){
+                    DrJsonAtom new_key = {0};
+                    err = parse_as_string(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_key);
+                    if(nav.insert_mode == INSERT_OBJECT){
+                        // Store the key and switch to value editing
+                        nav.insert_object_key = new_key;
+                        nav.edit_key_mode = 0;
+                        le_clear(&nav.edit_buffer);
+                        continue; // Stay in edit mode but now editing value
+                    }
+                    // Find parent object and replace the key
+                    size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
+                    if(parent_idx == SIZE_MAX) break;
+                    NavItem* parent = &nav.items[parent_idx];
                     NavItem* item = &nav.items[nav.cursor_pos];
-
-                    if(nav.edit_key_mode){
-                        // Editing a key - if quoted, parse as JSON; otherwise treat as raw key name
-                        DrJsonAtom new_key = {0};
-                        int err = 0;
-
-                        // Check if the buffer starts with a quote
-                        if(nav.edit_buffer.length > 0 &&
-                           (nav.edit_buffer.data[0] == '"' || nav.edit_buffer.data[0] == '\'')){
-                            // Parse as JSON string
-                            DrJsonParseContext pctx = {
-                                .cursor = nav.edit_buffer.data,
-                                .begin = nav.edit_buffer.data,
-                                .end = nav.edit_buffer.data + nav.edit_buffer.length,
-                                .depth = 0,
-                                .ctx = nav.jctx,
-                            };
-                            DrJsonValue parsed = drjson_parse(&pctx, 0);
-
-                            if(parsed.kind == DRJSON_ERROR){
-                                nav_set_message(&nav, "Error: Invalid quoted string syntax");
-                                err = 1;
-                            }
-                            else if(parsed.kind != DRJSON_STRING){
-                                nav_set_message(&nav, "Error: Expected string");
-                                err = 1;
-                            }
-                            else {
-                                // Check that we consumed all input (skip trailing whitespace)
-                                while(pctx.cursor < pctx.end && (*pctx.cursor == ' ' || *pctx.cursor == '\t' || *pctx.cursor == '\n' || *pctx.cursor == '\r')){
-                                    pctx.cursor++;
-                                }
-                                if(pctx.cursor < pctx.end){
-                                    nav_set_message(&nav, "Error: Extra text after key");
-                                    err = 1;
-                                }
-                                else {
-                                    new_key = parsed.atom;
-                                }
-                            }
+                    if(parent->value.kind == DRJSON_OBJECT){
+                        err = drjson_object_replace_key_atom(nav.jctx, parent->value, item->key, new_key);
+                        if(err){
+                            nav_set_message(&nav, "Error: Key already exists or cannot be replaced");
+                            goto exit_edit_mode;
                         }
-                        else {
-                            // Treat entire buffer as key name (no quotes needed)
-                            if(nav.edit_buffer.length == 0){
-                                nav_set_message(&nav, "Error: Key cannot be empty");
-                                err = 1;
-                            }
-                            else {
-                                err = drjson_atomize(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_key);
-                                if(err){
-                                    nav_set_message(&nav, "Error: Could not create key atom");
-                                }
-                            }
-                        }
-
-                        if(!err){
-
-                            // Find parent object and replace the key
-                            if(item->has_key && item->depth > 0){
-                                for(size_t i = nav.cursor_pos; i > 0; i--){
-                                    if(nav.items[i - 1].depth < item->depth){
-                                        NavItem* parent = &nav.items[i - 1];
-                                        if(parent->value.kind == DRJSON_OBJECT){
-                                            int err = drjson_object_replace_key_atom(nav.jctx, parent->value, item->key, new_key);
-                                            if(err){
-                                                nav_set_message(&nav, "Error: Key already exists or cannot be replaced");
-                                            }
-                                            else {
-                                                nav_set_message(&nav, "Key renamed");
-                                                nav.needs_rebuild = 1;
-                                                nav_rebuild(&nav);
-                                            }
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        nav.needs_rebuild = 1;
+                        nav_rebuild(&nav);
                     }
-                    else {
-                        // Editing a value - parse the new value
-                        DrJsonParseContext pctx = {
-                            .cursor = nav.edit_buffer.data,
-                            .begin = nav.edit_buffer.data,
-                            .end = nav.edit_buffer.data + nav.edit_buffer.length,
-                            .depth = 0,
-                            .ctx = nav.jctx,
-                        };
-                        DrJsonValue new_value = drjson_parse(&pctx, 0);
-
-                        if(new_value.kind == DRJSON_ERROR){
-                            nav_set_message(&nav, "Error: Invalid value syntax");
-                        }
-                        else {
-                            // Check that we consumed all input (skip trailing whitespace)
-                            while(pctx.cursor < pctx.end && (*pctx.cursor == ' ' || *pctx.cursor == '\t' || *pctx.cursor == '\n' || *pctx.cursor == '\r')){
-                                pctx.cursor++;
-                            }
-                            if(pctx.cursor < pctx.end){
-                                // There's extra text. If we parsed a bare identifier (string),
-                                // treat the entire buffer as a bare identifier instead
-                                if(new_value.kind == DRJSON_STRING && nav.edit_buffer.data[0] != '"' && nav.edit_buffer.data[0] != '\''){
-                                    // Re-parse entire buffer as a bare identifier
-                                    DrJsonAtom atom;
-                                    int err = drjson_atomize(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &atom);
-                                    if(err){
-                                        nav_set_message(&nav, "Error: Could not create string");
-                                    }
-                                    else {
-                                        new_value = drjson_atom_to_value(atom);
-                                    }
-                                }
-                                else {
-                                    nav_set_message(&nav, "Error: Extra text after value");
-                                    new_value.kind = DRJSON_ERROR; // Mark as error so we don't proceed
-                                }
-                            }
-                            if(new_value.kind != DRJSON_ERROR){
-                                // Update the value in its parent
-                                if(item->has_key && item->depth > 0){
-                                    // It's an object member, find parent and update
-                                    // Find parent object by searching backwards
-                                    for(size_t i = nav.cursor_pos; i > 0; i--){
-                                        if(nav.items[i - 1].depth < item->depth){
-                                            NavItem* parent = &nav.items[i - 1];
-                                            if(parent->value.kind == DRJSON_OBJECT){
-                                                int err = drjson_object_set_item_atom(nav.jctx, parent->value, item->key, new_value);
-                                                if(err){
-                                                    nav_set_message(&nav, "Error: Could not update value");
-                                                }
-                                                else {
-                                                    nav_set_message(&nav, "Value updated");
-                                                    nav.needs_rebuild = 1;
-                                                    nav_rebuild(&nav);
-                                                }
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                                else if(!item->has_key && item->depth > 0){
-                                    // It's an array member, find parent and update
-                                    // Find parent array by searching backwards
-                                    for(size_t i = nav.cursor_pos; i > 0; i--){
-                                        if(nav.items[i - 1].depth < item->depth){
-                                            NavItem* parent = &nav.items[i - 1];
-                                            if(parent->value.kind == DRJSON_ARRAY){
-                                                if(!item->is_flat_view){
-                                                    int err = drjson_array_set_by_index(nav.jctx, parent->value, item->array_index, new_value);
-                                                    if(err){
-                                                        nav_set_message(&nav, "Error: Could not update value");
-                                                    }
-                                                    else {
-                                                        nav_set_message(&nav, "Value updated");
-                                                        nav.needs_rebuild = 1;
-                                                        nav_rebuild(&nav);
-                                                    }
-                                                }
-                                                else {
-                                                    nav_set_message(&nav, "Error: Array element editing of flat views not yet supported");
-                                                }
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                                else {
-                                    // It's the root value
-                                    nav.root = new_value;
-                                    nav.needs_rebuild = 1;
-                                    nav_rebuild(&nav);
-                                    nav_set_message(&nav, "Root value updated");
-                                }
-                            }
-                        }
-                    }
+                    goto exit_edit_mode;
                 }
+
+                // Commit the edit
+                DrJsonValue new_value;
+                err = parse_as_value(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_value);
+                if(err){
+                    nav_set_message(&nav, "Error: Invalid value syntax");
+                    goto exit_edit_mode;
+                }
+                if(nav.insert_mode == INSERT_ARRAY){
+                    // Insert into the array
+                    NavItem* array_item = &nav.items[nav.insert_container_pos];
+                    DrJsonValue array = array_item->value;
+                    if(array.kind != DRJSON_ARRAY){
+                        nav_set_message(&nav, "Error: Not an array");
+                        goto exit_edit_mode;
+                    }
+                    if(nav.insert_index == SIZE_MAX)
+                        err = drjson_array_push_item(nav.jctx, array, new_value); // Append to end
+                    else
+                        err = drjson_array_insert_item(nav.jctx, array, nav.insert_index, new_value); // Insert at specific index
+                    if(err){
+                        nav_set_message(&nav, "Error: Could not insert into array");
+                        goto exit_edit_mode;
+                    }
+                    nav_set_message(&nav, "Item inserted");
+                    nav.needs_rebuild = 1;
+                    nav_rebuild(&nav);
+                    goto exit_edit_mode;
+                }
+                if(nav.insert_mode == INSERT_OBJECT){
+                    // Insert into the object at the specified index
+                    NavItem* object_item = &nav.items[nav.insert_container_pos];
+                    DrJsonValue object = object_item->value;
+                    if(object.kind != DRJSON_OBJECT){
+                        nav_set_message(&nav, "Error: Not an object");
+                        goto exit_edit_mode;
+                    }
+                    size_t insert_index = nav.insert_index;
+                    if(insert_index == SIZE_MAX) insert_index = drjson_len(nav.jctx, object);
+                    int err = drjson_object_insert_item_at_index(nav.jctx, object, nav.insert_object_key, new_value, insert_index);
+                    if(err){
+                        nav_set_message(&nav, "Error: Could not insert into object (key may already exist)");
+                        goto exit_edit_mode;
+                    }
+                    nav_set_message(&nav, "Item inserted");
+                    nav.needs_rebuild = 1;
+                    nav_rebuild(&nav);
+                    goto exit_edit_mode;
+                }
+                size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
+                if(parent_idx == SIZE_MAX){
+                    // it's the root
+                    nav.root = new_value;
+                    nav.needs_rebuild = 1;
+                    nav_rebuild(&nav);
+                    nav_set_message(&nav, "Root value updated");
+                    goto exit_edit_mode;
+                }
+                NavItem* parent = &nav.items[parent_idx];
+                if(parent->value.kind == DRJSON_OBJECT){
+                    NavItem* item = &nav.items[nav.cursor_pos];
+                    err = drjson_object_set_item_atom(nav.jctx, parent->value, item->key, new_value);
+                    if(err){
+                        nav_set_message(&nav, "Error: Could not update value");
+                        goto exit_edit_mode;
+                    }
+                    nav_set_message(&nav, "Value updated");
+                    nav.needs_rebuild = 1;
+                    nav_rebuild(&nav);
+                    goto exit_edit_mode;
+                }
+                if(parent->value.kind == DRJSON_ARRAY){
+                    NavItem* item = &nav.items[nav.cursor_pos];
+                    if(item->is_flat_view){
+                        nav_set_message(&nav, "Error: Array element editing of flat views not yet supported");
+                        goto exit_edit_mode;
+                    }
+                    err = drjson_array_set_by_index(nav.jctx, parent->value, item->index, new_value);
+                    if(err){
+                        nav_set_message(&nav, "Error: Could not update value");
+                        goto exit_edit_mode;
+                    }
+                    nav_set_message(&nav, "Value updated");
+                    nav.needs_rebuild = 1;
+                    nav_rebuild(&nav);
+                }
+
+                exit_edit_mode:;
                 nav.edit_mode = 0;
                 nav.edit_key_mode = 0;
+                nav.insert_mode = INSERT_NONE;
                 le_clear(&nav.edit_buffer);
                 continue;
             }
@@ -3980,7 +4174,7 @@ main(int argc, const char* const* argv){
                     // ck - edit key (empty buffer)
                     if(nav.item_count > 0){
                         NavItem* item = &nav.items[nav.cursor_pos];
-                        if(item->has_key && item->depth > 0){
+                        if(item->key.bits != 0 && item->depth > 0){
                             nav.edit_mode = 1;
                             nav.edit_key_mode = 1;
                             le_clear(&nav.edit_buffer);
@@ -4002,6 +4196,55 @@ main(int argc, const char* const* argv){
                 }
             }
             // If not a recognized c command, ignore
+            le_clear(&count_buffer);
+            continue;
+        }
+
+        // Handle 'd' prefix for delete commands
+        if(c == 'd'){
+            int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
+            int r2 = get_input(&globals.TS, &globals.needs_rescale, &c2, &cx2, &cy2, &magnitude2);
+            if(r2 == -1) goto finally;
+            if(r2){
+                if(c2 == 'd'){ // dd - delete current item
+                    size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
+                    if(parent_idx == SIZE_MAX){
+                        nav_set_message(&nav, "Cannot delete root value");
+                        continue;
+                    }
+                    NavItem* parent = &nav.items[parent_idx];
+                    NavItem* item = &nav.items[nav.cursor_pos];
+                    if(parent->value.kind == DRJSON_OBJECT){
+                        int err = drjson_object_delete_item_atom(nav.jctx, parent->value, item->key);
+                        if(err){
+                            nav_set_message(&nav, "Error: Could not delete item");
+                            continue;
+                        }
+                        nav_set_message(&nav, "Item deleted");
+                        nav.needs_rebuild = 1;
+                        nav_rebuild(&nav);
+                        // Move cursor up if we deleted the last item
+                        if(nav.cursor_pos >= nav.item_count && nav.cursor_pos > 0){
+                            nav.cursor_pos--;
+                        }
+                    }
+                    if(parent->value.kind == DRJSON_ARRAY){
+                        DrJsonValue result = drjson_array_del_item(nav.jctx, parent->value, (size_t)item->index);
+                        if(result.kind == DRJSON_ERROR){
+                            nav_set_message(&nav, "Error: Could not delete item");
+                            continue;
+                        }
+                        nav_set_message(&nav, "Item deleted");
+                        nav.needs_rebuild = 1;
+                        nav_rebuild(&nav);
+                        // Move cursor up if we deleted the last item
+                        if(nav.cursor_pos >= nav.item_count && nav.cursor_pos > 0)
+                            nav.cursor_pos--;
+                    }
+                    continue;
+                }
+            }
+            // If not a recognized d command, ignore
             le_clear(&count_buffer);
             continue;
         }
@@ -4159,7 +4402,7 @@ main(int argc, const char* const* argv){
                 if(nav.item_count > 0){
                     NavItem* item = &nav.items[nav.cursor_pos];
                     // Only allow renaming keys for object members
-                    if(item->has_key && item->depth > 0){
+                    if(item->key.bits != 0 && item->depth > 0){
                         nav.edit_mode = 1;
                         nav.edit_key_mode = 1;
                         le_clear(&nav.edit_buffer);
@@ -4241,6 +4484,53 @@ main(int argc, const char* const* argv){
             case 'Y':
                 // Yank (copy) current value to clipboard
                 cmd_yank(&nav, NULL, 0);
+                break;
+
+            case 'o':
+            case 'O':
+                // Insert into array
+                if(!nav.item_count) break;
+
+                {
+                    NavItem* item = &nav.items[nav.cursor_pos];
+                    NavItem* parent = NULL;
+                    size_t insert_idx = 0;
+                    size_t insert_container_pos = nav.cursor_pos;
+                    // If cursor is on an expanded container, insert into it
+                    if(nav_is_expanded(&nav, item->value)){
+                        parent = item;
+                        insert_idx = c == 'o'?SIZE_MAX:0;
+                    }
+                    else {
+                        // Find parent object
+                        size_t parent_pos = 0;
+                        for(size_t i = nav.cursor_pos; i > 0; i--){
+                            if(nav.items[i-1].depth == item->depth)
+                                insert_idx++;
+                            if(nav.items[i - 1].depth < item->depth){
+                                parent = &nav.items[i - 1];
+                                parent_pos = i - 1;
+                                break;
+                            }
+                        }
+                        if(!parent) break; // bug
+                        if(c == 'o') insert_idx++;
+                        insert_container_pos = parent_pos;
+                    }
+                    nav.insert_index = insert_idx;
+                    nav.edit_mode = 1;
+                    nav.edit_key_mode = parent->value.kind == DRJSON_OBJECT;
+                    nav.insert_container_pos = insert_container_pos;
+                    le_clear(&nav.edit_buffer);
+                    nav.insert_mode = parent->value.kind == DRJSON_OBJECT? INSERT_OBJECT : INSERT_ARRAY;
+                    nav.insert_visual_pos = nav_calc_insert_visual_pos(&nav, nav.insert_container_pos, nav.insert_index);
+
+                    // Ensure the insert position is visible on screen
+                    if(nav.insert_visual_pos < nav.scroll_offset)
+                        nav.scroll_offset = nav.insert_visual_pos;
+                    else if(nav.insert_visual_pos >= nav.scroll_offset + (size_t)(globals.screenh - 2))
+                        nav.scroll_offset = nav.insert_visual_pos - (size_t)(globals.screenh - 3);
+                }
                 break;
 
             case LCLICK_DOWN:

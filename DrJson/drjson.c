@@ -662,7 +662,7 @@ drjson_stdc_allocator(void){
 // NOTE: we consider commas and colons to be whitespace ;)
 static inline
 void
-skip_whitespace(DrJsonParseContext* ctx){
+drj_skip_whitespace(DrJsonParseContext* ctx){
     const char* cursor = ctx->cursor;
     const char* end = ctx->end;
     strip:
@@ -741,7 +741,7 @@ drj_make_atom_val(DrJsonParseContext* ctx, const char* str, size_t len){
 static inline
 DrJsonValue
 parse_string(DrJsonParseContext* ctx){
-    skip_whitespace(ctx);
+    drj_skip_whitespace(ctx);
     if(ctx->cursor == ctx->end)
         return drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "eof when beginning parsing string");
     const char* string_start;
@@ -824,13 +824,13 @@ parse_object(DrJsonParseContext* ctx){
     }
     DrJsonValue result = drjson_make_object(ctx->ctx);
     DrJsonValue error = {0};
-    skip_whitespace(ctx);
+    drj_skip_whitespace(ctx);
     while(!drj_match(ctx, '}')){
         if(unlikely(ctx->cursor == ctx->end)){
             error = drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "Eof before closing '}'");
             goto cleanup;
         }
-        skip_whitespace(ctx);
+        drj_skip_whitespace(ctx);
         DrJsonValue key = parse_string(ctx);
         if(unlikely(key.kind == DRJSON_ERROR)){
             error = key;
@@ -846,7 +846,7 @@ parse_object(DrJsonParseContext* ctx){
             error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate space for an item while setting member of an object");
             goto cleanup;
         }
-        skip_whitespace(ctx);
+        drj_skip_whitespace(ctx);
     }
     if(ctx->_read_only_objects)
         result = drj_intern_object(ctx->ctx, result, 1);
@@ -861,7 +861,7 @@ parse_array(DrJsonParseContext* ctx){
     if(!drj_match(ctx, '[')) return drjson_make_error(DRJSON_ERROR_INVALID_CHAR, "Expected a '[' to begin an array");
     DrJsonValue result = drjson_make_array(ctx->ctx);
     DrJsonValue error = {0};
-    skip_whitespace(ctx);
+    drj_skip_whitespace(ctx);
     while(!drj_match(ctx, ']')){
         if(unlikely(ctx->cursor == ctx->end)){
             error = drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "Eof before closing ']'");
@@ -877,7 +877,7 @@ parse_array(DrJsonParseContext* ctx){
             error = drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to push an item onto an array");
             goto cleanup;
         }
-        skip_whitespace(ctx);
+        drj_skip_whitespace(ctx);
     }
     if(ctx->_read_only_objects)
         result = drj_intern_array(ctx->ctx, result, 1);
@@ -1081,7 +1081,7 @@ drj_parse(DrJsonParseContext* ctx){
     ctx->depth++;
     if(unlikely(ctx->depth > 100))
         return drjson_make_error(DRJSON_ERROR_TOO_DEEP, "Too many levels of nesting.");
-    skip_whitespace(ctx);
+    drj_skip_whitespace(ctx);
     DrJsonValue result;
     if(ctx->cursor == ctx->end)
         return drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "Eof before any values");
@@ -1158,8 +1158,8 @@ drjson_parse_braceless_object(DrJsonParseContext* ctx){
     DrJsonValue result = drjson_make_object(ctx->ctx);
     DrJsonValue error = {0};
     ctx->depth++;
-    skip_whitespace(ctx);
-    for(skip_whitespace(ctx); ctx->cursor != ctx->end; skip_whitespace(ctx)){
+    drj_skip_whitespace(ctx);
+    for(drj_skip_whitespace(ctx); ctx->cursor != ctx->end; drj_skip_whitespace(ctx)){
         DrJsonValue key = parse_string(ctx);
         if(unlikely(key.kind == DRJSON_ERROR)){
             error = key;
