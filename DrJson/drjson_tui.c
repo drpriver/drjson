@@ -4783,8 +4783,8 @@ main(int argc, const char* const* argv){
                 break;
 
             case '/':
-                // Enter search mode
-                nav.search_mode = SEARCH_NORMAL;
+                // Enter search mode (always recursive)
+                nav.search_mode = SEARCH_RECURSIVE;
                 le_clear(&nav.search_buffer);
                 break;
 
@@ -4796,9 +4796,35 @@ main(int argc, const char* const* argv){
                 break;
 
             case '*':
-                // Enter recursive search mode (same as / but will search recursively)
-                nav.search_mode = SEARCH_RECURSIVE;
-                le_clear(&nav.search_buffer);
+                // Search for the thing under the cursor
+                if(nav.item_count > 0){
+                    NavItem* item = &nav.items[nav.cursor_pos];
+                    const char* search_text = NULL;
+                    size_t search_len = 0;
+
+                    // Try to get the key first
+                    if(item->key.bits != 0){
+                        DrJsonValue key_val = drjson_atom_to_value(item->key);
+                        drjson_get_str_and_len(nav.jctx, key_val, &search_text, &search_len);
+                    }
+                    // If no key, try to get the value if it's a string
+                    else if(item->value.kind == DRJSON_STRING){
+                        drjson_get_str_and_len(nav.jctx, item->value, &search_text, &search_len);
+                    }
+                    if(0)LOG("searching for '%.*s'\n", (int)search_len, search_text);
+
+                    // If we found text, search for it
+                    if(search_text && search_len > 0){
+                        le_clear(&nav.search_buffer);
+                        // Copy the text to the search buffer
+                        for(size_t i = 0; i < search_len && i < sizeof(nav.search_buffer.data) - 1; i++){
+                            le_append_char(&nav.search_buffer, search_text[i]);
+                        }
+                        // Perform recursive search immediately
+                        nav_search_recursive(&nav);
+                        nav_center_cursor(&nav, globals.screenh);
+                    }
+                }
                 break;
 
             case 'n':
