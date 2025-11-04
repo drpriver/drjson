@@ -149,6 +149,7 @@ typedef struct JsonNav JsonNav;
 struct JsonNav {
     DrJsonContext* jctx;      // DrJson context
     DrJsonValue root;         // Root document value
+    char filename[256];       // Name of file being viewed
 
     // Flattened view (rebuilt when expansion state changes)
     NavItem* items;           // Dynamic array of visible items
@@ -536,12 +537,22 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth, DrJsonAtom key, 
 
 static inline
 void
-nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root){
+nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filename){
     *nav = (JsonNav){
         .jctx = jctx,
         .root = root,
         .needs_rebuild = 1,
     };
+    // Copy filename
+    if(filename){
+        size_t len = strlen(filename);
+        if(len >= sizeof(nav->filename)) len = sizeof(nav->filename) - 1;
+        memcpy(nav->filename, filename, len);
+        nav->filename[len] = '\0';
+    }
+    else {
+        nav->filename[0] = '\0';
+    }
     // Expand root document by default if it's a container
     if(nav_is_container(root)){
         expansion_add(&nav->expanded, nav_get_container_id(root));
@@ -1495,6 +1506,12 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
     nav->root = new_root;
+    // Update filename
+    size_t len = strlen(filepath);
+    if(len >= sizeof(nav->filename)) len = sizeof(nav->filename) - 1;
+    memcpy(nav->filename, filepath, len);
+    nav->filename[len] = '\0';
+
     nav_reinit(nav);
     LOG("gc\n");
     drjson_gc(nav->jctx, &nav->root, 1);
@@ -3464,11 +3481,14 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         show_cursor = 1;
     }
     else if(nav->search_match_count > 0){
-        drt_printf(drt, " DrJson TUI — %zu items — Match %zu/%zu ",
+        drt_printf(drt, " %s — %zu items — Match %zu/%zu ",
+                   nav->filename[0] ? nav->filename : "DrJson TUI",
                    nav->item_count, nav->current_match_idx + 1, nav->search_match_count);
     }
     else {
-        drt_printf(drt, " DrJson TUI — %zu items ", nav->item_count);
+        drt_printf(drt, " %s — %zu items ",
+                   nav->filename[0] ? nav->filename : "DrJson TUI",
+                   nav->item_count);
     }
 
     // Show count accumulator if non-zero (right after main status)
@@ -4097,7 +4117,7 @@ main(int argc, const char* const* argv){
     }
     // Initialize navigation
     JsonNav nav;
-    nav_init(&nav, jctx, document);
+    nav_init(&nav, jctx, document, jsonpath.text);
 
     // Count buffer for vim-style numeric prefixes
     LineEditor count_buffer;
