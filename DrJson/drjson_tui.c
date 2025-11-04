@@ -136,12 +136,10 @@ struct NavItem {
     int64_t index;            // Array/object index (if key.bits==0/!=0), or flat row index (if is_flat_view), -1 if neither
 };
 
-// Tracks which containers (objects/arrays) are expanded
-// Uses the unique object_idx/array_idx as identifiers
-typedef struct ExpansionSet ExpansionSet;
-struct ExpansionSet {
-    uint64_t* ids;              // Array of expanded container IDs
-    size_t capacity;          // Allocated capacity
+typedef struct BitSet BitSet;
+struct BitSet {
+    uint64_t* ids;
+    size_t capacity;
 };
 
 // Main navigation state
@@ -157,7 +155,7 @@ struct JsonNav {
     size_t item_capacity;     // Allocated capacity
 
     // Expansion tracking
-    ExpansionSet expanded;    // Set of expanded container IDs
+    BitSet expanded;    // Set of expanded container IDs
 
     // Cursor and viewport
     size_t cursor_pos;        // Current cursor position in items array
@@ -304,7 +302,7 @@ finally:
 
 static inline
 void
-expansion_ensure_capacity(ExpansionSet* set, size_t id){
+bs_ensure_capacity(BitSet* set, size_t id){
     size_t idx = id / 64;
     if(idx >= set->capacity){
         size_t new_capacity = idx + 1;
@@ -329,7 +327,7 @@ expansion_ensure_capacity(ExpansionSet* set, size_t id){
 
 static inline
 _Bool
-expansion_contains(const ExpansionSet* set, size_t id){
+bs_contains(const BitSet* set, size_t id){
     size_t bit = id & 63;
     size_t idx = id / 64;
     if(idx >= set->capacity) return 0;
@@ -339,16 +337,16 @@ expansion_contains(const ExpansionSet* set, size_t id){
 
 static inline
 void
-expansion_add(ExpansionSet* set, size_t id){
+bs_add(BitSet* set, size_t id){
     size_t bit = id & 63;
     size_t idx = id / 64;
-    expansion_ensure_capacity(set, id);
+    bs_ensure_capacity(set, id);
     set->ids[idx] |= 1lu << bit;
 }
 
 static inline
 void
-expansion_remove(ExpansionSet* set, size_t id){
+bs_remove(BitSet* set, size_t id){
     size_t bit = id & 63;
     size_t idx = id / 64;
     if(idx >= set->capacity) return; // Nothing to remove
@@ -357,22 +355,22 @@ expansion_remove(ExpansionSet* set, size_t id){
 
 static inline
 void
-expansion_toggle(ExpansionSet* set, size_t id){
+bs_toggle(BitSet* set, size_t id){
     size_t bit = id & 63;
     size_t idx = id / 64;
-    expansion_ensure_capacity(set, id);
+    bs_ensure_capacity(set, id);
     set->ids[idx] ^= 1lu << bit;
 }
 
 static inline
 void
-expansion_clear(ExpansionSet* set){
+bs_clear(BitSet* set){
     memset(set->ids, 0, sizeof *set->ids * set->capacity);
 }
 
 static inline
 void
-expansion_free(ExpansionSet* set){
+bs_free(BitSet* set){
     free(set->ids);
     set->ids = NULL;
     set->capacity = 0;
@@ -406,7 +404,7 @@ _Bool
 nav_is_expanded(const JsonNav* nav, DrJsonValue val){
     if(!nav_is_container(val))
         return 0;
-    return expansion_contains(&nav->expanded, nav_get_container_id(val));
+    return bs_contains(&nav->expanded, nav_get_container_id(val));
 }
 
 static inline
@@ -555,7 +553,7 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filena
     }
     // Expand root document by default if it's a container
     if(nav_is_container(root)){
-        expansion_add(&nav->expanded, nav_get_container_id(root));
+        bs_add(&nav->expanded, nav_get_container_id(root));
     }
     le_init(&nav->search_buffer, 256);
     le_history_init(&nav->search_history);
@@ -594,10 +592,10 @@ nav_reinit(JsonNav* nav){
     nav->tab_count = 0;
 
     // Clear expansion set - capacity stays allocated for reuse
-    expansion_clear(&nav->expanded);
+    bs_clear(&nav->expanded);
 
     if(nav_is_container(nav->root)){
-        expansion_add(&nav->expanded, nav_get_container_id(nav->root));
+        bs_add(&nav->expanded, nav_get_container_id(nav->root));
     }
     nav_rebuild(nav);
 }
@@ -608,7 +606,7 @@ void
 nav_free(JsonNav* nav){
     free(nav->items);
     free(nav->search_matches);
-    expansion_free(&nav->expanded);
+    bs_free(&nav->expanded);
     le_free(&nav->search_buffer);
     le_history_free(&nav->search_history);
     le_free(&nav->command_buffer);
@@ -637,7 +635,7 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
                     if(parent->depth == 0) return;
 
                     size_t id = nav_get_container_id(parent->value);
-                    expansion_toggle(&nav->expanded, id);
+                    bs_toggle(&nav->expanded, id);
                     nav->needs_rebuild = 1;
                     nav_rebuild(nav);
                 }
@@ -651,7 +649,7 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
     if(item->depth == 0) return;
 
     size_t id = nav_get_container_id(item->value);
-    expansion_toggle(&nav->expanded, id);
+    bs_toggle(&nav->expanded, id);
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
 }
@@ -664,7 +662,7 @@ nav_expand_recursive_helper(JsonNav* nav, DrJsonValue val){
         return;
 
     // Add this container to expansion set
-    expansion_add(&nav->expanded, nav_get_container_id(val));
+    bs_add(&nav->expanded, nav_get_container_id(val));
 
     // Recursively expand children
     int64_t len = drjson_len(nav->jctx, val);
@@ -709,7 +707,7 @@ nav_collapse_recursive_helper(JsonNav* nav, DrJsonValue val){
         return;
 
     // Remove this container from expansion set
-    expansion_remove(&nav->expanded, nav_get_container_id(val));
+    bs_remove(&nav->expanded, nav_get_container_id(val));
 
     // Recursively collapse children
     int64_t len = drjson_len(nav->jctx, val);
@@ -836,7 +834,7 @@ nav_jump_to_parent(JsonNav* nav, _Bool collapse){
                 // Don't collapse the root
                 if(parent->depth > 0 && nav_is_container(parent->value) && nav_is_expanded(nav, parent->value)){
                     size_t id = nav_get_container_id(parent->value);
-                    expansion_remove(&nav->expanded, id);
+                    bs_remove(&nav->expanded, id);
                     nav->needs_rebuild = 1;
                     nav_rebuild(nav);
                 }
@@ -1017,7 +1015,7 @@ nav_jump_into_container(JsonNav* nav){
     // Expand if not already expanded
     if(!nav_is_expanded(nav, item->value)){
         size_t id = nav_get_container_id(item->value);
-        expansion_add(&nav->expanded, id);
+        bs_add(&nav->expanded, id);
         nav->needs_rebuild = 1;
         nav_rebuild(nav);
     }
@@ -1070,7 +1068,7 @@ nav_jump_to_prev_sibling(JsonNav* nav){
 static inline
 void
 nav_collapse_all(JsonNav* nav){
-    expansion_clear(&nav->expanded);
+    bs_clear(&nav->expanded);
     nav->cursor_pos = 0;
     nav->scroll_offset = 0;
     nav->needs_rebuild = 1;
@@ -1244,7 +1242,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key,
         found_match = 1;
         // Expand this container if it's a container
         if(nav_is_container(val)){
-            expansion_add(&nav->expanded, nav_get_container_id(val));
+            bs_add(&nav->expanded, nav_get_container_id(val));
         }
     }
 
@@ -1258,7 +1256,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key,
                 // Recursively search child - if it or its descendants match, expand this container
                 if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, query, query_len)){
                     found_match = 1;
-                    expansion_add(&nav->expanded, nav_get_container_id(val));
+                    bs_add(&nav->expanded, nav_get_container_id(val));
                 }
             }
         }
@@ -1271,7 +1269,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key,
                 // Recursively search child - if it or its descendants match, expand this container
                 if(nav_search_recursive_helper(nav, v, k.atom, query, query_len)){
                     found_match = 1;
-                    expansion_add(&nav->expanded, nav_get_container_id(val));
+                    bs_add(&nav->expanded, nav_get_container_id(val));
                 }
             }
         }
@@ -2329,7 +2327,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
 
             // Expand the current container if needed
             if(nav_is_container(current)){
-                expansion_add(&nav->expanded, nav_get_container_id(current));
+                bs_add(&nav->expanded, nav_get_container_id(current));
             }
 
             current = next;
@@ -2349,7 +2347,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
 
             // Expand the current container if needed
             if(nav_is_container(current)){
-                expansion_add(&nav->expanded, nav_get_container_id(current));
+                bs_add(&nav->expanded, nav_get_container_id(current));
             }
 
             current = next;
