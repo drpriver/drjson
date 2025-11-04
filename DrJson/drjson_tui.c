@@ -38,8 +38,8 @@ typedef long long ssize_t;
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
-#include "tui_get_input.h"
-#include "tui_get_input.c"
+#include "TUI/tui_get_input.h"
+#include "TUI/tui_get_input.c"
 #include "lineedit.h"
 #define DRJSON_API static inline
 #include "drjson.h"
@@ -47,8 +47,8 @@ typedef long long ssize_t;
 #include "drjson.c"
 #include "argument_parsing.h"
 #include "term_util.h"
-#include "drt.h"
-#include "drt.c"
+#include "TUI/drt.h"
+#include "TUI/drt.c"
 
 #ifndef force_inline
 #if defined(__GNUC__) || defined(__clang__)
