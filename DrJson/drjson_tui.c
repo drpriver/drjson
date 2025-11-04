@@ -122,8 +122,7 @@ le_render(Drt* drt, LineEditor* buf){
 // Search modes
 enum SearchMode {
     SEARCH_INACTIVE = 0,
-    SEARCH_NORMAL = 1,
-    SEARCH_RECURSIVE = 2,
+    SEARCH_RECURSIVE = 1,
 };
 
 // Represents a single visible line in the TUI
@@ -190,10 +189,6 @@ struct JsonNav {
     LineEditor search_buffer;       // Current search query
     LineEditorHistory search_history; // Search history
     enum SearchMode search_mode;    // Current search mode
-    size_t* search_matches;         // Array of indices of items that match
-    size_t search_match_count;
-    size_t search_match_capacity;
-    size_t current_match_idx;       // Index into search_matches array
 
     // Inline edit mode
     _Bool edit_mode;                // In inline edit mode
@@ -586,7 +581,6 @@ nav_reinit(JsonNav* nav){
 
     // Clear search state but keep buffers
     nav->search_mode = SEARCH_INACTIVE;
-    nav->search_match_count = 0;
 
     nav->in_completion_menu = 0;
     nav->tab_count = 0;
@@ -605,7 +599,6 @@ static inline
 void
 nav_free(JsonNav* nav){
     free(nav->items);
-    free(nav->search_matches);
     bs_free(&nav->expanded);
     le_free(&nav->search_buffer);
     le_history_free(&nav->search_history);
@@ -1116,10 +1109,102 @@ nav_ensure_cursor_visible(JsonNav* nav, int viewport_height){
     }
 }
 
-// Check if a NavItem matches the search query (case-insensitive substring match)
+// Check if a pattern contains glob wildcards
 static
 _Bool
-nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t query_len){
+is_glob_pattern(const char* pattern, size_t len){
+    for(size_t i = 0; i < len; i++){
+        if(pattern[i] == '*') return 1;
+    }
+    return 0;
+}
+
+// Case-insensitive character comparison
+static inline
+char
+to_lower(char c){
+    if(c >= 'A' && c <= 'Z') return c - 'A' + 'a';
+    return c;
+}
+
+// Non-backtracking glob pattern matching with * wildcard support (case-insensitive)
+// Uses explicit state tracking instead of recursion
+static
+_Bool
+glob_match(const char* str, size_t str_len, const char* pattern, size_t pattern_len){
+    size_t s = 0;  // position in str
+    size_t p = 0;  // position in pattern
+    size_t last_star_in_pattern = (size_t)-1;  // position of last * in pattern
+    size_t last_star_in_string = 0;  // position in str where we last matched a *
+
+    while(s < str_len){
+        if(p < pattern_len && pattern[p] == '*'){
+            // Found a *, record its position and move past it
+            last_star_in_pattern = p;
+            last_star_in_string = s;
+            p++;
+        }
+        else if(p < pattern_len && to_lower(pattern[p]) == to_lower(str[s])){
+            // Characters match, advance both
+            p++;
+            s++;
+        }
+        else if(last_star_in_pattern != (size_t)-1){
+            // No match, but we have a previous * - resume from after that *
+            p = last_star_in_pattern + 1;
+            last_star_in_string++;
+            s = last_star_in_string;
+        }
+        else {
+            // No match and no * to resume from
+            return 0;
+        }
+    }
+
+    // Skip any trailing * in pattern
+    while(p < pattern_len && pattern[p] == '*'){
+        p++;
+    }
+
+    // Match if we consumed entire pattern
+    return p == pattern_len;
+}
+
+// Case-insensitive substring search
+static
+_Bool
+substring_match(const char* str, size_t str_len, const char* query, size_t query_len){
+    if(query_len == 0) return 0;
+
+    for(size_t i = 0; i + query_len <= str_len; i++){
+        _Bool match = 1;
+        for(size_t j = 0; j < query_len; j++){
+            if(to_lower(str[i + j]) != to_lower(query[j])){
+                match = 0;
+                break;
+            }
+        }
+        if(match) return 1;
+    }
+    return 0;
+}
+
+// Helper to check if a string matches the query (dispatches to glob or substring)
+static
+_Bool
+string_matches_query(const char* str, size_t str_len, const char* query, size_t query_len, _Bool is_glob){
+    if(is_glob){
+        return glob_match(str, str_len, query, query_len);
+    }
+    else {
+        return substring_match(str, str_len, query, query_len);
+    }
+}
+
+// Check if a NavItem matches the search query (supports substring and glob patterns)
+static
+_Bool
+nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t query_len, _Bool is_glob){
     if(query_len == 0) return 0;
 
     // Check key if present
@@ -1128,23 +1213,8 @@ nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t qu
         size_t key_len = 0;
         DrJsonValue key_val = drjson_atom_to_value(item->key);
         drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-        if(key_str){
-            // Simple case-insensitive substring search
-            for(size_t i = 0; i + query_len <= key_len; i++){
-                _Bool match = 1;
-                for(size_t j = 0; j < query_len; j++){
-                    char c1 = key_str[i + j];
-                    char c2 = query[j];
-                    // Simple ASCII case-insensitive comparison
-                    if(c1 >= 'A' && c1 <= 'Z') c1 = c1 - 'A' + 'a';
-                    if(c2 >= 'A' && c2 <= 'Z') c2 = c2 - 'A' + 'a';
-                    if(c1 != c2){
-                        match = 0;
-                        break;
-                    }
-                }
-                if(match) return 1;
-            }
+        if(key_str && string_matches_query(key_str, key_len, query, query_len, is_glob)){
+            return 1;
         }
     }
 
@@ -1153,52 +1223,26 @@ nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t qu
         const char* str = NULL;
         size_t len = 0;
         drjson_get_str_and_len(nav->jctx, item->value, &str, &len);
-        if(str){
-            for(size_t i = 0; i + query_len <= len; i++){
-                _Bool match = 1;
-                for(size_t j = 0; j < query_len; j++){
-                    char c1 = str[i + j];
-                    char c2 = query[j];
-                    if(c1 >= 'A' && c1 <= 'Z') c1 = c1 - 'A' + 'a';
-                    if(c2 >= 'A' && c2 <= 'Z') c2 = c2 - 'A' + 'a';
-                    if(c1 != c2){
-                        match = 0;
-                        break;
-                    }
-                }
-                if(match) return 1;
-            }
+        if(str && string_matches_query(str, len, query, query_len, is_glob)){
+            return 1;
         }
     }
 
     return 0;
 }
 
-// Helper to check if a DrJsonValue matches the query
+// Helper to check if a DrJsonValue matches the query (supports substring and glob patterns)
 static
 _Bool
-nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len){
+nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len, _Bool is_glob){
     // Check key if present
     if(key.bits != 0){
         const char* key_str = NULL;
         size_t key_len = 0;
         DrJsonValue key_val = drjson_atom_to_value(key);
         drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-        if(key_str){
-            for(size_t i = 0; i + query_len <= key_len; i++){
-                _Bool match = 1;
-                for(size_t j = 0; j < query_len; j++){
-                    char c1 = key_str[i + j];
-                    char c2 = query[j];
-                    if(c1 >= 'A' && c1 <= 'Z') c1 = c1 - 'A' + 'a';
-                    if(c2 >= 'A' && c2 <= 'Z') c2 = c2 - 'A' + 'a';
-                    if(c1 != c2){
-                        match = 0;
-                        break;
-                    }
-                }
-                if(match) return 1;
-            }
+        if(key_str && string_matches_query(key_str, key_len, query, query_len, is_glob)){
+            return 1;
         }
     }
 
@@ -1207,20 +1251,44 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
         const char* str = NULL;
         size_t len = 0;
         drjson_get_str_and_len(nav->jctx, val, &str, &len);
-        if(str){
-            for(size_t i = 0; i + query_len <= len; i++){
-                _Bool match = 1;
-                for(size_t j = 0; j < query_len; j++){
-                    char c1 = str[i + j];
-                    char c2 = query[j];
-                    if(c1 >= 'A' && c1 <= 'Z') c1 = c1 - 'A' + 'a';
-                    if(c2 >= 'A' && c2 <= 'Z') c2 = c2 - 'A' + 'a';
-                    if(c1 != c2){
-                        match = 0;
-                        break;
-                    }
+        if(str && string_matches_query(str, len, query, query_len, is_glob)){
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// Check if a value or any of its descendants match the query (read-only, doesn't modify expanded set)
+static
+_Bool
+nav_contains_match(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len, _Bool is_glob){
+    // Check if this value matches
+    if(nav_value_matches_query(nav, val, key, query, query_len, is_glob)){
+        return 1;
+    }
+
+    // Recursively check children
+    if(nav_is_container(val)){
+        int64_t len = drjson_len(nav->jctx, val);
+
+        if(val.kind == DRJSON_ARRAY || val.kind == DRJSON_ARRAY_VIEW){
+            for(int64_t i = 0; i < len; i++){
+                DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
+                if(nav_contains_match(nav, child, (DrJsonAtom){0}, query, query_len, is_glob)){
+                    return 1;
                 }
-                if(match) return 1;
+            }
+        }
+        else {
+            DrJsonValue items = drjson_object_items(val);
+            int64_t items_len = drjson_len(nav->jctx, items);
+            for(int64_t i = 0; i < items_len; i += 2){
+                DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
+                DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
+                if(nav_contains_match(nav, v, k.atom, query, query_len, is_glob)){
+                    return 1;
+                }
             }
         }
     }
@@ -1232,11 +1300,11 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
 // Returns true if this value or any descendant matches the query
 static
 _Bool
-nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len){
+nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len, _Bool is_glob){
     _Bool found_match = 0;
 
     // Check if this value matches
-    if(nav_value_matches_query(nav, val, key, query, query_len)){
+    if(nav_value_matches_query(nav, val, key, query, query_len, is_glob)){
         found_match = 1;
         // Expand this container if it's a container
         if(nav_is_container(val)){
@@ -1252,7 +1320,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
             for(int64_t i = 0; i < len; i++){
                 DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
                 // Recursively search child - if it or its descendants match, expand this container
-                if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, query, query_len)){
+                if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, query, query_len, is_glob)){
                     found_match = 1;
                     bs_add(&nav->expanded, nav_get_container_id(val));
                 }
@@ -1265,7 +1333,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
                 DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
                 DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
                 // Recursively search child - if it or its descendants match, expand this container
-                if(nav_search_recursive_helper(nav, v, k.atom, query, query_len)){
+                if(nav_search_recursive_helper(nav, v, k.atom, query, query_len, is_glob)){
                     found_match = 1;
                     bs_add(&nav->expanded, nav_get_container_id(val));
                 }
@@ -1276,76 +1344,164 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
     return found_match;
 }
 
-// Perform search and populate search_matches array
+// Unified search function - searches forward or backward with optional container expansion
+// direction: 1 = forward, -1 = backward
 static
 void
-nav_search(JsonNav* nav){
-    // Clear existing matches
-    nav->search_match_count = 0;
-
+nav_search_internal(JsonNav* nav, int direction){
     if(nav->search_buffer.length == 0) return;
+    if(nav->item_count == 0) return;
 
-    // Search through all visible items
-    for(size_t i = 0; i < nav->item_count; i++){
-        if(nav_item_matches_query(nav, &nav->items[i], nav->search_buffer.data, nav->search_buffer.length)){
-            // Add to matches array
-            if(nav->search_match_count >= nav->search_match_capacity){
-                size_t new_cap = nav->search_match_capacity ? nav->search_match_capacity * 2 : 64;
-                size_t* new_matches = realloc(nav->search_matches, new_cap * sizeof(size_t));
-                if(!new_matches) continue;
-                nav->search_matches = new_matches;
-                nav->search_match_capacity = new_cap;
+    // Check once if this is a glob pattern
+    _Bool is_glob = is_glob_pattern(nav->search_buffer.data, nav->search_buffer.length);
+
+    if(direction > 0){
+        // Search forward from current position + 1
+        for(size_t i = nav->cursor_pos + 1; i < nav->item_count; i++){
+            NavItem* item = &nav->items[i];
+
+            // Check if this visible item matches
+            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                nav->cursor_pos = i;
+                return;
             }
-            nav->search_matches[nav->search_match_count++] = i;
+
+            // If expanding and it's a collapsed container, check inside it
+            if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
+                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                    // Found a match inside! Expand ONLY this container (not recursively)
+                    bs_add(&nav->expanded, nav_get_container_id(item->value));
+                    nav->needs_rebuild = 1;
+                    nav_rebuild(nav);
+
+                    // Continue searching from this position - the children are now visible
+                    // Restart the search from position i by recursively calling ourselves
+                    // This allows us to incrementally expand nested containers
+                    nav->cursor_pos = i;
+                    nav_search_internal(nav, direction);
+                    return;
+                }
+            }
+        }
+
+        // No match found forward - wrap to beginning
+        for(size_t i = 0; i <= nav->cursor_pos && i < nav->item_count; i++){
+            NavItem* item = &nav->items[i];
+
+            // Check if this visible item matches
+            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                nav->cursor_pos = i;
+                return;
+            }
+
+            // If expanding and it's a collapsed container, check inside it
+            if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
+                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                    // Found a match inside! Expand ONLY this container (not recursively)
+                    bs_add(&nav->expanded, nav_get_container_id(item->value));
+                    nav->needs_rebuild = 1;
+                    nav_rebuild(nav);
+
+                    // Continue searching from this position - the children are now visible
+                    // Restart the search from position i by recursively calling ourselves
+                    // This allows us to incrementally expand nested containers
+                    nav->cursor_pos = i;
+                    nav_search_internal(nav, direction);
+                    return;
+                }
+            }
+        }
+    }
+    else {
+        // Search backward from current position - 1
+        if(nav->cursor_pos > 0){
+            for(size_t i = nav->cursor_pos; i > 0; i--){
+                size_t idx = i - 1;
+                NavItem* item = &nav->items[idx];
+
+                // Check if this visible item matches
+                if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                    nav->cursor_pos = idx;
+                    return;
+                }
+
+                // If expanding and it's a collapsed container, check inside it
+                if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
+                    if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                        // Found a match inside! Expand ONLY this container (not recursively)
+                        bs_add(&nav->expanded, nav_get_container_id(item->value));
+                        nav->needs_rebuild = 1;
+                        nav_rebuild(nav);
+
+                        // Continue searching backward from this position
+                        // Restart the search from position idx by recursively calling ourselves
+                        nav->cursor_pos = idx;
+                        nav_search_internal(nav, direction);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // No match found backward - wrap to end
+        for(size_t i = nav->item_count; i > nav->cursor_pos && i > 0; i--){
+            size_t idx = i - 1;
+            NavItem* item = &nav->items[idx];
+
+            // Check if this visible item matches
+            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                nav->cursor_pos = idx;
+                return;
+            }
+
+            // If expanding and it's a collapsed container, check inside it
+            if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
+                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                    // Found a match inside! Expand and search for last match
+                    nav_search_recursive_helper(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob);
+                    nav->needs_rebuild = 1;
+                    nav_rebuild(nav);
+
+                    // Search from this container forward to find last match inside it
+                    size_t last_match = idx;
+                    for(size_t j = idx; j < nav->item_count; j++){
+                        if(nav_item_matches_query(nav, &nav->items[j], nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                            last_match = j;
+                        }
+                        // Stop when we exit this container's children
+                        if(j > idx && nav->items[j].depth <= item->depth){
+                            break;
+                        }
+                    }
+                    nav->cursor_pos = last_match;
+                    return;
+                }
+            }
         }
     }
 
-    // Jump to first match if any
-    if(nav->search_match_count > 0){
-        nav->current_match_idx = 0;
-        nav->cursor_pos = nav->search_matches[0];
-    }
+    // No match found - stay at current position
 }
 
-// Perform recursive search (search entire tree, expanding as needed)
-static
+// Perform recursive search - find first match (expanding containers as needed)
+static inline
 void
 nav_search_recursive(JsonNav* nav){
-    if(nav->search_buffer.length == 0) return;
-
-    // Recursively search the entire tree and expand containers with matches
-    nav_search_recursive_helper(nav, nav->root, (DrJsonAtom){0}, nav->search_buffer.data, nav->search_buffer.length);
-
-    // Rebuild to show expanded items
-    nav->needs_rebuild = 1;
-    nav_rebuild(nav);
-
-    // Now search through visible items
-    nav_search(nav);
+    nav_search_internal(nav, 1);
 }
 
 // Jump to next search match
 static inline
 void
 nav_search_next(JsonNav* nav){
-    if(nav->search_match_count == 0) return;
-
-    nav->current_match_idx = (nav->current_match_idx + 1) % nav->search_match_count;
-    nav->cursor_pos = nav->search_matches[nav->current_match_idx];
+    nav_search_internal(nav, 1);
 }
 
 // Jump to previous search match
 static inline
 void
 nav_search_prev(JsonNav* nav){
-    if(nav->search_match_count == 0) return;
-
-    if(nav->current_match_idx == 0)
-        nav->current_match_idx = nav->search_match_count - 1;
-    else
-        nav->current_match_idx--;
-
-    nav->cursor_pos = nav->search_matches[nav->current_match_idx];
+    nav_search_internal(nav, -1);
 }
 
 static inline
@@ -3201,13 +3357,13 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                         }
 
                         // Show key
-                        size_t to_print = key_len;
-                        if((int)to_print > budget - 10)
+                        int to_print = (int)key_len;
+                        if(to_print > budget - 10)
                             to_print = budget - 10;
 
                         if(to_print > 0){
                             drt_puts(drt, key_str, to_print);
-                            budget -= (int)to_print;
+                            budget -= to_print;
                         } else {
                             break;
                         }
@@ -3400,6 +3556,7 @@ static const StringView HELP_LINES[] = {
     SV(""),
     SV("Search:"),
     SV("  /           Start recursive search (case-insensitive)"),
+    SV("              Supports glob patterns: foo*bar, *test*"),
     SV("  *           Search for word under cursor"),
     SV("  n           Next match"),
     SV("  N           Previous match"),
@@ -3813,14 +3970,6 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     // Render status line at top
     drt_push_state(drt);
     if(nav->search_mode == SEARCH_RECURSIVE){
-        drt_puts(drt, " Recursive Search: ", 19);
-        int start_x = 19;
-        le_render(drt, &nav->search_buffer);
-        cursor_x = start_x + (int)nav->search_buffer.cursor_pos;
-        cursor_y = 0;
-        show_cursor = 1;
-    }
-    else if(nav->search_mode == SEARCH_NORMAL){
         drt_puts(drt, " Search: ", 9);
         int start_x = 9;
         le_render(drt, &nav->search_buffer);
@@ -3828,10 +3977,11 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         cursor_y = 0;
         show_cursor = 1;
     }
-    else if(nav->search_match_count > 0){
-        drt_printf(drt, " %s — %zu items — Match %zu/%zu ",
+    else if(nav->search_buffer.length > 0){
+        drt_printf(drt, " %s — %zu items — Search: %.*s ",
                    nav->filename[0] ? nav->filename : "DrJson TUI",
-                   nav->item_count, nav->current_match_idx + 1, nav->search_match_count);
+                   nav->item_count,
+                   (int)nav->search_buffer.length, nav->search_buffer.data);
     }
     else {
         drt_printf(drt, " %s — %zu items ",
@@ -4550,12 +4700,8 @@ main(int argc, const char* const* argv){
                 le_history_reset(&nav.search_buffer);
 
                 // Perform search (recursive if in recursive mode)
-                _Bool recursive = (nav.search_mode == SEARCH_RECURSIVE);
                 nav.search_mode = SEARCH_INACTIVE;
-                if(recursive)
-                    nav_search_recursive(&nav);
-                else
-                    nav_search(&nav);
+                nav_search_recursive(&nav);
                 nav_center_cursor(&nav, globals.screenh);
                 continue;
             }
