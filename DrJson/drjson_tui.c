@@ -1177,8 +1177,7 @@ nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t qu
 // Helper to check if a DrJsonValue matches the query
 static
 _Bool
-nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key,
-                         const char* query, size_t query_len){
+nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len){
     // Check key if present
     if(key.bits != 0){
         const char* key_str = NULL;
@@ -1233,8 +1232,7 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key,
 // Returns true if this value or any descendant matches the query
 static
 _Bool
-nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key,
-                              const char* query, size_t query_len){
+nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len){
     _Bool found_match = 0;
 
     // Check if this value matches
@@ -1316,8 +1314,7 @@ nav_search_recursive(JsonNav* nav){
     if(nav->search_buffer.length == 0) return;
 
     // Recursively search the entire tree and expand containers with matches
-    nav_search_recursive_helper(nav, nav->root, (DrJsonAtom){0},
-                                 nav->search_buffer.data, nav->search_buffer.length);
+    nav_search_recursive_helper(nav, nav->root, (DrJsonAtom){0}, nav->search_buffer.data, nav->search_buffer.length);
 
     // Rebuild to show expanded items
     nav->needs_rebuild = 1;
@@ -4829,13 +4826,12 @@ main(int argc, const char* const* argv){
                     else if(item->value.kind == DRJSON_STRING){
                         drjson_get_str_and_len(nav.jctx, item->value, &search_text, &search_len);
                     }
-                    if(0)LOG("searching for '%.*s'\n", (int)search_len, search_text);
 
                     // If we found text, search for it
                     if(search_text && search_len > 0){
                         le_clear(&nav.search_buffer);
                         // Copy the text to the search buffer
-                        for(size_t i = 0; i < search_len && i < sizeof(nav.search_buffer.data) - 1; i++){
+                        for(size_t i = 0; i < search_len; i++){
                             le_append_char(&nav.search_buffer, search_text[i]);
                         }
                         // Perform recursive search immediately
