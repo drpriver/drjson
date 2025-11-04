@@ -147,7 +147,7 @@ typedef struct JsonNav JsonNav;
 struct JsonNav {
     DrJsonContext* jctx;      // DrJson context
     DrJsonValue root;         // Root document value
-    char filename[256];       // Name of file being viewed
+    char filename[512];       // Name of file being viewed
 
     // Flattened view (rebuilt when expansion state changes)
     NavItem* items;           // Dynamic array of visible items
@@ -2847,7 +2847,7 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             break;
                         }
                         case DRJSON_ARRAY: {
-                            // Show array preview
+                            // Show array preview - try to show values for small arrays with basic types
                             int64_t arr_len = drjson_len(jctx, item);
 
                             if(budget < 5){
@@ -2857,9 +2857,111 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             drt_putc(drt, '[');
                             budget--;
 
-                            if(arr_len > 0){
-                                drt_puts(drt, "...", 3);
-                                budget -= 3;
+                            // Try to show actual values for small arrays
+                            int arr_items_shown = 0;
+                            int arr_budget = budget - 10; // Reserve for closing bracket and ellipsis
+                            int show_values = (arr_len <= 5 && arr_len > 0); // Only for small arrays
+
+                            if(show_values){
+                                for(int64_t ai = 0; ai < arr_len && arr_budget > 5; ai++){
+                                    DrJsonValue arr_item = drjson_get_by_index(jctx, item, ai);
+
+                                    // Only show basic types
+                                    if(arr_item.kind != DRJSON_NULL &&
+                                       arr_item.kind != DRJSON_BOOL &&
+                                       arr_item.kind != DRJSON_NUMBER &&
+                                       arr_item.kind != DRJSON_INTEGER &&
+                                       arr_item.kind != DRJSON_UINTEGER &&
+                                       arr_item.kind != DRJSON_STRING){
+                                        show_values = 0;
+                                        break;
+                                    }
+
+                                    if(ai > 0){
+                                        drt_puts(drt, ", ", 2);
+                                        arr_budget -= 2;
+                                    }
+
+                                    // Render the value
+                                    int consumed = 0;
+                                    switch(arr_item.kind){
+                                        case DRJSON_NULL:
+                                            if(arr_budget >= 4){
+                                                drt_puts(drt, "null", 4);
+                                                consumed = 4;
+                                            }
+                                            break;
+                                        case DRJSON_BOOL:
+                                            if(arr_item.boolean){
+                                                if(arr_budget >= 4){
+                                                    drt_puts(drt, "true", 4);
+                                                    consumed = 4;
+                                                }
+                                            } else {
+                                                if(arr_budget >= 5){
+                                                    drt_puts(drt, "false", 5);
+                                                    consumed = 5;
+                                                }
+                                            }
+                                            break;
+                                        case DRJSON_NUMBER:
+                                        case DRJSON_INTEGER:
+                                        case DRJSON_UINTEGER: {
+                                            char numbuf[32];
+                                            int nlen = 0;
+                                            if(arr_item.kind == DRJSON_NUMBER)
+                                                nlen = snprintf(numbuf, sizeof numbuf, "%g", arr_item.number);
+                                            else if(arr_item.kind == DRJSON_INTEGER)
+                                                nlen = snprintf(numbuf, sizeof numbuf, "%lld", (long long)arr_item.integer);
+                                            else
+                                                nlen = snprintf(numbuf, sizeof numbuf, "%llu", (unsigned long long)arr_item.uinteger);
+
+                                            if(nlen > 0 && nlen < arr_budget){
+                                                drt_puts(drt, numbuf, nlen);
+                                                consumed = nlen;
+                                            }
+                                            break;
+                                        }
+                                        case DRJSON_STRING: {
+                                            const char* str = NULL;
+                                            size_t slen = 0;
+                                            drjson_get_str_and_len(jctx, arr_item, &str, &slen);
+                                            if(str && arr_budget >= 4){
+                                                drt_putc(drt, '"');
+                                                consumed = 1;
+                                                size_t to_print = slen;
+                                                if((int)to_print > arr_budget - 2)
+                                                    to_print = arr_budget - 2;
+                                                drt_puts(drt, str, to_print);
+                                                consumed += (int)to_print;
+                                                drt_putc(drt, '"');
+                                                consumed += 1;
+                                            }
+                                            break;
+                                        }
+                                        default:
+                                            break;
+                                    }
+
+                                    if(consumed == 0){
+                                        show_values = 0;
+                                        break;
+                                    }
+
+                                    arr_budget -= consumed;
+                                    arr_items_shown++;
+                                }
+                            }
+
+                            if(show_values && arr_items_shown == arr_len){
+                                // Successfully showed all items
+                                budget = arr_budget;
+                            } else {
+                                // Fall back to just showing ellipsis
+                                if(arr_len > 0){
+                                    drt_puts(drt, "...", 3);
+                                    budget -= 3;
+                                }
                             }
 
                             drt_putc(drt, ']');
@@ -2869,7 +2971,7 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             break;
                         }
                         case DRJSON_OBJECT: {
-                            // Show object preview with first few keys
+                            // Show object preview - try to show key:value pairs for small objects with basic types
                             DrJsonValue obj_keys = drjson_object_keys(item);
                             int64_t obj_keys_len = drjson_len(jctx, obj_keys);
 
@@ -2881,36 +2983,169 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             budget--;
 
                             int obj_shown = 0;
-                            for(int64_t ki = 0; ki < obj_keys_len && budget > 10; ki++){
-                                DrJsonValue okey = drjson_get_by_index(jctx, obj_keys, ki);
-                                const char* okey_str = NULL;
-                                size_t okey_len = 0;
-                                drjson_get_str_and_len(jctx, okey, &okey_str, &okey_len);
+                            int obj_budget = budget - 10; // Reserve for closing brace and ellipsis
+                            int show_values = (obj_keys_len <= 3 && obj_keys_len > 0); // Only for small objects
 
-                                if(okey_str){
-                                    if(obj_shown > 0){
-                                        drt_puts(drt, ", ", 2);
-                                        budget -= 2;
+                            if(show_values){
+                                for(int64_t ki = 0; ki < obj_keys_len && obj_budget > 10; ki++){
+                                    DrJsonValue okey = drjson_get_by_index(jctx, obj_keys, ki);
+                                    const char* okey_str = NULL;
+                                    size_t okey_len = 0;
+                                    drjson_get_str_and_len(jctx, okey, &okey_str, &okey_len);
+
+                                    if(!okey_str){
+                                        show_values = 0;
+                                        break;
                                     }
 
+                                    DrJsonValue oval = drjson_object_get_item(jctx, item, okey_str, okey_len);
+
+                                    // Only show basic types
+                                    if(oval.kind != DRJSON_NULL &&
+                                       oval.kind != DRJSON_BOOL &&
+                                       oval.kind != DRJSON_NUMBER &&
+                                       oval.kind != DRJSON_INTEGER &&
+                                       oval.kind != DRJSON_UINTEGER &&
+                                       oval.kind != DRJSON_STRING){
+                                        show_values = 0;
+                                        break;
+                                    }
+
+                                    if(ki > 0){
+                                        drt_puts(drt, ", ", 2);
+                                        obj_budget -= 2;
+                                    }
+
+                                    // Show key
                                     size_t to_print = okey_len;
-                                    if((int)to_print > budget - 5)
-                                        to_print = budget - 5;
+                                    if((int)to_print > obj_budget - 5)
+                                        to_print = obj_budget - 5;
 
                                     if(to_print > 0){
                                         drt_puts(drt, okey_str, to_print);
-                                        budget -= (int)to_print;
-                                        obj_shown++;
+                                        obj_budget -= (int)to_print;
+                                    } else {
+                                        show_values = 0;
+                                        break;
                                     }
 
-                                    if(budget < 10)
+                                    // Show ": "
+                                    if(obj_budget >= 2){
+                                        drt_puts(drt, ": ", 2);
+                                        obj_budget -= 2;
+                                    } else {
+                                        show_values = 0;
                                         break;
+                                    }
+
+                                    // Show value
+                                    int consumed = 0;
+                                    switch(oval.kind){
+                                        case DRJSON_NULL:
+                                            if(obj_budget >= 4){
+                                                drt_puts(drt, "null", 4);
+                                                consumed = 4;
+                                            }
+                                            break;
+                                        case DRJSON_BOOL:
+                                            if(oval.boolean){
+                                                if(obj_budget >= 4){
+                                                    drt_puts(drt, "true", 4);
+                                                    consumed = 4;
+                                                }
+                                            } else {
+                                                if(obj_budget >= 5){
+                                                    drt_puts(drt, "false", 5);
+                                                    consumed = 5;
+                                                }
+                                            }
+                                            break;
+                                        case DRJSON_NUMBER:
+                                        case DRJSON_INTEGER:
+                                        case DRJSON_UINTEGER: {
+                                            char numbuf[32];
+                                            int nlen = 0;
+                                            if(oval.kind == DRJSON_NUMBER)
+                                                nlen = snprintf(numbuf, sizeof numbuf, "%g", oval.number);
+                                            else if(oval.kind == DRJSON_INTEGER)
+                                                nlen = snprintf(numbuf, sizeof numbuf, "%lld", (long long)oval.integer);
+                                            else
+                                                nlen = snprintf(numbuf, sizeof numbuf, "%llu", (unsigned long long)oval.uinteger);
+
+                                            if(nlen > 0 && nlen < obj_budget){
+                                                drt_puts(drt, numbuf, nlen);
+                                                consumed = nlen;
+                                            }
+                                            break;
+                                        }
+                                        case DRJSON_STRING: {
+                                            const char* str = NULL;
+                                            size_t slen = 0;
+                                            drjson_get_str_and_len(jctx, oval, &str, &slen);
+                                            if(str && obj_budget >= 4){
+                                                drt_putc(drt, '"');
+                                                consumed = 1;
+                                                size_t str_to_print = slen;
+                                                if((int)str_to_print > obj_budget - 2)
+                                                    str_to_print = obj_budget - 2;
+                                                drt_puts(drt, str, str_to_print);
+                                                consumed += (int)str_to_print;
+                                                drt_putc(drt, '"');
+                                                consumed += 1;
+                                            }
+                                            break;
+                                        }
+                                        default:
+                                            break;
+                                    }
+
+                                    if(consumed == 0){
+                                        show_values = 0;
+                                        break;
+                                    }
+
+                                    obj_budget -= consumed;
+                                    obj_shown++;
                                 }
                             }
 
-                            if(obj_shown < obj_keys_len){
-                                drt_puts(drt, ", ...", 5);
-                                budget -= 5;
+                            if(show_values && obj_shown == obj_keys_len){
+                                // Successfully showed all items
+                                budget = obj_budget;
+                            } else {
+                                // Fall back to just showing keys
+                                obj_shown = 0;
+                                for(int64_t ki = 0; ki < obj_keys_len && budget > 10; ki++){
+                                    DrJsonValue okey = drjson_get_by_index(jctx, obj_keys, ki);
+                                    const char* okey_str = NULL;
+                                    size_t okey_len = 0;
+                                    drjson_get_str_and_len(jctx, okey, &okey_str, &okey_len);
+
+                                    if(okey_str){
+                                        if(obj_shown > 0){
+                                            drt_puts(drt, ", ", 2);
+                                            budget -= 2;
+                                        }
+
+                                        size_t to_print = okey_len;
+                                        if((int)to_print > budget - 5)
+                                            to_print = budget - 5;
+
+                                        if(to_print > 0){
+                                            drt_puts(drt, okey_str, to_print);
+                                            budget -= (int)to_print;
+                                            obj_shown++;
+                                        }
+
+                                        if(budget < 10)
+                                            break;
+                                    }
+                                }
+
+                                if(obj_shown < obj_keys_len){
+                                    drt_puts(drt, ", ...", 5);
+                                    budget -= 5;
+                                }
                             }
 
                             drt_putc(drt, '}');
@@ -2951,29 +3186,147 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                 int64_t keys_len = drjson_len(jctx, keys);
                 int shown = 0;
                 int budget = max_width - 20; // Reserve space for braces, ", ... N more}"
+                int show_values = (keys_len <= 5 && keys_len > 0); // Try to show values for small objects
 
-                for(int64_t i = 0; i < keys_len && budget > 0; i++){
+                for(int64_t i = 0; i < keys_len && budget > 10; i++){
                     DrJsonValue key = drjson_get_by_index(jctx, keys, i);
                     const char* key_str = NULL;
                     size_t key_len = 0;
                     drjson_get_str_and_len(jctx, key, &key_str, &key_len);
 
                     if(key_str){
-                        int needed = (int)key_len + (i > 0 ? 2 : 0); // +2 for ", "
-                        if(needed > budget && shown > 0)
-                            break;
-
                         if(i > 0){
                             drt_puts(drt, ", ", 2);
                             budget -= 2;
                         }
 
+                        // Show key
                         size_t to_print = key_len;
-                        if((int)to_print > budget)
-                            to_print = budget;
+                        if((int)to_print > budget - 10)
+                            to_print = budget - 10;
 
-                        drt_puts(drt, key_str, to_print);
-                        budget -= (int)to_print;
+                        if(to_print > 0){
+                            drt_puts(drt, key_str, to_print);
+                            budget -= (int)to_print;
+                        } else {
+                            break;
+                        }
+
+                        // Show value if enabled
+                        if(show_values){
+                            DrJsonValue value = drjson_object_get_item(jctx, val, key_str, key_len);
+
+                            // Add ": "
+                            if(budget >= 2){
+                                drt_puts(drt, ": ", 2);
+                                budget -= 2;
+                            } else {
+                                break;
+                            }
+
+                            // Render value (use placeholders for complex types)
+                            int consumed = 0;
+                            switch(value.kind){
+                                case DRJSON_NULL:
+                                    if(budget >= 4){
+                                        drt_puts(drt, "null", 4);
+                                        consumed = 4;
+                                    }
+                                    break;
+                                case DRJSON_BOOL:
+                                    if(value.boolean){
+                                        if(budget >= 4){
+                                            drt_puts(drt, "true", 4);
+                                            consumed = 4;
+                                        }
+                                    } else {
+                                        if(budget >= 5){
+                                            drt_puts(drt, "false", 5);
+                                            consumed = 5;
+                                        }
+                                    }
+                                    break;
+                                case DRJSON_NUMBER:
+                                case DRJSON_INTEGER:
+                                case DRJSON_UINTEGER: {
+                                    char numbuf[32];
+                                    int nlen = 0;
+                                    if(value.kind == DRJSON_NUMBER)
+                                        nlen = snprintf(numbuf, sizeof numbuf, "%g", value.number);
+                                    else if(value.kind == DRJSON_INTEGER)
+                                        nlen = snprintf(numbuf, sizeof numbuf, "%lld", (long long)value.integer);
+                                    else
+                                        nlen = snprintf(numbuf, sizeof numbuf, "%llu", (unsigned long long)value.uinteger);
+
+                                    if(nlen > 0 && nlen < budget){
+                                        drt_puts(drt, numbuf, nlen);
+                                        consumed = nlen;
+                                    }
+                                    break;
+                                }
+                                case DRJSON_STRING: {
+                                    const char* str = NULL;
+                                    size_t slen = 0;
+                                    drjson_get_str_and_len(jctx, value, &str, &slen);
+                                    if(str && budget >= 4){
+                                        drt_putc(drt, '"');
+                                        consumed = 1;
+                                        size_t str_to_print = slen;
+                                        if((int)str_to_print > budget - 2)
+                                            str_to_print = budget - 2;
+                                        drt_puts(drt, str, str_to_print);
+                                        consumed += (int)str_to_print;
+                                        if(str_to_print < slen && budget > consumed + 4){
+                                            drt_puts(drt, "...", 3);
+                                            consumed += 3;
+                                        }
+                                        drt_putc(drt, '"');
+                                        consumed += 1;
+                                    }
+                                    break;
+                                }
+                                case DRJSON_ARRAY: {
+                                    // Show placeholder for arrays
+                                    int64_t arr_len = drjson_len(jctx, value);
+                                    if(arr_len == 0){
+                                        if(budget >= 2){
+                                            drt_puts(drt, "[]", 2);
+                                            consumed = 2;
+                                        }
+                                    } else {
+                                        if(budget >= 5){
+                                            drt_puts(drt, "[...]", 5);
+                                            consumed = 5;
+                                        }
+                                    }
+                                    break;
+                                }
+                                case DRJSON_OBJECT: {
+                                    // Show placeholder for objects
+                                    int64_t obj_len = drjson_len(jctx, value);
+                                    if(obj_len == 0){
+                                        if(budget >= 2){
+                                            drt_puts(drt, "{}", 2);
+                                            consumed = 2;
+                                        }
+                                    } else {
+                                        if(budget >= 5){
+                                            drt_puts(drt, "{...}", 5);
+                                            consumed = 5;
+                                        }
+                                    }
+                                    break;
+                                }
+                                default:
+                                    break;
+                            }
+
+                            if(consumed == 0){
+                                break; // Not enough budget
+                            }
+                            budget -= consumed;
+                        }
+
                         shown++;
                     }
                 }
