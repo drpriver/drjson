@@ -1582,7 +1582,9 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_focus, cmd_unfocus;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus;
+
+static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
 static const Command commands[] = {
     {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
@@ -1603,6 +1605,7 @@ static const Command commands[] = {
     {SV("paste"), SV(":paste"), SV("  Paste from clipboard"), cmd_paste},
     {SV("p"),     SV(":p"), SV("  Paste from clipboard"), cmd_paste},
     {SV("query"), SV(":query <path>"), SV("  Navigate to path (e.g., foo.bar[0].baz)"), cmd_query},
+    {SV("path"), SV(":path"), SV("  Yank (copy) current item's JSON path to clipboard"), cmd_path},
     {SV("focus"), SV(":focus"), SV("  Focus on the current array or object"), cmd_focus},
     {SV("unfocus"), SV(":unfocus"), SV("  Return to the previous (less focused) view"), cmd_unfocus},
 };
@@ -2595,6 +2598,60 @@ cmd_unfocus(JsonNav* nav, const char* args, size_t args_len) {
     nav_reinit(nav);
 
     nav_set_messagef(nav, "Unfocused, returned to previous view.");
+    return CMD_OK;
+}
+
+static
+int
+cmd_path(JsonNav* nav, const char* args, size_t args_len){
+    (void)args;
+    (void)args_len;
+
+    if(nav->item_count == 0){
+        nav_set_messagef(nav, "Error: Nothing selected");
+        return CMD_ERROR;
+    }
+
+    char path_buf[1024];
+    size_t path_len = nav_build_json_path(nav, path_buf, sizeof(path_buf));
+
+    if(path_len == 0){
+        nav_set_messagef(nav, "Error: Could not generate path");
+        return CMD_ERROR;
+    }
+
+#ifdef _WIN32
+    if(copy_to_clipboard(path_buf, path_len) != 0){
+        nav_set_messagef(nav, "Error: Could not copy path to clipboard");
+        return CMD_ERROR;
+    }
+#elif defined(__APPLE__)
+    if(macos_copy_to_clipboard(path_buf, path_len) != 0){
+        nav_set_messagef(nav, "Error: Could not copy path to clipboard");
+        return CMD_ERROR;
+    }
+#else
+    // Linux clipboard logic
+    FILE* pipe = NULL;
+    if(getenv("TMUX"))
+        pipe = popen("tmux load-buffer - 2>/dev/null", "w");
+    if(!pipe)
+        pipe = popen("xclip -selection clipboard 2>/dev/null", "w");
+    if(!pipe)
+        pipe = popen("xsel --clipboard --input 2>/dev/null", "w");
+
+    if(!pipe){
+        nav_set_messagef(nav, "Error: Could not open clipboard command (tried tmux, xclip, xsel)");
+        return CMD_ERROR;
+    }
+    fwrite(path_buf, 1, path_len, pipe);
+    if(pclose(pipe) != 0){
+        nav_set_messagef(nav, "Error: Failed to copy to clipboard");
+        return CMD_ERROR;
+    }
+#endif
+
+    nav_set_messagef(nav, "Yanked path to clipboard: %s", path_buf);
     return CMD_OK;
 }
 
@@ -3667,8 +3724,11 @@ static const StringView HELP_LINES[] = {
     SV("  Ctrl-W      Delete word backward"),
     SV(""),
     SV("Clipboard:"),
-    SV("  y/Y         Yank (copy) current value to clipboard"),
-    SV("  :yank/:y    Same as y key"),
+    SV("  yy          Yank (copy) current value to clipboard"),
+    SV("  Y           Yank (copy) current value (no delay)"),
+    SV("  yp          Yank (copy) current item's JSON path"),
+    SV("  :yank/:y    Yank current value to clipboard"),
+    SV("  :path       Yank current item's JSON path"),
     SV("  p/P         Paste from clipboard"),
     SV("  :paste/:p   Same as p key"),
     SV(""),
@@ -5439,7 +5499,19 @@ main(int argc, const char* const* argv){
                 nav_center_cursor(&nav, globals.screenh);
                 break;
 
-            case 'y':
+            case 'y': {
+                int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
+                int r2 = get_input(&globals.TS, &globals.needs_rescale, &c2, &cx2, &cy2, &magnitude2);
+                if (r2 > 0) {
+                    if (c2 == 'p') {
+                        cmd_path(&nav, NULL, 0);
+                    } else if (c2 == 'y') {
+                        cmd_yank(&nav, NULL, 0);
+                    }
+                }
+                break;
+            }
+
             case 'Y':
                 // Yank (copy) current value to clipboard
                 cmd_yank(&nav, NULL, 0);
