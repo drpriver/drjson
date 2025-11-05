@@ -45,6 +45,8 @@ typedef long long ssize_t;
 #include "drjson.h"
 // Access to private APIs
 #include "drjson.c"
+#define DRE_API static
+#include "TUI/dre.c"
 #include "argument_parsing.h"
 #include "term_util.h"
 #include "TUI/drt.h"
@@ -1109,16 +1111,6 @@ nav_ensure_cursor_visible(JsonNav* nav, int viewport_height){
     }
 }
 
-// Check if a pattern contains glob wildcards
-static
-_Bool
-is_glob_pattern(const char* pattern, size_t len){
-    for(size_t i = 0; i < len; i++){
-        if(pattern[i] == '*') return 1;
-    }
-    return 0;
-}
-
 // Case-insensitive character comparison
 static inline
 char
@@ -1189,22 +1181,26 @@ substring_match(const char* str, size_t str_len, const char* query, size_t query
     return 0;
 }
 
-// Helper to check if a string matches the query (dispatches to glob or substring)
+// Helper to check if a string matches the query (uses regex matching)
 static
 _Bool
-string_matches_query(const char* str, size_t str_len, const char* query, size_t query_len, _Bool is_glob){
-    if(is_glob){
-        return glob_match(str, str_len, query, query_len);
-    }
-    else {
+string_matches_query(const char* str, size_t str_len, const char* query, size_t query_len){
+    DreContext ctx = {0};
+    size_t match_start = 0;
+    int result = dre_match(&ctx, query, query_len, str, str_len, &match_start);
+
+    // On regex error, fall back to substring match
+    if(ctx.error != RE_ERROR_NONE){
         return substring_match(str, str_len, query, query_len);
     }
+
+    return result != 0;
 }
 
-// Check if a NavItem matches the search query (supports substring and glob patterns)
+// Check if a NavItem matches the search query (uses regex matching)
 static
 _Bool
-nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t query_len, _Bool is_glob){
+nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t query_len){
     if(query_len == 0) return 0;
 
     // Check key if present
@@ -1213,7 +1209,7 @@ nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t qu
         size_t key_len = 0;
         DrJsonValue key_val = drjson_atom_to_value(item->key);
         drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-        if(key_str && string_matches_query(key_str, key_len, query, query_len, is_glob)){
+        if(key_str && string_matches_query(key_str, key_len, query, query_len)){
             return 1;
         }
     }
@@ -1223,7 +1219,7 @@ nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t qu
         const char* str = NULL;
         size_t len = 0;
         drjson_get_str_and_len(nav->jctx, item->value, &str, &len);
-        if(str && string_matches_query(str, len, query, query_len, is_glob)){
+        if(str && string_matches_query(str, len, query, query_len)){
             return 1;
         }
     }
@@ -1231,17 +1227,17 @@ nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t qu
     return 0;
 }
 
-// Helper to check if a DrJsonValue matches the query (supports substring and glob patterns)
+// Helper to check if a DrJsonValue matches the query (uses regex matching)
 static
 _Bool
-nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len, _Bool is_glob){
+nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len){
     // Check key if present
     if(key.bits != 0){
         const char* key_str = NULL;
         size_t key_len = 0;
         DrJsonValue key_val = drjson_atom_to_value(key);
         drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-        if(key_str && string_matches_query(key_str, key_len, query, query_len, is_glob)){
+        if(key_str && string_matches_query(key_str, key_len, query, query_len)){
             return 1;
         }
     }
@@ -1251,7 +1247,7 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
         const char* str = NULL;
         size_t len = 0;
         drjson_get_str_and_len(nav->jctx, val, &str, &len);
-        if(str && string_matches_query(str, len, query, query_len, is_glob)){
+        if(str && string_matches_query(str, len, query, query_len)){
             return 1;
         }
     }
@@ -1262,9 +1258,9 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
 // Check if a value or any of its descendants match the query (read-only, doesn't modify expanded set)
 static
 _Bool
-nav_contains_match(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len, _Bool is_glob){
+nav_contains_match(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len){
     // Check if this value matches
-    if(nav_value_matches_query(nav, val, key, query, query_len, is_glob)){
+    if(nav_value_matches_query(nav, val, key, query, query_len)){
         return 1;
     }
 
@@ -1275,7 +1271,7 @@ nav_contains_match(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* qu
         if(val.kind == DRJSON_ARRAY || val.kind == DRJSON_ARRAY_VIEW){
             for(int64_t i = 0; i < len; i++){
                 DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
-                if(nav_contains_match(nav, child, (DrJsonAtom){0}, query, query_len, is_glob)){
+                if(nav_contains_match(nav, child, (DrJsonAtom){0}, query, query_len)){
                     return 1;
                 }
             }
@@ -1286,7 +1282,7 @@ nav_contains_match(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* qu
             for(int64_t i = 0; i < items_len; i += 2){
                 DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
                 DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
-                if(nav_contains_match(nav, v, k.atom, query, query_len, is_glob)){
+                if(nav_contains_match(nav, v, k.atom, query, query_len)){
                     return 1;
                 }
             }
@@ -1300,11 +1296,11 @@ nav_contains_match(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* qu
 // Returns true if this value or any descendant matches the query
 static
 _Bool
-nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len, _Bool is_glob){
+nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len){
     _Bool found_match = 0;
 
     // Check if this value matches
-    if(nav_value_matches_query(nav, val, key, query, query_len, is_glob)){
+    if(nav_value_matches_query(nav, val, key, query, query_len)){
         found_match = 1;
         // Expand this container if it's a container
         if(nav_is_container(val)){
@@ -1320,7 +1316,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
             for(int64_t i = 0; i < len; i++){
                 DrJsonValue child = drjson_get_by_index(nav->jctx, val, i);
                 // Recursively search child - if it or its descendants match, expand this container
-                if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, query, query_len, is_glob)){
+                if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, query, query_len)){
                     found_match = 1;
                     bs_add(&nav->expanded, nav_get_container_id(val));
                 }
@@ -1333,7 +1329,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
                 DrJsonValue k = drjson_get_by_index(nav->jctx, items, i);
                 DrJsonValue v = drjson_get_by_index(nav->jctx, items, i + 1);
                 // Recursively search child - if it or its descendants match, expand this container
-                if(nav_search_recursive_helper(nav, v, k.atom, query, query_len, is_glob)){
+                if(nav_search_recursive_helper(nav, v, k.atom, query, query_len)){
                     found_match = 1;
                     bs_add(&nav->expanded, nav_get_container_id(val));
                 }
@@ -1352,23 +1348,20 @@ nav_search_internal(JsonNav* nav, int direction){
     if(nav->search_buffer.length == 0) return;
     if(nav->item_count == 0) return;
 
-    // Check once if this is a glob pattern
-    _Bool is_glob = is_glob_pattern(nav->search_buffer.data, nav->search_buffer.length);
-
     if(direction > 0){
         // Search forward from current position + 1
         for(size_t i = nav->cursor_pos + 1; i < nav->item_count; i++){
             NavItem* item = &nav->items[i];
 
             // Check if this visible item matches
-            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
                 nav->cursor_pos = i;
                 return;
             }
 
             // If expanding and it's a collapsed container, check inside it
             if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
-                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length)){
                     // Found a match inside! Expand ONLY this container (not recursively)
                     bs_add(&nav->expanded, nav_get_container_id(item->value));
                     nav->needs_rebuild = 1;
@@ -1389,14 +1382,14 @@ nav_search_internal(JsonNav* nav, int direction){
             NavItem* item = &nav->items[i];
 
             // Check if this visible item matches
-            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
                 nav->cursor_pos = i;
                 return;
             }
 
             // If expanding and it's a collapsed container, check inside it
             if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
-                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length)){
                     // Found a match inside! Expand ONLY this container (not recursively)
                     bs_add(&nav->expanded, nav_get_container_id(item->value));
                     nav->needs_rebuild = 1;
@@ -1420,14 +1413,14 @@ nav_search_internal(JsonNav* nav, int direction){
                 NavItem* item = &nav->items[idx];
 
                 // Check if this visible item matches
-                if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
                     nav->cursor_pos = idx;
                     return;
                 }
 
                 // If expanding and it's a collapsed container, check inside it
                 if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
-                    if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                    if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length)){
                         // Found a match inside! Expand ONLY this container (not recursively)
                         bs_add(&nav->expanded, nav_get_container_id(item->value));
                         nav->needs_rebuild = 1;
@@ -1449,23 +1442,23 @@ nav_search_internal(JsonNav* nav, int direction){
             NavItem* item = &nav->items[idx];
 
             // Check if this visible item matches
-            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+            if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
                 nav->cursor_pos = idx;
                 return;
             }
 
             // If expanding and it's a collapsed container, check inside it
             if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
-                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length)){
                     // Found a match inside! Expand and search for last match
-                    nav_search_recursive_helper(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length, is_glob);
+                    nav_search_recursive_helper(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length);
                     nav->needs_rebuild = 1;
                     nav_rebuild(nav);
 
                     // Search from this container forward to find last match inside it
                     size_t last_match = idx;
                     for(size_t j = idx; j < nav->item_count; j++){
-                        if(nav_item_matches_query(nav, &nav->items[j], nav->search_buffer.data, nav->search_buffer.length, is_glob)){
+                        if(nav_item_matches_query(nav, &nav->items[j], nav->search_buffer.data, nav->search_buffer.length)){
                             last_match = j;
                         }
                         // Stop when we exit this container's children
@@ -5452,4 +5445,3 @@ main(int argc, const char* const* argv){
     nav_free(&nav);
     return 0;
 }
-
