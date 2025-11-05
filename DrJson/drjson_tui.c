@@ -1582,7 +1582,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -1598,6 +1598,7 @@ static const Command commands[] = {
     {SV("quit"),  SV(":quit"), SV("  Quit"),              cmd_quit},
     {SV("q"),     SV(":q"), SV("  Quit"),              cmd_quit},
     {SV("exit"),  SV(":exit"), SV("  Quit"),              cmd_quit},
+    {SV("wq"),    SV(":wq"), SV("  Write and quit"),      cmd_wq},
     {SV("pwd"),   SV(":pwd"), SV("  Print working directory"), cmd_pwd},
     {SV("cd"),    SV(":cd <dir>"), SV("  Change directory"), cmd_cd},
     {SV("yank"),  SV(":yank"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
@@ -2599,6 +2600,18 @@ cmd_unfocus(JsonNav* nav, const char* args, size_t args_len) {
 
     nav_set_messagef(nav, "Unfocused, returned to previous view.");
     return CMD_OK;
+}
+
+static int
+cmd_wq(JsonNav* nav, const char* args, size_t args_len) {
+    // First, try to write the file
+    int write_result = cmd_write(nav, args, args_len);
+    if (write_result != CMD_OK) {
+        // If write failed, don't quit, just report the error
+        return write_result;
+    }
+    // If write succeeded, then quit
+    return cmd_quit(nav, args, args_len);
 }
 
 static
@@ -3739,6 +3752,7 @@ static const StringView HELP_LINES[] = {
     SV("Commands:"),
     SV("  :           Enter command mode"),
     SV("  :help       Show available commands"),
+    SV("  :wq         Write and quit"),
     SV(""),
     SV("In Command Mode:"),
     SV("  Tab         Show completion menu"),
