@@ -208,6 +208,11 @@ struct JsonNav {
     DrJsonAtom insert_object_key;   // Key atom after first phase of object insertion (object-only)
 
     LineEditor edit_buffer;         // Buffer for editing value
+
+    // Focus mode
+    DrJsonValue* focus_stack;
+    size_t focus_stack_count;
+    size_t focus_stack_capacity;
 };
 
 // Chose to use libc's FILE api instead of OS APIs for portability.
@@ -557,6 +562,9 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filena
     nav->search_buffer.history = &nav->search_history;
     le_init(&nav->command_buffer, 512);
     le_init(&nav->edit_buffer, 512);
+    nav->focus_stack = NULL;
+    nav->focus_stack_count = 0;
+    nav->focus_stack_capacity = 0;
     nav_rebuild(nav);
 }
 
@@ -589,6 +597,7 @@ nav_reinit(JsonNav* nav){
 
     // Clear expansion set - capacity stays allocated for reuse
     bs_clear(&nav->expanded);
+    nav->focus_stack_count = 0;
 
     if(nav_is_container(nav->root)){
         bs_add(&nav->expanded, nav_get_container_id(nav->root));
@@ -605,6 +614,7 @@ nav_free(JsonNav* nav){
     le_free(&nav->search_buffer);
     le_history_free(&nav->search_history);
     le_free(&nav->command_buffer);
+    free(nav->focus_stack);
     *nav = (JsonNav){0};
 }
 
@@ -1572,7 +1582,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_focus, cmd_unfocus;
 
 static const Command commands[] = {
     {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
@@ -1593,6 +1603,8 @@ static const Command commands[] = {
     {SV("paste"), SV(":paste"), SV("  Paste from clipboard"), cmd_paste},
     {SV("p"),     SV(":p"), SV("  Paste from clipboard"), cmd_paste},
     {SV("query"), SV(":query <path>"), SV("  Navigate to path (e.g., foo.bar[0].baz)"), cmd_query},
+    {SV("focus"), SV(":focus"), SV("  Focus on the current array or object"), cmd_focus},
+    {SV("unfocus"), SV(":unfocus"), SV("  Return to the previous (less focused) view"), cmd_unfocus},
 };
 
 static void build_command_helps(void);
@@ -2516,6 +2528,74 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
     // This shouldn't happen, but handle it just in case
     nav_set_messagef(nav, "Error: Found value but couldn't locate it in view");
     return CMD_ERROR;
+}
+
+static void
+nav_focus_stack_push(JsonNav* nav, DrJsonValue val) {
+    if (nav->focus_stack_count >= nav->focus_stack_capacity) {
+        size_t new_cap = nav->focus_stack_capacity ? nav->focus_stack_capacity * 2 : 8;
+        DrJsonValue* new_stack = realloc(nav->focus_stack, new_cap * sizeof(DrJsonValue));
+        if (!new_stack) return; // allocation failure
+        nav->focus_stack = new_stack;
+        nav->focus_stack_capacity = new_cap;
+    }
+    nav->focus_stack[nav->focus_stack_count++] = val;
+}
+
+static DrJsonValue
+nav_focus_stack_pop(JsonNav* nav) {
+    if (nav->focus_stack_count == 0) {
+        return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "focus stack empty");
+    }
+    return nav->focus_stack[--nav->focus_stack_count];
+}
+
+static int
+cmd_focus(JsonNav* nav, const char* args, size_t args_len) {
+    (void)args;
+    (void)args_len;
+
+    if (nav->item_count == 0) {
+        nav_set_messagef(nav, "Error: Nothing to focus on");
+        return CMD_ERROR;
+    }
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+    if (!nav_is_container(item->value)) {
+        nav_set_messagef(nav, "Error: Can only focus on arrays or objects");
+        return CMD_ERROR;
+    }
+
+    nav_focus_stack_push(nav, nav->root);
+    nav->root = item->value;
+    nav_reinit(nav);
+
+    nav_set_messagef(nav, "Focused on new root. Use :unfocus or 'F' to go back.");
+    return CMD_OK;
+}
+
+static int
+cmd_unfocus(JsonNav* nav, const char* args, size_t args_len) {
+    (void)args;
+    (void)args_len;
+
+    if (nav->focus_stack_count == 0) {
+        nav_set_messagef(nav, "Error: Already at the top-level view");
+        return CMD_ERROR;
+    }
+
+    DrJsonValue prev_root = nav_focus_stack_pop(nav);
+    if (prev_root.kind == DRJSON_ERROR) {
+        // This shouldn't happen with the count check, but just in case.
+        nav_set_messagef(nav, "Error: Invalid focus stack state");
+        return CMD_ERROR;
+    }
+
+    nav->root = prev_root;
+    nav_reinit(nav);
+
+    nav_set_messagef(nav, "Unfocused, returned to previous view.");
+    return CMD_OK;
 }
 
 // Tab completion for command mode
@@ -3546,6 +3626,12 @@ static const StringView HELP_LINES[] = {
     SV("  zc/zC       Collapse recursively (close)"),
     SV("  zR          Expand all (open all folds)"),
     SV("  zM          Collapse all (close all folds)"),
+    SV(""),
+    SV("Focus:"),
+    SV("  f           Focus on current container (object/array)"),
+    SV("  F           Unfocus to return to previous view"),
+    SV("  :focus      Focus on current container"),
+    SV("  :unfocus    Return to previous view"),
     SV(""),
     SV("Search:"),
     SV("  /           Start recursive search (case-insensitive)"),
@@ -5108,6 +5194,14 @@ main(int argc, const char* const* argv){
                 begin_tui();
                 globals.needs_redisplay = 1;
                 #endif
+                break;
+
+            case 'f':
+                cmd_focus(&nav, NULL, 0);
+                break;
+
+            case 'F':
+                cmd_unfocus(&nav, NULL, 0);
                 break;
 
             case UP:
