@@ -1587,7 +1587,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload, cmd_sort;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -1616,6 +1616,7 @@ static const Command commands[] = {
     {SV("path"), SV(":path"), SV("  Yank (copy) current item's JSON path to clipboard"), cmd_path},
     {SV("focus"), SV(":focus"), SV("  Focus on the current array or object"), cmd_focus},
     {SV("unfocus"), SV(":unfocus"), SV("  Return to the previous (less focused) view"), cmd_unfocus},
+    {SV("sort"), SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
 };
 
 static void build_command_helps(void);
@@ -2651,6 +2652,319 @@ cmd_reload(JsonNav* nav, const char* args, size_t args_len){
     int err = nav_load_file(nav, nav->filename);
     if(err != CMD_OK)
         return CMD_ERROR;
+    return CMD_OK;
+}
+
+//------------------------------------------------------------
+// Sorting Helpers
+//------------------------------------------------------------
+
+// Defines the sort order for different JSON types.
+static int get_type_rank(DrJsonValue v) {
+    switch (v.kind) {
+        case DRJSON_NULL: return 0;
+        case DRJSON_BOOL: return 1;
+        case DRJSON_NUMBER:
+        case DRJSON_INTEGER:
+        case DRJSON_UINTEGER: return 2;
+        case DRJSON_STRING: return 3;
+        case DRJSON_ARRAY: return 4;
+        case DRJSON_OBJECT: return 5;
+        default: return 6; // Errors and others
+    }
+}
+
+// Comparison function for two DrJsonValues.
+static double drj_to_double_for_sort(DrJsonValue val) {
+    switch (val.kind) {
+        case DRJSON_NUMBER: return val.number;
+        case DRJSON_INTEGER: return (double)val.integer;
+        case DRJSON_UINTEGER: return (double)val.uinteger;
+        default: return 0.0;
+    }
+}
+
+static int compare_values(DrJsonValue a, DrJsonValue b, DrJsonContext* jctx) {
+    int rank_a = get_type_rank(a);
+    int rank_b = get_type_rank(b);
+    if (rank_a != rank_b) return rank_a - rank_b;
+
+    // Types are the same, compare by value
+    switch (a.kind) {
+        case DRJSON_BOOL:
+            return (int)a.boolean - (int)b.boolean;
+
+        case DRJSON_NUMBER:
+        case DRJSON_INTEGER:
+        case DRJSON_UINTEGER: {
+            double val_a = drj_to_double_for_sort(a);
+            double val_b = drj_to_double_for_sort(b);
+            if (val_a < val_b) return -1;
+            if (val_a > val_b) return 1;
+            return 0;
+        }
+
+        case DRJSON_STRING: {
+            const char *s1, *s2;
+            size_t l1, l2;
+            drjson_get_str_and_len(jctx, a, &s1, &l1);
+            drjson_get_str_and_len(jctx, b, &s2, &l2);
+            if (!s1 || !s2) return 0; // Should not happen
+            int cmp = memcmp(s1, s2, l1 < l2 ? l1 : l2);
+            if (cmp != 0) return cmp;
+            return (l1 < l2) ? -1 : (l1 > l2);
+        }
+
+        case DRJSON_ARRAY:
+        case DRJSON_OBJECT: {
+            int64_t len_a = drjson_len(jctx, a);
+            int64_t len_b = drjson_len(jctx, b);
+            if (len_a < len_b) return -1;
+            if (len_a > len_b) return 1;
+            return 0;
+        }
+
+        default:
+            return 0; // NULLs, Errors, etc.
+    }
+}
+
+// Struct to pass context to qsort
+typedef struct {
+    DrJsonContext* jctx;
+    int direction; // 1 for asc, -1 for desc
+    const char* sort_query;
+    size_t sort_query_len;
+} SortContext;
+
+static SortContext g_sort_context;
+
+// qsort compatible comparison function
+static int qsort_compare_values_wrapper(const void* a, const void* b) {
+    DrJsonValue val_a = *(const DrJsonValue*)a;
+    DrJsonValue val_b = *(const DrJsonValue*)b;
+    return compare_values(val_a, val_b, g_sort_context.jctx) * g_sort_context.direction;
+}
+
+// Struct for sorting key-value pairs
+typedef struct {
+    DrJsonAtom key;
+    DrJsonValue value;
+} KeyValuePair;
+
+// qsort compatible comparison function for sorting pairs by value
+static int qsort_compare_pairs_by_value(const void* a, const void* b) {
+    const KeyValuePair* pair_a = (const KeyValuePair*)a;
+    const KeyValuePair* pair_b = (const KeyValuePair*)b;
+    return compare_values(pair_a->value, pair_b->value, g_sort_context.jctx) * g_sort_context.direction;
+}
+
+// qsort wrapper for sorting an array of objects by a query on each object
+static int qsort_compare_array_by_query(const void* a, const void* b) {
+    DrJsonValue obj_a = *(const DrJsonValue*)a;
+    DrJsonValue obj_b = *(const DrJsonValue*)b;
+
+    DrJsonValue val_a = drjson_query(g_sort_context.jctx, obj_a, g_sort_context.sort_query, g_sort_context.sort_query_len);
+    DrJsonValue val_b = drjson_query(g_sort_context.jctx, obj_b, g_sort_context.sort_query, g_sort_context.sort_query_len);
+
+    if (val_a.kind == DRJSON_ERROR) val_a = drjson_make_null();
+    if (val_b.kind == DRJSON_ERROR) val_b = drjson_make_null();
+
+    return compare_values(val_a, val_b, g_sort_context.jctx) * g_sort_context.direction;
+}
+
+// qsort wrapper for sorting an object's KeyValuePairs by a query on the value
+static int qsort_compare_pairs_by_query(const void* a, const void* b) {
+    const KeyValuePair* pair_a = (const KeyValuePair*)a;
+    const KeyValuePair* pair_b = (const KeyValuePair*)b;
+
+    DrJsonValue val_a = drjson_query(g_sort_context.jctx, pair_a->value, g_sort_context.sort_query, g_sort_context.sort_query_len);
+    DrJsonValue val_b = drjson_query(g_sort_context.jctx, pair_b->value, g_sort_context.sort_query, g_sort_context.sort_query_len);
+
+    if (val_a.kind == DRJSON_ERROR) val_a = drjson_make_null();
+    if (val_b.kind == DRJSON_ERROR) val_b = drjson_make_null();
+
+    return compare_values(val_a, val_b, g_sort_context.jctx) * g_sort_context.direction;
+}
+
+
+static
+int
+cmd_sort(JsonNav* nav, const char* args, size_t args_len){
+    if (nav->item_count == 0) {
+        nav_set_messagef(nav, "Error: Nothing to sort.");
+        return CMD_ERROR;
+    }
+
+    // --- Argument Parsing ---
+    int direction = 1;
+    _Bool sort_by_values = 0;
+    const char* query_str = NULL;
+    size_t query_len = 0;
+
+    const char* part = args;
+    const char* end = args + args_len;
+
+    while(part < end) {
+        while(part < end && *part == ' ') part++;
+        const char* word_start = part;
+        while(part < end && *part != ' ') part++;
+        size_t part_len = part - word_start;
+
+        if (part_len == 0) continue;
+
+        if (part_len == 4 && memcmp(word_start, "keys", 4) == 0) {
+            sort_by_values = 0;
+        } else if (part_len == 6 && memcmp(word_start, "values", 6) == 0) {
+            sort_by_values = 1;
+        } else if (part_len == 3 && memcmp(word_start, "asc", 3) == 0) {
+            direction = 1;
+        } else if (part_len == 4 && memcmp(word_start, "desc", 4) == 0) {
+            direction = -1;
+        } else {
+            if (query_str) {
+                nav_set_messagef(nav, "Error: Invalid argument '%.*s'. Query must be a single word.", (int)part_len, word_start);
+                return CMD_ERROR;
+            }
+            query_str = word_start;
+            query_len = part_len;
+        }
+    }
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+    DrJsonValue val = item->value;
+
+    if (val.kind == DRJSON_ARRAY) {
+        int64_t len = drjson_len(nav->jctx, val);
+        if (len <= 1) {
+            nav_set_messagef(nav, "Array has %lld elements, no sorting needed.", (long long)len);
+            return CMD_OK;
+        }
+
+        DrJsonArray* arr = &nav->jctx->arrays.data[val.array_idx];
+
+        if (query_str) {
+            // --- Sort array by query ---
+            for (int64_t i = 0; i < len; i++) {
+                DrJsonValue elem = arr->array_items[i];
+                DrJsonValue sort_val = drjson_query(nav->jctx, elem, query_str, query_len);
+                if (sort_val.kind == DRJSON_ERROR) {
+                    nav_set_messagef(nav, "Error: Query '%.*s' failed on element at index %lld: %s", (int)query_len, query_str, (long long)i, sort_val.err_mess);
+                    return CMD_ERROR;
+                }
+            }
+
+            g_sort_context.jctx = nav->jctx;
+            g_sort_context.sort_query = query_str;
+            g_sort_context.sort_query_len = query_len;
+            g_sort_context.direction = direction;
+            qsort(arr->array_items, len, sizeof(DrJsonValue), qsort_compare_array_by_query);
+            nav_set_messagef(nav, "Array sorted by query '%.*s'.", (int)query_len, query_str);
+        } else {
+            // --- Sort simple array by value ---
+            g_sort_context.jctx = nav->jctx;
+            g_sort_context.direction = direction;
+            qsort(arr->array_items, len, sizeof(DrJsonValue), qsort_compare_values_wrapper);
+            nav_set_messagef(nav, "Array sorted successfully.");
+        }
+    }
+    else if (val.kind == DRJSON_OBJECT) {
+        int64_t len = drjson_len(nav->jctx, val);
+        if (len <= 1) {
+            nav_set_messagef(nav, "Object has %lld members, no sorting needed.", (long long)len);
+            return CMD_OK;
+        }
+
+        DrJsonValue new_obj = drjson_make_object(nav->jctx);
+
+        if (sort_by_values) {
+            KeyValuePair* pairs = malloc(len * sizeof(KeyValuePair));
+            if (!pairs) {
+                nav_set_messagef(nav, "Error: Failed to allocate memory for sorting.");
+                return CMD_ERROR;
+            }
+
+            DrJsonValue keys_view = drjson_object_keys(val);
+            for (int64_t i = 0; i < len; i++) {
+                pairs[i].key = drjson_get_by_index(nav->jctx, keys_view, i).atom;
+                pairs[i].value = drjson_object_get_item_atom(nav->jctx, val, pairs[i].key);
+            }
+
+            if (query_str) {
+                // --- Sort object by value with query ---
+                for (int64_t i = 0; i < len; i++) {
+                    DrJsonValue sort_val = drjson_query(nav->jctx, pairs[i].value, query_str, query_len);
+                    if (sort_val.kind == DRJSON_ERROR) {
+                        const char* key_str; size_t key_len;
+                        drjson_get_atom_str_and_length(nav->jctx, pairs[i].key, &key_str, &key_len);
+                        nav_set_messagef(nav, "Error: Query '%.*s' failed on value for key '%.*s': %s", (int)query_len, query_str, (int)key_len, key_str, sort_val.err_mess);
+                        free(pairs);
+                        return CMD_ERROR;
+                    }
+                }
+                g_sort_context.jctx = nav->jctx;
+                g_sort_context.sort_query = query_str;
+                g_sort_context.sort_query_len = query_len;
+                g_sort_context.direction = direction;
+                qsort(pairs, len, sizeof(KeyValuePair), qsort_compare_pairs_by_query);
+                nav_set_messagef(nav, "Object sorted by query '%.*s'.", (int)query_len, query_str);
+            } else {
+                // --- Sort object by value ---
+                g_sort_context.jctx = nav->jctx;
+                g_sort_context.direction = direction;
+                qsort(pairs, len, sizeof(KeyValuePair), qsort_compare_pairs_by_value);
+                nav_set_messagef(nav, "Object sorted by value.");
+            }
+
+            for (int64_t i = 0; i < len; i++) {
+                drjson_object_set_item_atom(nav->jctx, new_obj, pairs[i].key, pairs[i].value);
+            }
+            free(pairs);
+        } else {
+            // --- Sort by keys ---
+            if (query_str) {
+                nav_set_messagef(nav, "Error: Query cannot be used when sorting object by key.");
+                return CMD_ERROR;
+            }
+            DrJsonValue keys_view = drjson_object_keys(val);
+            DrJsonValue keys_copy = drjson_make_array(nav->jctx);
+            for (int64_t i = 0; i < len; i++) {
+                drjson_array_push_item(nav->jctx, keys_copy, drjson_get_by_index(nav->jctx, keys_view, i));
+            }
+
+            DrJsonArray* keys_arr = &nav->jctx->arrays.data[keys_copy.array_idx];
+            g_sort_context.jctx = nav->jctx;
+            g_sort_context.direction = direction;
+            qsort(keys_arr->array_items, len, sizeof(DrJsonValue), qsort_compare_values_wrapper);
+
+            for (int64_t i = 0; i < len; i++) {
+                DrJsonValue key_val = keys_arr->array_items[i];
+                DrJsonValue value = drjson_object_get_item_atom(nav->jctx, val, key_val.atom);
+                drjson_object_set_item_atom(nav->jctx, new_obj, key_val.atom, value);
+            }
+            nav_set_messagef(nav, "Object sorted by key.");
+        }
+
+        // Replace the old object with the new one
+        size_t parent_idx = nav_find_parent(nav, nav->cursor_pos);
+        if (parent_idx == SIZE_MAX) { // It's the root
+            nav->root = new_obj;
+        } else {
+            NavItem* parent_item = &nav->items[parent_idx];
+            if (parent_item->value.kind == DRJSON_OBJECT) {
+                drjson_object_set_item_atom(nav->jctx, parent_item->value, item->key, new_obj);
+            } else if (parent_item->value.kind == DRJSON_ARRAY) {
+                drjson_array_set_by_index(nav->jctx, parent_item->value, item->index, new_obj);
+            }
+        }
+        item->value = new_obj;
+    } else {
+        nav_set_messagef(nav, "Error: Can only sort arrays or objects.");
+        return CMD_ERROR;
+    }
+
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
     return CMD_OK;
 }
 
