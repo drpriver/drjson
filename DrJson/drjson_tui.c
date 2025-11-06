@@ -1520,7 +1520,8 @@ nav_center_cursor(JsonNav* nav, int viewport_height){
     int half_screen = visible_rows / 2;
     if(nav->cursor_pos >= (size_t)half_screen){
         nav->scroll_offset = nav->cursor_pos - (size_t)half_screen;
-    } else {
+    }
+    else {
         nav->scroll_offset = 0;
     }
 
@@ -1528,7 +1529,8 @@ nav_center_cursor(JsonNav* nav, int viewport_height){
     if(nav->scroll_offset + (size_t)visible_rows > nav->item_count){
         if(nav->item_count > (size_t)visible_rows){
             nav->scroll_offset = nav->item_count - (size_t)visible_rows;
-        } else {
+        }
+        else {
             nav->scroll_offset = 0;
         }
     }
@@ -1625,7 +1627,8 @@ enum {
 
 // Command handlers
 
-static int
+static
+int
 nav_load_file(JsonNav* nav, const char* filepath){
     LongString file_content = {0};
     if(read_file(filepath, &file_content) != 0){
@@ -1914,7 +1917,7 @@ struct ObjCClipboard {
     void* pasteboardType;
 };
 
-static 
+static
 ObjCClipboard*
 get_objc_clipboard(void){
     static ObjCClipboard cached = {0};
@@ -1991,12 +1994,14 @@ get_objc_clipboard(void){
     void** NSPasteboardTypeString_ptr = (void**)dlsym(cached.appkit, "NSPasteboardTypeString");
     if(NSPasteboardTypeString_ptr && *NSPasteboardTypeString_ptr){
         cached.pasteboardType = *NSPasteboardTypeString_ptr;
-    } else {
+    }
+    else {
         // Fallback: try old API
         void** NSStringPboardType_ptr = (void**)dlsym(cached.appkit, "NSStringPboardType");
         if(NSStringPboardType_ptr && *NSStringPboardType_ptr){
             cached.pasteboardType = *NSStringPboardType_ptr;
-        } else {
+        }
+        else {
             // Last resort: create string with UTI
             cached.pasteboardType = ((void*(*)(void*, void*, void*))cached.objc_msgSend_fn)(
                 cached.NSString, cached.sel_stringWithUTF8String, "public.utf8-plain-text"
@@ -2539,12 +2544,13 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
     return CMD_ERROR;
 }
 
-static void
-nav_focus_stack_push(JsonNav* nav, DrJsonValue val) {
-    if (nav->focus_stack_count >= nav->focus_stack_capacity) {
+static
+void
+nav_focus_stack_push(JsonNav* nav, DrJsonValue val){
+    if(nav->focus_stack_count >= nav->focus_stack_capacity){
         size_t new_cap = nav->focus_stack_capacity ? nav->focus_stack_capacity * 2 : 8;
         DrJsonValue* new_stack = realloc(nav->focus_stack, new_cap * sizeof(DrJsonValue));
-        if (!new_stack) return; // allocation failure
+        if(!new_stack) return; // allocation failure
         nav->focus_stack = new_stack;
         nav->focus_stack_capacity = new_cap;
     }
@@ -2552,25 +2558,26 @@ nav_focus_stack_push(JsonNav* nav, DrJsonValue val) {
 }
 
 static DrJsonValue
-nav_focus_stack_pop(JsonNav* nav) {
-    if (nav->focus_stack_count == 0) {
+nav_focus_stack_pop(JsonNav* nav){
+    if(nav->focus_stack_count == 0){
         return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "focus stack empty");
     }
     return nav->focus_stack[--nav->focus_stack_count];
 }
 
-static int
-cmd_focus(JsonNav* nav, const char* args, size_t args_len) {
+static
+int
+cmd_focus(JsonNav* nav, const char* args, size_t args_len){
     (void)args;
     (void)args_len;
 
-    if (nav->item_count == 0) {
+    if(nav->item_count == 0){
         nav_set_messagef(nav, "Error: Nothing to focus on");
         return CMD_ERROR;
     }
 
     NavItem* item = &nav->items[nav->cursor_pos];
-    if (!nav_is_container(item->value)) {
+    if(!nav_is_container(item->value)){
         nav_set_messagef(nav, "Error: Can only focus on arrays or objects");
         return CMD_ERROR;
     }
@@ -2583,18 +2590,19 @@ cmd_focus(JsonNav* nav, const char* args, size_t args_len) {
     return CMD_OK;
 }
 
-static int
-cmd_unfocus(JsonNav* nav, const char* args, size_t args_len) {
+static
+int
+cmd_unfocus(JsonNav* nav, const char* args, size_t args_len){
     (void)args;
     (void)args_len;
 
-    if (nav->focus_stack_count == 0) {
+    if(nav->focus_stack_count == 0){
         nav_set_messagef(nav, "Error: Already at the top-level view");
         return CMD_ERROR;
     }
 
     DrJsonValue prev_root = nav_focus_stack_pop(nav);
-    if (prev_root.kind == DRJSON_ERROR) {
+    if(prev_root.kind == DRJSON_ERROR){
         // This shouldn't happen with the count check, but just in case.
         nav_set_messagef(nav, "Error: Invalid focus stack state");
         return CMD_ERROR;
@@ -2607,11 +2615,12 @@ cmd_unfocus(JsonNav* nav, const char* args, size_t args_len) {
     return CMD_OK;
 }
 
-static int
-cmd_wq(JsonNav* nav, const char* args, size_t args_len) {
+static
+int
+cmd_wq(JsonNav* nav, const char* args, size_t args_len){
     // First, try to write the file
     int write_result = cmd_write(nav, args, args_len);
-    if (write_result != CMD_OK) {
+    if(write_result != CMD_OK){
         // If write failed, don't quit, just report the error
         return write_result;
     }
@@ -2619,7 +2628,8 @@ cmd_wq(JsonNav* nav, const char* args, size_t args_len) {
     return cmd_quit(nav, args, args_len);
 }
 
-static int
+static
+int
 cmd_reload(JsonNav* nav, const char* args, size_t args_len){
     (void)args;
     (void)args_len;
@@ -3116,7 +3126,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                     budget -= 4;
                                     shown++;
                                 }
-                            } else {
+                            }
+                            else {
                                 if(budget >= 5){
                                     drt_puts(drt, "false", 5);
                                     budget -= 5;
@@ -3140,7 +3151,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                 drt_puts(drt, numbuf, nlen);
                                 budget -= nlen;
                                 shown++;
-                            } else {
+                            }
+                            else {
                                 goto budget_exceeded;
                             }
                             break;
@@ -3160,7 +3172,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                 drt_putc(drt, '"');
                                 budget--;
                                 shown++;
-                            } else {
+                            }
+                            else {
                                 goto budget_exceeded;
                             }
                             break;
@@ -3216,7 +3229,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                                     drt_puts(drt, "true", 4);
                                                     consumed = 4;
                                                 }
-                                            } else {
+                                            }
+                                            else {
                                                 if(arr_budget >= 5){
                                                     drt_puts(drt, "false", 5);
                                                     consumed = 5;
@@ -3275,7 +3289,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             if(show_values && arr_items_shown == arr_len){
                                 // Successfully showed all items
                                 budget = arr_budget;
-                            } else {
+                            }
+                            else {
                                 // Fall back to just showing ellipsis
                                 if(arr_len > 0){
                                     drt_puts(drt, "...", 3);
@@ -3343,7 +3358,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                     if(to_print > 0){
                                         drt_puts(drt, okey_str, to_print);
                                         obj_budget -= (int)to_print;
-                                    } else {
+                                    }
+                                    else {
                                         show_values = 0;
                                         break;
                                     }
@@ -3352,7 +3368,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                     if(obj_budget >= 2){
                                         drt_puts(drt, ": ", 2);
                                         obj_budget -= 2;
-                                    } else {
+                                    }
+                                    else {
                                         show_values = 0;
                                         break;
                                     }
@@ -3372,7 +3389,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                                     drt_puts(drt, "true", 4);
                                                     consumed = 4;
                                                 }
-                                            } else {
+                                            }
+                                            else {
                                                 if(obj_budget >= 5){
                                                     drt_puts(drt, "false", 5);
                                                     consumed = 5;
@@ -3431,7 +3449,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             if(show_values && obj_shown == obj_keys_len){
                                 // Successfully showed all items
                                 budget = obj_budget;
-                            } else {
+                            }
+                            else {
                                 // Fall back to just showing keys
                                 obj_shown = 0;
                                 for(int64_t ki = 0; ki < obj_keys_len && budget > 10; ki++){
@@ -3485,10 +3504,12 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                     int blen = snprintf(buf, sizeof buf, ", ... %lld more]", (long long)remaining);
                     if(blen > 0 && blen < (int)sizeof buf){
                         drt_puts(drt, buf, blen);
-                    } else {
+                    }
+                    else {
                         drt_puts(drt, ", ...]", 6);
                     }
-                } else {
+                }
+                else {
                     drt_putc(drt, ']');
                 }
             }
@@ -3527,7 +3548,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                         if(to_print > 0){
                             drt_puts(drt, key_str, to_print);
                             budget -= to_print;
-                        } else {
+                        }
+                        else {
                             break;
                         }
 
@@ -3539,7 +3561,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                             if(budget >= 2){
                                 drt_puts(drt, ": ", 2);
                                 budget -= 2;
-                            } else {
+                            }
+                            else {
                                 break;
                             }
 
@@ -3558,7 +3581,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                             drt_puts(drt, "true", 4);
                                             consumed = 4;
                                         }
-                                    } else {
+                                    }
+                                    else {
                                         if(budget >= 5){
                                             drt_puts(drt, "false", 5);
                                             consumed = 5;
@@ -3612,7 +3636,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                             drt_puts(drt, "[]", 2);
                                             consumed = 2;
                                         }
-                                    } else {
+                                    }
+                                    else {
                                         if(budget >= 5){
                                             drt_puts(drt, "[...]", 5);
                                             consumed = 5;
@@ -3628,7 +3653,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                             drt_puts(drt, "{}", 2);
                                             consumed = 2;
                                         }
-                                    } else {
+                                    }
+                                    else {
                                         if(budget >= 5){
                                             drt_puts(drt, "{...}", 5);
                                             consumed = 5;
@@ -3656,10 +3682,12 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                     int blen = snprintf(buf, sizeof buf, ", ... %lld more}", (long long)remaining);
                     if(blen > 0 && blen < (int)sizeof buf){
                         drt_puts(drt, buf, blen);
-                    } else {
+                    }
+                    else {
                         drt_puts(drt, ", ...}", 6);
                     }
-                } else {
+                }
+                else {
                     drt_putc(drt, '}');
                 }
             }
@@ -5157,7 +5185,8 @@ main(int argc, const char* const* argv){
                     if(visible_rows < 1) visible_rows = 1;
                     if(nav.cursor_pos >= (size_t)(visible_rows - 1)){
                         nav.scroll_offset = nav.cursor_pos - (size_t)(visible_rows - 1);
-                    } else {
+                    }
+                    else {
                         nav.scroll_offset = 0;
                     }
                     continue;
@@ -5537,10 +5566,11 @@ main(int argc, const char* const* argv){
             case 'y': {
                 int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
                 int r2 = get_input(&globals.TS, &globals.needs_rescale, &c2, &cx2, &cy2, &magnitude2);
-                if (r2 > 0) {
-                    if (c2 == 'p') {
+                if(r2 > 0){
+                    if(c2 == 'p'){
                         cmd_path(&nav, NULL, 0);
-                    } else if (c2 == 'y') {
+                    }
+                    else if(c2 == 'y'){
                         cmd_yank(&nav, NULL, 0);
                     }
                 }
