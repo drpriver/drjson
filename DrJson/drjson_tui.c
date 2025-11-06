@@ -597,7 +597,6 @@ nav_reinit(JsonNav* nav){
 
     // Clear expansion set - capacity stays allocated for reuse
     bs_clear(&nav->expanded);
-    nav->focus_stack_count = 0;
 
     if(nav_is_container(nav->root)){
         bs_add(&nav->expanded, nav_get_container_id(nav->root));
@@ -1658,6 +1657,7 @@ nav_load_file(JsonNav* nav, const char* filepath){
     }
     nav->root = new_root;
     nav_reinit(nav);
+    nav->focus_stack_count = 0;
     drjson_gc(nav->jctx, &nav->root, 1); // Free the old root and other garbage
 
     return CMD_OK;
@@ -2581,12 +2581,17 @@ cmd_focus(JsonNav* nav, const char* args, size_t args_len){
         nav_set_messagef(nav, "Error: Can only focus on arrays or objects");
         return CMD_ERROR;
     }
+    if(memcmp(&item->value, &nav->root, sizeof nav->root) == 0){
+        nav_set_messagef(nav, "Error: Already the root");
+        return CMD_ERROR;
+    }
 
     nav_focus_stack_push(nav, nav->root);
     nav->root = item->value;
     nav_reinit(nav);
 
     nav_set_messagef(nav, "Focused on new root. Use :unfocus or 'F' to go back.");
+    if(0) LOG("nav->focus_stack_count: %zu\n", nav->focus_stack_count);
     return CMD_OK;
 }
 
@@ -2595,6 +2600,7 @@ int
 cmd_unfocus(JsonNav* nav, const char* args, size_t args_len){
     (void)args;
     (void)args_len;
+    if(0) LOG("nav->focus_stack_count: %zu\n", nav->focus_stack_count);
 
     if(nav->focus_stack_count == 0){
         nav_set_messagef(nav, "Error: Already at the top-level view");
@@ -5431,6 +5437,10 @@ main(int argc, const char* const* argv){
 
             case LEFT:
             case 'h':
+                if(nav.cursor_pos == 0){
+                    cmd_unfocus(&nav, NULL, 0);
+                    break;
+                }
                 // Jump to parent container and collapse it
                 nav_jump_to_parent(&nav, 1);
                 nav_ensure_cursor_visible(&nav, globals.screenh);
