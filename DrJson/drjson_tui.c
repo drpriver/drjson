@@ -213,6 +213,9 @@ struct JsonNav {
     DrJsonValue* focus_stack;
     size_t focus_stack_count;
     size_t focus_stack_capacity;
+
+    // Multi-key input state
+    int pending_key;                // First key of a two-key sequence (z, c, d, y)
 };
 
 // Chose to use libc's FILE api instead of OS APIs for portability.
@@ -578,6 +581,7 @@ nav_reinit(JsonNav* nav){
     nav->has_message = 0;
     nav->show_help = 0;
     nav->command_mode = 0;
+    nav->pending_key = 0;
 
     // Clear line editors but keep their buffers
     if(nav->command_buffer.length > 0)
@@ -2700,7 +2704,7 @@ cmd_path(JsonNav* nav, const char* args, size_t args_len){
     }
 #endif
 
-    nav_set_messagef(nav, "Yanked path to clipboard: %s", path_buf);
+    nav_set_messagef(nav, "Yanked path to clipboard");
     return CMD_OK;
 }
 
@@ -4211,6 +4215,13 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         drt_putc(drt, ' ');
     }
 
+    // Show pending key if waiting for second key in sequence
+    if(nav->pending_key != 0){
+        int cx, cy;
+        drt_cursor(drt, &cx, &cy);
+        drt_printf(drt, "— %c", nav->pending_key);
+    }
+
     drt_clear_to_end_of_row(drt);
     drt_pop_state(drt);
 
@@ -4864,298 +4875,288 @@ main(int argc, const char* const* argv){
             nav_render_help(&globals.drt, globals.screenw, globals.screenh, nav.help_page, &num_pages, nav.help_lines, nav.help_lines_count);
 
             // Clamp help_page in case window was resized
-            if(nav.help_page >= num_pages){
+            if(nav.help_page >= num_pages)
                 nav.help_page = num_pages - 1;
-            }
-            if(nav.help_page < 0){
+            if(nav.help_page < 0)
                 nav.help_page = 0;
-            }
-
-            if(c == 'n' || c == RIGHT){
-                // Next page
-                if(nav.help_page < num_pages - 1){
-                    nav.help_page++;
-                }
-                continue;
-            }
-            else if(c == 'p' || c == LEFT){
-                // Previous page
-                if(nav.help_page > 0){
-                    nav.help_page--;
-                }
-                continue;
-            }
-            else {
-                // Any other key closes help
-                nav.show_help = 0;
-                nav.help_page = 0;
-                le_clear(&count_buffer);
-                continue;
+            switch(c){
+                case 'n':
+                case RIGHT:
+                    // Next page
+                    if(nav.help_page < num_pages - 1)
+                        nav.help_page++;
+                    continue;
+                case 'p':
+                case LEFT:
+                    // Previous page
+                    if(nav.help_page > 0)
+                        nav.help_page--;
+                    continue;
+                default:
+                    // Any other key closes help
+                    nav.show_help = 0;
+                    nav.help_page = 0;
+                    le_clear(&count_buffer);
+                    continue;
             }
         }
 
         // Handle search input mode
         if(nav.search_mode != SEARCH_INACTIVE){
-            if(c == ESC || c == CTRL_C){
-                // Cancel search
-                nav.search_mode = SEARCH_INACTIVE;
-                le_clear(&nav.search_buffer);
-                continue;
-            }
-            else if(c == ENTER || c == CTRL_J){
-                // Add to history before searching
-                le_history_add(&nav.search_history, nav.search_buffer.data, nav.search_buffer.length);
-                le_history_reset(&nav.search_buffer);
+            switch(c){
+                case ESC:
+                case CTRL_C:
+                    // Cancel search
+                    nav.search_mode = SEARCH_INACTIVE;
+                    le_clear(&nav.search_buffer);
+                    continue;
+                case ENTER:
+                case CTRL_J:
+                    // Add to history before searching
+                    le_history_add(&nav.search_history, nav.search_buffer.data, nav.search_buffer.length);
+                    le_history_reset(&nav.search_buffer);
 
-                // Perform search (recursive if in recursive mode)
-                nav.search_mode = SEARCH_INACTIVE;
-                nav_search_recursive(&nav);
-                nav_center_cursor(&nav, globals.screenh);
-                continue;
+                    // Perform search (recursive if in recursive mode)
+                    nav.search_mode = SEARCH_INACTIVE;
+                    nav_search_recursive(&nav);
+                    nav_center_cursor(&nav, globals.screenh);
+                    continue;
+                case UP:
+                case CTRL_P:
+                    // Navigate to previous history entry
+                    le_history_prev(&nav.search_buffer);
+                    continue;
+                case DOWN:
+                case CTRL_N:
+                    // Navigate to next history entry
+                    le_history_next(&nav.search_buffer);
+                    continue;
+                default:
+                    if(le_handle_key(&nav.search_buffer, c, 1))
+                        // Common line editing keys handled
+                        continue;
+                    if(c >= 32 && c < 127){
+                        // Add printable character
+                        le_history_reset(&nav.search_buffer);
+                        le_append_char(&nav.search_buffer, (char)c);
+                        continue;
+                    }
+                    continue;
             }
-            else if(c == UP || c == CTRL_P){
-                // Navigate to previous history entry
-                le_history_prev(&nav.search_buffer);
-                continue;
-            }
-            else if(c == DOWN || c == CTRL_N){
-                // Navigate to next history entry
-                le_history_next(&nav.search_buffer);
-                continue;
-            }
-            else if(le_handle_key(&nav.search_buffer, c, 1)){
-                // Common line editing keys handled
-                continue;
-            }
-            else if(c >= 32 && c < 127){
-                // Add printable character
-                le_history_reset(&nav.search_buffer);
-                le_append_char(&nav.search_buffer, (char)c);
-                continue;
-            }
-            // Ignore other keys in search mode
-            continue;
         }
 
         // Handle command mode
         if(nav.command_mode){
             // Handle completion menu navigation
             if(nav.in_completion_menu){
-                if(c == UP || c == CTRL_P){
-                    // Move selection up
-                    nav_completion_move(&nav, -1);
-                    continue;
-                }
-                else if(c == DOWN || c == CTRL_N){
-                    // Move selection down
-                    nav_completion_move(&nav, 1);
-                    continue;
-                }
-                else if(c == ENTER || c == CTRL_J){
-                    // Accept completion (don't execute command)
-                    nav_accept_completion(&nav);
-                    continue;
-                }
-                else if(c == ESC || c == CTRL_C){
-                    // Cancel completion menu
-                    nav_cancel_completion(&nav);
-                    continue;
-                }
-                else if(c == TAB){
-                    // Tab again cycles through in menu (already showing)
-                    nav_completion_move(&nav, 1);
-                    continue;
-                }
-                else {
-                    // Any other key exits completion menu and continues with normal handling
-                    nav_exit_completion(&nav);
-                    // Fall through to normal command mode handling
+                switch(c){
+                    case UP:
+                    case CTRL_P:
+                        nav_completion_move(&nav, -1);
+                        continue;
+                    case DOWN:
+                    case CTRL_N:
+                    case TAB:
+                        nav_completion_move(&nav, 1);
+                        continue;
+                    case ENTER:
+                    case CTRL_J:
+                        nav_accept_completion(&nav);
+                        continue;
+                    case ESC:
+                    case CTRL_C:
+                        // Cancel completion menu
+                        nav_cancel_completion(&nav);
+                        continue;
+                    default:
+                        // Any other key exits completion menu and continues with normal handling
+                        nav_exit_completion(&nav);
+                        // Fall through to normal command mode handling
+                        break;
                 }
             }
-
             // Normal command mode handling
-            if(c == ESC || c == CTRL_C){
-                // Cancel command
-                nav.command_mode = 0;
-                nav.tab_count = 0;
-                le_clear(&nav.command_buffer);
-                continue;
+            switch(c){
+                case ESC:
+                case CTRL_C:
+                    // Cancel command
+                    nav.command_mode = 0;
+                    nav.tab_count = 0;
+                    le_clear(&nav.command_buffer);
+                    continue;
+                case ENTER:
+                case CTRL_J:{
+                    // Execute command
+                    int cmd_result = nav_execute_command(&nav, nav.command_buffer.data, nav.command_buffer.length);
+                    nav.command_mode = 0;
+                    nav.tab_count = 0;
+                    le_clear(&nav.command_buffer);
+                    if(cmd_result == CMD_QUIT)
+                        goto finally;
+                }continue;
+                case TAB:
+                    nav_complete_command(&nav);
+                    continue;
+                default:
+                    if(le_handle_key(&nav.command_buffer, c, 0)){
+                        // Common line editing keys handled
+                        nav.tab_count = 0; // Reset tab completion
+                        continue;
+                    }
+                    if(c >= 32 && c < 127){
+                        // Add printable character
+                        nav.tab_count = 0; // Reset tab completion
+                        le_append_char(&nav.command_buffer, (char)c);
+                        continue;
+                    }
+                    // Ignore other keys in command mode
+                    continue;
             }
-            else if(c == ENTER || c == CTRL_J){
-                // Execute command
-                int cmd_result = nav_execute_command(&nav, nav.command_buffer.data, nav.command_buffer.length);
-                nav.command_mode = 0;
-                nav.tab_count = 0;
-                le_clear(&nav.command_buffer);
-                if(cmd_result == 1){
-                    // Quit requested
-                    goto finally;
-                }
-                continue;
-            }
-            else if(c == TAB){
-                // Tab completion
-                nav_complete_command(&nav);
-                continue;
-            }
-            else if(le_handle_key(&nav.command_buffer, c, 0)){
-                // Common line editing keys handled
-                nav.tab_count = 0; // Reset tab completion
-                continue;
-            }
-            else if(c >= 32 && c < 127){
-                // Add printable character
-                nav.tab_count = 0; // Reset tab completion
-                le_append_char(&nav.command_buffer, (char)c);
-                continue;
-            }
-            // Ignore other keys in command mode
-            continue;
         }
 
         // Handle edit mode
         if(nav.edit_mode){
-            if(c == ESC || c == CTRL_C){
-                // Cancel edit
-                nav.edit_mode = 0;
-                nav.edit_key_mode = 0;
-                nav.insert_mode = INSERT_NONE;
-                le_clear(&nav.edit_buffer);
-                continue;
-            }
-            else if(c == ENTER || c == CTRL_J){
-                int err;
-                if(nav.edit_key_mode){
-                    DrJsonAtom new_key = {0};
-                    err = parse_as_string(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_key);
-                    if(nav.insert_mode == INSERT_OBJECT){
-                        // Store the key and switch to value editing
-                        nav.insert_object_key = new_key;
-                        nav.edit_key_mode = 0;
-                        le_clear(&nav.edit_buffer);
-                        continue; // Stay in edit mode but now editing value
+            switch(c){
+                case ESC:
+                case CTRL_C:
+                    // Cancel edit
+                    nav.edit_mode = 0;
+                    nav.edit_key_mode = 0;
+                    nav.insert_mode = INSERT_NONE;
+                    le_clear(&nav.edit_buffer);
+                    continue;
+                case ENTER:
+                case CTRL_J:{
+                    int err;
+                    if(nav.edit_key_mode){
+                        DrJsonAtom new_key = {0};
+                        err = parse_as_string(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_key);
+                        if(nav.insert_mode == INSERT_OBJECT){
+                            // Store the key and switch to value editing
+                            nav.insert_object_key = new_key;
+                            nav.edit_key_mode = 0;
+                            le_clear(&nav.edit_buffer);
+                            continue; // Stay in edit mode but now editing value
+                        }
+                        // Find parent object and replace the key
+                        size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
+                        if(parent_idx == SIZE_MAX) break;
+                        NavItem* parent = &nav.items[parent_idx];
+                        NavItem* item = &nav.items[nav.cursor_pos];
+                        if(parent->value.kind == DRJSON_OBJECT){
+                            err = drjson_object_replace_key_atom(nav.jctx, parent->value, item->key, new_key);
+                            if(err){
+                                nav_set_messagef(&nav, "Error: Key already exists or cannot be replaced");
+                                goto exit_edit_mode;
+                            }
+                            nav.needs_rebuild = 1;
+                            nav_rebuild(&nav);
+                        }
+                        goto exit_edit_mode;
                     }
-                    // Find parent object and replace the key
-                    size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
-                    if(parent_idx == SIZE_MAX) break;
-                    NavItem* parent = &nav.items[parent_idx];
-                    NavItem* item = &nav.items[nav.cursor_pos];
-                    if(parent->value.kind == DRJSON_OBJECT){
-                        err = drjson_object_replace_key_atom(nav.jctx, parent->value, item->key, new_key);
-                        if(err){
-                            nav_set_messagef(&nav, "Error: Key already exists or cannot be replaced");
+
+                    // Commit the edit
+                    DrJsonValue new_value;
+                    err = parse_as_value(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_value);
+                    if(err){
+                        nav_set_messagef(&nav, "Error: Invalid value syntax");
+                        goto exit_edit_mode;
+                    }
+                    if(nav.insert_mode == INSERT_ARRAY){
+                        // Insert into the array
+                        NavItem* array_item = &nav.items[nav.insert_container_pos];
+                        DrJsonValue array = array_item->value;
+                        if(array.kind != DRJSON_ARRAY){
+                            nav_set_messagef(&nav, "Error: Not an array");
                             goto exit_edit_mode;
                         }
+                        if(nav.insert_index == SIZE_MAX)
+                            err = drjson_array_push_item(nav.jctx, array, new_value); // Append to end
+                        else
+                            err = drjson_array_insert_item(nav.jctx, array, nav.insert_index, new_value); // Insert at specific index
+                        if(err){
+                            nav_set_messagef(&nav, "Error: Could not insert into array");
+                            goto exit_edit_mode;
+                        }
+                        nav_set_messagef(&nav, "Item inserted");
+                        nav.needs_rebuild = 1;
+                        nav_rebuild(&nav);
+                        goto exit_edit_mode;
+                    }
+                    if(nav.insert_mode == INSERT_OBJECT){
+                        // Insert into the object at the specified index
+                        NavItem* object_item = &nav.items[nav.insert_container_pos];
+                        DrJsonValue object = object_item->value;
+                        if(object.kind != DRJSON_OBJECT){
+                            nav_set_messagef(&nav, "Error: Not an object");
+                            goto exit_edit_mode;
+                        }
+                        size_t insert_index = nav.insert_index;
+                        if(insert_index == SIZE_MAX) insert_index = drjson_len(nav.jctx, object);
+                        int err = drjson_object_insert_item_at_index(nav.jctx, object, nav.insert_object_key, new_value, insert_index);
+                        if(err){
+                            nav_set_messagef(&nav, "Error: Could not insert into object (key may already exist)");
+                            goto exit_edit_mode;
+                        }
+                        nav_set_messagef(&nav, "Item inserted");
+                        nav.needs_rebuild = 1;
+                        nav_rebuild(&nav);
+                        goto exit_edit_mode;
+                    }
+                    size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
+                    if(parent_idx == SIZE_MAX){
+                        // it's the root
+                        nav.root = new_value;
+                        nav.needs_rebuild = 1;
+                        nav_rebuild(&nav);
+                        nav_set_messagef(&nav, "Root value updated");
+                        goto exit_edit_mode;
+                    }
+                    NavItem* parent = &nav.items[parent_idx];
+                    if(parent->value.kind == DRJSON_OBJECT){
+                        NavItem* item = &nav.items[nav.cursor_pos];
+                        err = drjson_object_set_item_atom(nav.jctx, parent->value, item->key, new_value);
+                        if(err){
+                            nav_set_messagef(&nav, "Error: Could not update value");
+                            goto exit_edit_mode;
+                        }
+                        nav_set_messagef(&nav, "Value updated");
+                        nav.needs_rebuild = 1;
+                        nav_rebuild(&nav);
+                        goto exit_edit_mode;
+                    }
+                    if(parent->value.kind == DRJSON_ARRAY){
+                        NavItem* item = &nav.items[nav.cursor_pos];
+                        if(item->is_flat_view){
+                            nav_set_messagef(&nav, "Error: Array element editing of flat views not yet supported");
+                            goto exit_edit_mode;
+                        }
+                        err = drjson_array_set_by_index(nav.jctx, parent->value, item->index, new_value);
+                        if(err){
+                            nav_set_messagef(&nav, "Error: Could not update value");
+                            goto exit_edit_mode;
+                        }
+                        nav_set_messagef(&nav, "Value updated");
                         nav.needs_rebuild = 1;
                         nav_rebuild(&nav);
                     }
-                    goto exit_edit_mode;
-                }
 
-                // Commit the edit
-                DrJsonValue new_value;
-                err = parse_as_value(nav.jctx, nav.edit_buffer.data, nav.edit_buffer.length, &new_value);
-                if(err){
-                    nav_set_messagef(&nav, "Error: Invalid value syntax");
-                    goto exit_edit_mode;
-                }
-                if(nav.insert_mode == INSERT_ARRAY){
-                    // Insert into the array
-                    NavItem* array_item = &nav.items[nav.insert_container_pos];
-                    DrJsonValue array = array_item->value;
-                    if(array.kind != DRJSON_ARRAY){
-                        nav_set_messagef(&nav, "Error: Not an array");
-                        goto exit_edit_mode;
+                    exit_edit_mode:;
+                    nav.edit_mode = 0;
+                    nav.edit_key_mode = 0;
+                    nav.insert_mode = INSERT_NONE;
+                    le_clear(&nav.edit_buffer);
+                }continue;
+                default:
+                    if(le_handle_key(&nav.edit_buffer, c, 0))
+                        continue;
+                    if(c >= 32 && c < 127){
+                        // Add printable character
+                        le_append_char(&nav.edit_buffer, (char)c);
+                        continue;
                     }
-                    if(nav.insert_index == SIZE_MAX)
-                        err = drjson_array_push_item(nav.jctx, array, new_value); // Append to end
-                    else
-                        err = drjson_array_insert_item(nav.jctx, array, nav.insert_index, new_value); // Insert at specific index
-                    if(err){
-                        nav_set_messagef(&nav, "Error: Could not insert into array");
-                        goto exit_edit_mode;
-                    }
-                    nav_set_messagef(&nav, "Item inserted");
-                    nav.needs_rebuild = 1;
-                    nav_rebuild(&nav);
-                    goto exit_edit_mode;
-                }
-                if(nav.insert_mode == INSERT_OBJECT){
-                    // Insert into the object at the specified index
-                    NavItem* object_item = &nav.items[nav.insert_container_pos];
-                    DrJsonValue object = object_item->value;
-                    if(object.kind != DRJSON_OBJECT){
-                        nav_set_messagef(&nav, "Error: Not an object");
-                        goto exit_edit_mode;
-                    }
-                    size_t insert_index = nav.insert_index;
-                    if(insert_index == SIZE_MAX) insert_index = drjson_len(nav.jctx, object);
-                    int err = drjson_object_insert_item_at_index(nav.jctx, object, nav.insert_object_key, new_value, insert_index);
-                    if(err){
-                        nav_set_messagef(&nav, "Error: Could not insert into object (key may already exist)");
-                        goto exit_edit_mode;
-                    }
-                    nav_set_messagef(&nav, "Item inserted");
-                    nav.needs_rebuild = 1;
-                    nav_rebuild(&nav);
-                    goto exit_edit_mode;
-                }
-                size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
-                if(parent_idx == SIZE_MAX){
-                    // it's the root
-                    nav.root = new_value;
-                    nav.needs_rebuild = 1;
-                    nav_rebuild(&nav);
-                    nav_set_messagef(&nav, "Root value updated");
-                    goto exit_edit_mode;
-                }
-                NavItem* parent = &nav.items[parent_idx];
-                if(parent->value.kind == DRJSON_OBJECT){
-                    NavItem* item = &nav.items[nav.cursor_pos];
-                    err = drjson_object_set_item_atom(nav.jctx, parent->value, item->key, new_value);
-                    if(err){
-                        nav_set_messagef(&nav, "Error: Could not update value");
-                        goto exit_edit_mode;
-                    }
-                    nav_set_messagef(&nav, "Value updated");
-                    nav.needs_rebuild = 1;
-                    nav_rebuild(&nav);
-                    goto exit_edit_mode;
-                }
-                if(parent->value.kind == DRJSON_ARRAY){
-                    NavItem* item = &nav.items[nav.cursor_pos];
-                    if(item->is_flat_view){
-                        nav_set_messagef(&nav, "Error: Array element editing of flat views not yet supported");
-                        goto exit_edit_mode;
-                    }
-                    err = drjson_array_set_by_index(nav.jctx, parent->value, item->index, new_value);
-                    if(err){
-                        nav_set_messagef(&nav, "Error: Could not update value");
-                        goto exit_edit_mode;
-                    }
-                    nav_set_messagef(&nav, "Value updated");
-                    nav.needs_rebuild = 1;
-                    nav_rebuild(&nav);
-                }
-
-                exit_edit_mode:;
-                nav.edit_mode = 0;
-                nav.edit_key_mode = 0;
-                nav.insert_mode = INSERT_NONE;
-                le_clear(&nav.edit_buffer);
-                continue;
+                    continue;
             }
-            else if(le_handle_key(&nav.edit_buffer, c, 0)){
-                // Common line editing keys handled
-                continue;
-            }
-            else if(c >= 32 && c < 127){
-                // Add printable character
-                le_append_char(&nav.edit_buffer, (char)c);
-                continue;
-            }
-            // Ignore other keys in edit mode
-            continue;
         }
 
         // Handle digit input to build count
@@ -5169,153 +5170,168 @@ main(int argc, const char* const* argv){
             continue;
         }
 
-        // Handle 'z' prefix for vim-like commands
-        if(c == 'z'){
-            int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
-            int r2 = get_input(&globals.TS, &globals.needs_rescale, &c2, &cx2, &cy2, &magnitude2);
-            if(r2 == -1) goto finally;
-            if(r2){
-                if(c2 == 'z'){
-                    // zz - center cursor
-                    nav_center_cursor(&nav, globals.screenh);
-                    continue;
-                }
-                else if(c2 == 't'){
-                    // zt - cursor to top of screen
-                    nav.scroll_offset = nav.cursor_pos;
-                    continue;
-                }
-                else if(c2 == 'b'){
-                    // zb - cursor to bottom of screen
-                    int visible_rows = globals.screenh - 2;  // Account for status and breadcrumb
-                    if(visible_rows < 1) visible_rows = 1;
-                    if(nav.cursor_pos >= (size_t)(visible_rows - 1)){
-                        nav.scroll_offset = nav.cursor_pos - (size_t)(visible_rows - 1);
-                    }
-                    else {
-                        nav.scroll_offset = 0;
-                    }
-                    continue;
-                }
-                else if(c2 == 'c' || c2 == 'C'){
-                    // zc/zC - collapse current item recursively
-                    nav_collapse_recursive(&nav);
-                    continue;
-                }
-                else if(c2 == 'o' || c2 == 'O'){
-                    // zo/zO - expand recursively (open)
-                    nav_expand_recursive(&nav);
-                    nav_ensure_cursor_visible(&nav, globals.screenh);
-                    continue;
-                }
-                else if(c2 == 'M'){
-                    // zM - collapse all (close all folds)
-                    nav_collapse_all(&nav);
-                    continue;
-                }
-                else if(c2 == 'R'){
-                    // zR - expand all (open all folds)
-                    nav_expand_all(&nav);
-                    continue;
-                }
-            }
-            // If not a recognized z command, ignore
-            le_clear(&count_buffer);
-            continue;
-        }
+        // Clear any displayed message on user action
+        if(nav.has_message)
+            nav_clear_message(&nav);
 
-        // Handle 'c' prefix for change/edit commands
-        if(c == 'c'){
-            int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
-            int r2 = get_input(&globals.TS, &globals.needs_rescale, &c2, &cx2, &cy2, &magnitude2);
-            if(r2 == -1) goto finally;
-            if(r2){
-                if(c2 == 'k'){
-                    // ck - edit key (empty buffer)
-                    if(nav.item_count > 0){
-                        NavItem* item = &nav.items[nav.cursor_pos];
-                        if(item->key.bits != 0 && item->depth > 0){
-                            nav.edit_mode = 1;
-                            nav.edit_key_mode = 1;
-                            le_clear(&nav.edit_buffer);
+        // Handle pending multi-key sequences
+        if(nav.pending_key != 0){
+            int c2 = c;
+            int c = nav.pending_key;
+            nav.pending_key = 0;  // Clear pending state
+
+            if(c == 'z'){
+                switch(c2){
+                    case 'z':
+                        // zz - center cursor
+                        nav_center_cursor(&nav, globals.screenh);
+                        continue;
+                    case 't':
+                        // zt - cursor to top of screen
+                        nav.scroll_offset = nav.cursor_pos;
+                        continue;
+                    case 'b':{
+                        // zb - cursor to bottom of screen
+                        int visible_rows = globals.screenh - 2;  // Account for status and breadcrumb
+                        if(visible_rows < 1) visible_rows = 1;
+                        if(nav.cursor_pos >= (size_t)(visible_rows - 1)){
+                            nav.scroll_offset = nav.cursor_pos - (size_t)(visible_rows - 1);
                         }
                         else {
-                            nav_set_messagef(&nav, "Can only rename keys on object members");
+                            nav.scroll_offset = 0;
                         }
-                    }
-                    continue;
-                }
-                else if(c2 == 'v'){
-                    // cv - edit value (empty buffer)
-                    if(nav.item_count > 0){
-                        nav.edit_mode = 1;
-                        nav.edit_key_mode = 0;
-                        le_clear(&nav.edit_buffer);
-                    }
-                    continue;
-                }
-            }
-            // If not a recognized c command, ignore
-            le_clear(&count_buffer);
-            continue;
-        }
-
-        // Handle 'd' prefix for delete commands
-        if(c == 'd'){
-            int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
-            int r2 = get_input(&globals.TS, &globals.needs_rescale, &c2, &cx2, &cy2, &magnitude2);
-            if(r2 == -1) goto finally;
-            if(r2){
-                if(c2 == 'd'){ // dd - delete current item
-                    size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
-                    if(parent_idx == SIZE_MAX){
-                        nav_set_messagef(&nav, "Cannot delete root value");
+                    }continue;
+                    case 'c':
+                    case 'C':
+                        // zc/zC - collapse current item recursively
+                        nav_collapse_recursive(&nav);
                         continue;
-                    }
-                    NavItem* parent = &nav.items[parent_idx];
-                    NavItem* item = &nav.items[nav.cursor_pos];
-                    if(parent->value.kind == DRJSON_OBJECT){
-                        int err = drjson_object_delete_item_atom(nav.jctx, parent->value, item->key);
-                        if(err){
-                            nav_set_messagef(&nav, "Error: Could not delete item");
-                            continue;
-                        }
-                        nav_set_messagef(&nav, "Item deleted");
-                        nav.needs_rebuild = 1;
-                        nav_rebuild(&nav);
-                        // Move cursor up if we deleted the last item
-                        if(nav.cursor_pos >= nav.item_count && nav.cursor_pos > 0){
-                            nav.cursor_pos--;
-                        }
-                    }
-                    if(parent->value.kind == DRJSON_ARRAY){
-                        DrJsonValue result = drjson_array_del_item(nav.jctx, parent->value, (size_t)item->index);
-                        if(result.kind == DRJSON_ERROR){
-                            nav_set_messagef(&nav, "Error: Could not delete item");
-                            continue;
-                        }
-                        nav_set_messagef(&nav, "Item deleted");
-                        nav.needs_rebuild = 1;
-                        nav_rebuild(&nav);
-                        // Move cursor up if we deleted the last item
-                        if(nav.cursor_pos >= nav.item_count && nav.cursor_pos > 0)
-                            nav.cursor_pos--;
-                    }
-                    continue;
+                    case 'o':
+                    case 'O':
+                        // zo/zO - expand recursively (open)
+                        nav_expand_recursive(&nav);
+                        nav_ensure_cursor_visible(&nav, globals.screenh);
+                        continue;
+                    case 'M':
+                        // zM - collapse all (close all folds)
+                        nav_collapse_all(&nav);
+                        continue;
+                    case 'R':
+                        // zR - expand all (open all folds)
+                        nav_expand_all(&nav);
+                        continue;
+                    default:
+                        // Unrecognized z sequence, clear count and ignore
+                        le_clear(&count_buffer);
+                        continue;
                 }
             }
-            // If not a recognized d command, ignore
-            le_clear(&count_buffer);
-            continue;
-        }
+            else if(c == 'c'){
+                switch(c2){
+                    case 'k':
+                    case 'K':
+                        // ck - edit key (empty buffer)
+                        if(nav.item_count > 0){
+                            NavItem* item = &nav.items[nav.cursor_pos];
+                            if(item->key.bits != 0 && item->depth > 0){
+                                nav.edit_mode = 1;
+                                nav.edit_key_mode = 1;
+                                le_clear(&nav.edit_buffer);
+                            }
+                            else {
+                                nav_set_messagef(&nav, "Can only rename keys on object members");
+                            }
+                        }
+                        continue;
+                    case 'v':
+                    case 'V':
+                        // cv - edit value (empty buffer)
+                        if(nav.item_count > 0){
+                            nav.edit_mode = 1;
+                            nav.edit_key_mode = 0;
+                            le_clear(&nav.edit_buffer);
+                        }
+                        continue;
+                    default:
+                        // Unrecognized c sequence, clear count and ignore
+                        le_clear(&count_buffer);
+                        continue;
+                }
+            }
+            else if(c == 'd'){
+                switch(c2){
+                    case 'd':{
+                        // dd - delete current item
+                        size_t parent_idx = nav_find_parent(&nav, nav.cursor_pos);
+                        if(parent_idx == SIZE_MAX){
+                            nav_set_messagef(&nav, "Cannot delete root value");
+                            continue;
+                        }
+                        NavItem* parent = &nav.items[parent_idx];
+                        NavItem* item = &nav.items[nav.cursor_pos];
+                        if(parent->value.kind == DRJSON_OBJECT){
+                            int err = drjson_object_delete_item_atom(nav.jctx, parent->value, item->key);
+                            if(err){
+                                nav_set_messagef(&nav, "Error: Could not delete item");
+                                continue;
+                            }
+                            nav_set_messagef(&nav, "Item deleted");
+                            nav.needs_rebuild = 1;
+                            nav_rebuild(&nav);
+                            // Move cursor up if we deleted the last item
+                            if(nav.cursor_pos >= nav.item_count && nav.cursor_pos > 0){
+                                nav.cursor_pos--;
+                            }
+                        }
+                        if(parent->value.kind == DRJSON_ARRAY){
+                            DrJsonValue result = drjson_array_del_item(nav.jctx, parent->value, (size_t)item->index);
+                            if(result.kind == DRJSON_ERROR){
+                                nav_set_messagef(&nav, "Error: Could not delete item");
+                                continue;
+                            }
+                            nav_set_messagef(&nav, "Item deleted");
+                            nav.needs_rebuild = 1;
+                            nav_rebuild(&nav);
+                            // Move cursor up if we deleted the last item
+                            if(nav.cursor_pos >= nav.item_count && nav.cursor_pos > 0)
+                                nav.cursor_pos--;
+                        }
+                    }continue;
+                    default:
+                        // Unrecognized d sequence, clear count and ignore
+                        le_clear(&count_buffer);
+                        continue;
+                }
+            }
+            else if(c == 'y'){
+                switch(c2){
+                    case 'p':
+                    case 'P':
+                        // yp - yank path
+                        cmd_path(&nav, NULL, 0);
+                        continue;
 
-        // Clear any displayed message on user action
-        if(nav.has_message){
-            nav_clear_message(&nav);
+                    case 'y':
+                    case 'Y':
+                        // yy - yank value
+                        cmd_yank(&nav, NULL, 0);
+                        continue;
+                    default:
+                        le_clear(&count_buffer);
+                        continue;
+                }
+            }
         }
 
         // Handle input
         switch(c){
+            case 'z':
+            case 'c':
+            case 'd':
+            case 'y':
+                nav.pending_key = c;
+                break;
+
             case CTRL_Z:
                 #ifdef _WIN32
                 #else
@@ -5572,20 +5588,6 @@ main(int argc, const char* const* argv){
                 nav_search_prev(&nav);
                 nav_center_cursor(&nav, globals.screenh);
                 break;
-
-            case 'y': {
-                int c2 = 0, cx2 = 0, cy2 = 0, magnitude2 = 0;
-                int r2 = get_input(&globals.TS, &globals.needs_rescale, &c2, &cx2, &cy2, &magnitude2);
-                if(r2 > 0){
-                    if(c2 == 'p'){
-                        cmd_path(&nav, NULL, 0);
-                    }
-                    else if(c2 == 'y'){
-                        cmd_yank(&nav, NULL, 0);
-                    }
-                }
-                break;
-            }
 
             case 'Y':
                 // Yank (copy) current value to clipboard
