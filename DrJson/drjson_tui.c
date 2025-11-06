@@ -148,7 +148,7 @@ typedef struct JsonNav JsonNav;
 struct JsonNav {
     DrJsonContext* jctx;      // DrJson context
     DrJsonValue root;         // Root document value
-    char filename[512];       // Name of file being viewed
+    char filename[1024];       // Name of file being viewed
 
     // Flattened view (rebuilt when expansion state changes)
     NavItem* items;           // Dynamic array of visible items
@@ -1582,7 +1582,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -1593,6 +1593,8 @@ static const Command commands[] = {
     {SV("o"),     SV(":o <file>"), SV("  Open JSON at <file>"), cmd_open},
     {SV("edit"),  SV(":edit <file>"), SV("  Open JSON at <file>"), cmd_open},
     {SV("e"),     SV(":e <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("reload"), SV(":reload"), SV("  Reload file from disk"), cmd_reload},
+    {SV("e!"),    SV(":e!"), SV("  Reload file from disk"), cmd_reload},
     {SV("save"),  SV(":save <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("w"),     SV(":w <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("quit"),  SV(":quit"), SV("  Quit"),              cmd_quit},
@@ -1622,23 +1624,9 @@ enum {
 };
 
 // Command handlers
-static
-int
-cmd_open(JsonNav* nav, const char* args, size_t args_len){
-    if(args_len == 0){
-        nav_set_messagef(nav, "Error: No filename provided");
-        return CMD_ERROR;
-    }
 
-    // Copy filename to null-terminated buffer
-    char filepath[1024];
-    if(args_len >= sizeof(filepath)){
-        nav_set_messagef(nav, "Error: Filename too long");
-        return CMD_ERROR;
-    }
-    memcpy(filepath, args, args_len);
-    filepath[args_len] = '\0';
-
+static int
+nav_load_file(JsonNav* nav, const char* filepath){
     LongString file_content = {0};
     if(read_file(filepath, &file_content) != 0){
         nav_set_messagef(nav, "Error: Could not read file '%s'", filepath);
@@ -1666,19 +1654,36 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
     nav->root = new_root;
-    // Update filename
-    size_t len = strlen(filepath);
-    if(len >= sizeof(nav->filename)) len = sizeof(nav->filename) - 1;
-    memcpy(nav->filename, filepath, len);
-    nav->filename[len] = '\0';
-
     nav_reinit(nav);
-    LOG("gc\n");
-    drjson_gc(nav->jctx, &nav->root, 1);
-    LOG("nav->jctx->arrays.count: %zu\n", nav->jctx->arrays.count);
-    LOG("nav->jctx->free_array: %zu\n", nav->jctx->arrays.free_array);
-    LOG("nav->jctx->objects.count: %zu\n", nav->jctx->objects.count);
-    LOG("nav->jctx->free_object: %zu\n", nav->jctx->objects.free_object);
+    drjson_gc(nav->jctx, &nav->root, 1); // Free the old root and other garbage
+
+    return CMD_OK;
+}
+
+static
+int
+cmd_open(JsonNav* nav, const char* args, size_t args_len){
+    if(args_len == 0){
+        nav_set_messagef(nav, "Error: No filename provided");
+        return CMD_ERROR;
+    }
+
+    // Copy filename to null-terminated buffer
+    char filepath[1024];
+    if(args_len >= sizeof filepath){
+        nav_set_messagef(nav, "Error: Filename too long");
+        return CMD_ERROR;
+    }
+    memcpy(filepath, args, args_len);
+    filepath[args_len] = '\0';
+
+    if(nav_load_file(nav, filepath) != CMD_OK){
+        return CMD_ERROR; // nav_load_file already set the message
+    }
+
+    // Update filename on successful load
+    memcpy(nav->filename, filepath, args_len);
+    nav->filename[args_len] = '\0';
 
     nav_set_messagef(nav, "Opened '%s'", filepath);
     return CMD_OK;
@@ -2612,6 +2617,21 @@ cmd_wq(JsonNav* nav, const char* args, size_t args_len) {
     }
     // If write succeeded, then quit
     return cmd_quit(nav, args, args_len);
+}
+
+static int
+cmd_reload(JsonNav* nav, const char* args, size_t args_len){
+    (void)args;
+    (void)args_len;
+
+    if(nav->filename[0] == '\0'){
+        nav_set_messagef(nav, "Error: No file is currently open to reload.");
+        return CMD_ERROR;
+    }
+    int err = nav_load_file(nav, nav->filename);
+    if(err != CMD_OK)
+        return CMD_ERROR;
+    return CMD_OK;
 }
 
 static
@@ -3753,6 +3773,7 @@ static const StringView HELP_LINES[] = {
     SV("  :           Enter command mode"),
     SV("  :help       Show available commands"),
     SV("  :wq         Write and quit"),
+    SV("  :reload/:e! Reload file from disk"),
     SV(""),
     SV("In Command Mode:"),
     SV("  Tab         Show completion menu"),
