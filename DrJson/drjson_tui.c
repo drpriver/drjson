@@ -240,7 +240,51 @@ file_size_from_fp(FILE* fp){
     return -1;
 }
 
+// Expand ~ to home directory in a path
+// Returns 0 on success, -1 on error (buffer too small or HOME not set)
+static
+int
+expand_tilde_to_buffer(const char* path, size_t path_len, char* buffer, size_t buffer_size){
+    if(path_len == 0 || path[0] != '~'){
+        // No tilde, just copy the path
+        if(path_len + 1 > buffer_size) return -1;
+        memcpy(buffer, path, path_len);
+        buffer[path_len] = '\0';
+        return 0;
+    }
 
+    const char* home = getenv("HOME");
+    #ifdef _WIN32
+    if(!home) home = getenv("USERPROFILE");
+    #endif
+    if(!home) return -1;
+
+    size_t home_len = strlen(home);
+
+    if(path_len == 1){
+        // Just "~"
+        if(home_len + 1 > buffer_size) return -1;
+        memcpy(buffer, home, home_len);
+        buffer[home_len] = '\0';
+        return 0;
+    }
+    else if(path[1] == '/' || path[1] == '\\'){
+        // "~/something" or "~\something"
+        size_t total = home_len + (path_len - 1); // -1 because we skip '~'
+        if(total + 1 > buffer_size) return -1;
+        memcpy(buffer, home, home_len);
+        memcpy(buffer + home_len, path + 1, path_len - 1);
+        buffer[total] = '\0';
+        return 0;
+    }
+    else {
+        // "~username" - don't expand (would require getpwnam on Unix)
+        if(path_len + 1 > buffer_size) return -1;
+        memcpy(buffer, path, path_len);
+        buffer[path_len] = '\0';
+        return 0;
+    }
+}
 
 static inline
 int
@@ -1681,22 +1725,22 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
-    // Copy filename to null-terminated buffer
+    // Expand ~ and copy filename to null-terminated buffer
     char filepath[1024];
-    if(args_len >= sizeof filepath){
-        nav_set_messagef(nav, "Error: Filename too long");
+    if(expand_tilde_to_buffer(args, args_len, filepath, sizeof(filepath)) != 0){
+        nav_set_messagef(nav, "Error: Could not expand path");
         return CMD_ERROR;
     }
-    memcpy(filepath, args, args_len);
-    filepath[args_len] = '\0';
 
     if(nav_load_file(nav, filepath) != CMD_OK){
         return CMD_ERROR; // nav_load_file already set the message
     }
 
     // Update filename on successful load
-    memcpy(nav->filename, filepath, args_len);
-    nav->filename[args_len] = '\0';
+    size_t expanded_len = strlen(filepath);
+    if(expanded_len >= sizeof(nav->filename)) expanded_len = sizeof(nav->filename) - 1;
+    memcpy(nav->filename, filepath, expanded_len);
+    nav->filename[expanded_len] = '\0';
 
     nav_set_messagef(nav, "Opened '%s'", filepath);
     return CMD_OK;
@@ -1710,14 +1754,12 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
-    // Copy filename to null-terminated buffer
+    // Expand ~ and copy filename to null-terminated buffer
     char filepath[1024];
-    if(args_len >= sizeof(filepath)){
-        nav_set_messagef(nav, "Error: Filename too long");
+    if(expand_tilde_to_buffer(args, args_len, filepath, sizeof(filepath)) != 0){
+        nav_set_messagef(nav, "Error: Could not expand path");
         return CMD_ERROR;
     }
-    memcpy(filepath, args, args_len);
-    filepath[args_len] = '\0';
 
     // Write JSON to file
     FILE* fp = fopen(filepath, "wb");
@@ -1789,44 +1831,19 @@ cmd_pwd(JsonNav* nav, const char* args, size_t args_len){
 static
 int
 cmd_cd(JsonNav* nav, const char* args, size_t args_len){
+    char dirpath[1024];
+
     if(args_len == 0){
-        // No argument - change to home directory
-        #ifdef _WIN32
-        const char* home = getenv("USERPROFILE");
-        if(!home) home = getenv("HOMEDRIVE");
-        #else
-        const char* home = getenv("HOME");
-        #endif
-
-        if(!home){
-            nav_set_messagef(nav, "Error: Could not determine home directory");
-            return CMD_ERROR;
-        }
-
-        #ifdef _WIN32
-        if(!SetCurrentDirectoryA(home)){
-            nav_set_messagef(nav, "Error: Could not change to home directory");
-            return CMD_ERROR;
-        }
-        #else
-        if(chdir(home) != 0){
-            nav_set_messagef(nav, "Error: Could not change to home directory: %s", strerror(errno));
-            return CMD_ERROR;
-        }
-        #endif
-
-        nav_set_messagef(nav, "Changed to %s", home);
-        return CMD_OK;
+        // No argument - change to home directory (same as "~")
+        args = "~";
+        args_len = 1;
     }
 
-    // Copy directory path to null-terminated buffer
-    char dirpath[1024];
-    if(args_len >= sizeof(dirpath)){
-        nav_set_messagef(nav, "Error: Directory path too long");
+    // Expand ~ and copy directory path to null-terminated buffer
+    if(expand_tilde_to_buffer(args, args_len, dirpath, sizeof(dirpath)) != 0){
+        nav_set_messagef(nav, "Error: Could not expand path");
         return CMD_ERROR;
     }
-    memcpy(dirpath, args, args_len);
-    dirpath[args_len] = '\0';
 
     #ifdef _WIN32
     if(!SetCurrentDirectoryA(dirpath)){
@@ -3392,6 +3409,18 @@ nav_complete_command(JsonNav* nav){
         if(path_len >= sizeof(path_prefix)) path_len = sizeof(path_prefix) - 1;
         memcpy(path_prefix, source + path_start, path_len);
         path_prefix[path_len] = '\0';
+
+        // Expand ~ in the path prefix
+        char expanded_path[1024];
+        if(expand_tilde_to_buffer(path_prefix, path_len, expanded_path, sizeof(expanded_path)) == 0){
+            // Use expanded path
+            size_t expanded_len = strlen(expanded_path);
+            if(expanded_len < sizeof(path_prefix)){
+                memcpy(path_prefix, expanded_path, expanded_len);
+                path_prefix[expanded_len] = '\0';
+                path_len = expanded_len;
+            }
+        }
 
         // Split into directory and filename parts
         char dir_path[1024] = ".";
