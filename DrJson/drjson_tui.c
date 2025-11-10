@@ -176,6 +176,7 @@ struct JsonNav {
 
     // Command mode
     LineEditor command_buffer;      // Command input buffer
+    LineEditorHistory command_history; // Command history
     int tab_count;                  // Number of consecutive tabs pressed
     char saved_command[256];        // Original command before tab completion
     size_t saved_command_len;       // Length of saved command
@@ -564,6 +565,8 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filena
     le_history_init(&nav->search_history);
     nav->search_buffer.history = &nav->search_history;
     le_init(&nav->command_buffer, 512);
+    le_history_init(&nav->command_history);
+    nav->command_buffer.history = &nav->command_history;
     le_init(&nav->edit_buffer, 512);
     nav->focus_stack = NULL;
     nav->focus_stack_count = 0;
@@ -5569,6 +5572,8 @@ main(int argc, const char* const* argv){
                 case ENTER:
                 case CTRL_J:{
                     // Execute command
+                    if(nav.command_buffer.length)
+                        le_history_add(&nav.command_history, nav.command_buffer.data, nav.command_buffer.length);
                     int cmd_result = nav_execute_command(&nav, nav.command_buffer.data, nav.command_buffer.length);
                     nav.command_mode = 0;
                     nav.tab_count = 0;
@@ -5578,6 +5583,16 @@ main(int argc, const char* const* argv){
                 }continue;
                 case TAB:
                     nav_complete_command(&nav);
+                    continue;
+                case UP:
+                case CTRL_P:
+                    // Navigate to previous history entry
+                    le_history_prev(&nav.command_buffer);
+                    continue;
+                case DOWN:
+                case CTRL_N:
+                    // Navigate to next history entry
+                    le_history_next(&nav.command_buffer);
                     continue;
                 default:
                     if(le_handle_key(&nav.command_buffer, c, 0)){
