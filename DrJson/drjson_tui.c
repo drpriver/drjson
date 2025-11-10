@@ -1288,18 +1288,20 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
         DrJsonValue result = drjson_evaluate_path(nav->jctx, val, &nav->search_query_path);
 
         // If path evaluation failed, no match
-        if(result.kind == DRJSON_ERROR){
+        if(result.kind == DRJSON_ERROR)
             return 0;
-        }
+
+        // If no pattern is provided, a successful path evaluation is a match
+        if(nav->search_pattern_len == 0)
+            return 1;
 
         // Check if result matches the pattern
         if(result.kind == DRJSON_STRING){
             const char* str = NULL;
             size_t len = 0;
             drjson_get_str_and_len(nav->jctx, result, &str, &len);
-            if(str && string_matches_query(str, len, nav->search_pattern, nav->search_pattern_len)){
+            if(str && string_matches_query(str, len, nav->search_pattern, nav->search_pattern_len))
                 return 1;
-            }
         }
         // Also match in arrays: check if any element matches
         else if(result.kind == DRJSON_ARRAY || result.kind == DRJSON_ARRAY_VIEW){
@@ -5717,12 +5719,9 @@ main(int argc, const char* const* argv){
                             if(nav.search_pattern_len > 0){
                                 memcpy(nav.search_pattern, remainder, nav.search_pattern_len);
                                 nav.search_pattern[nav.search_pattern_len] = '\0';
-                                nav.search_mode = SEARCH_QUERY;
                             }
-                            else {
-                                // No pattern provided, treat as regular search
-                                nav.search_mode = SEARCH_RECURSIVE;
-                            }
+                            // Always set to SEARCH_QUERY if path parsing was successful
+                            nav.search_mode = SEARCH_QUERY;
                         }
                         else {
                             // Parse failed, treat as regular search
