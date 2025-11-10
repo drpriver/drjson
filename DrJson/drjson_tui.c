@@ -124,7 +124,8 @@ le_render(Drt* drt, LineEditor* buf){
 // Search modes
 enum SearchMode {
     SEARCH_INACTIVE = 0,
-    SEARCH_RECURSIVE = 1,
+    SEARCH_RECURSIVE = 1,    // /pattern - global search
+    SEARCH_QUERY = 2,        // /?path pattern - search by evaluating path
 };
 
 // Represents a single visible line in the TUI
@@ -192,6 +193,12 @@ struct JsonNav {
     LineEditor search_buffer;       // Current search query
     LineEditorHistory search_history; // Search history
     enum SearchMode search_mode;    // Current search mode
+    _Bool search_input_active;      // True when actively typing search
+
+    // For SEARCH_QUERY mode: parsed /?path pattern
+    DrJsonPath search_query_path;   // Parsed query path (e.g., "metadata.author.name")
+    char search_pattern[256];       // Pattern part (e.g., "Smith" from "/?metadata.author.name Smith")
+    size_t search_pattern_len;
 
     // Inline edit mode
     _Bool edit_mode;                // In inline edit mode
@@ -642,6 +649,7 @@ nav_reinit(JsonNav* nav){
 
     // Clear search state but keep buffers
     nav->search_mode = SEARCH_INACTIVE;
+    nav->search_input_active = 0;
 
     nav->in_completion_menu = 0;
     nav->tab_count = 0;
@@ -1257,40 +1265,62 @@ string_matches_query(const char* str, size_t str_len, const char* query, size_t 
     return result != 0;
 }
 
+// Forward declaration
+static _Bool nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len);
+
 // Check if a NavItem matches the search query (uses regex matching)
 static
 _Bool
 nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t query_len){
     if(query_len == 0) return 0;
 
-    // Check key if present
-    if(item->key.bits != 0){
-        const char* key_str = NULL;
-        size_t key_len = 0;
-        DrJsonValue key_val = drjson_atom_to_value(item->key);
-        drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-        if(key_str && string_matches_query(key_str, key_len, query, query_len)){
-            return 1;
-        }
-    }
-
-    // Check value for strings
-    if(item->value.kind == DRJSON_STRING){
-        const char* str = NULL;
-        size_t len = 0;
-        drjson_get_str_and_len(nav->jctx, item->value, &str, &len);
-        if(str && string_matches_query(str, len, query, query_len)){
-            return 1;
-        }
-    }
-
-    return 0;
+    // Delegate to nav_value_matches_query which handles all search modes
+    return nav_value_matches_query(nav, item->value, item->key, query, query_len);
 }
 
 // Helper to check if a DrJsonValue matches the query (uses regex matching)
 static
 _Bool
 nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len){
+    // For SEARCH_QUERY mode: evaluate path and match result
+    if(nav->search_mode == SEARCH_QUERY){
+        // Evaluate the query path from the current value
+        DrJsonValue result = drjson_evaluate_path(nav->jctx, val, &nav->search_query_path);
+
+        // If path evaluation failed, no match
+        if(result.kind == DRJSON_ERROR){
+            return 0;
+        }
+
+        // Check if result matches the pattern
+        if(result.kind == DRJSON_STRING){
+            const char* str = NULL;
+            size_t len = 0;
+            drjson_get_str_and_len(nav->jctx, result, &str, &len);
+            if(str && string_matches_query(str, len, nav->search_pattern, nav->search_pattern_len)){
+                return 1;
+            }
+        }
+        // Also match in arrays: check if any element matches
+        else if(result.kind == DRJSON_ARRAY || result.kind == DRJSON_ARRAY_VIEW){
+            int64_t len = drjson_len(nav->jctx, result);
+            for(int64_t i = 0; i < len; i++){
+                DrJsonValue elem = drjson_get_by_index(nav->jctx, result, i);
+                if(elem.kind == DRJSON_STRING){
+                    const char* str = NULL;
+                    size_t slen = 0;
+                    drjson_get_str_and_len(nav->jctx, elem, &str, &slen);
+                    if(str && string_matches_query(str, slen, nav->search_pattern, nav->search_pattern_len)){
+                        return 1;
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    // For SEARCH_RECURSIVE mode: match key OR value (original behavior)
     // Check key if present
     if(key.bits != 0){
         const char* key_str = NULL;
@@ -1400,6 +1430,78 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
     return found_match;
 }
 
+// Navigate from a container item to a field specified by path
+// Returns the index of the item at the path, or the original index if navigation fails
+static
+size_t
+nav_navigate_to_path(JsonNav* nav, size_t container_idx, const DrJsonPath* path){
+    if(path->count == 0) return container_idx;
+
+    size_t current_idx = container_idx;
+    DrJsonValue current_val = nav->items[current_idx].value;
+
+    // Expand the container if needed
+    if(nav_is_container(current_val) && !bs_contains(&nav->expanded, nav_get_container_id(current_val))){
+        bs_add(&nav->expanded, nav_get_container_id(current_val));
+        nav->needs_rebuild = 1;
+        nav_rebuild(nav);
+    }
+
+    // Navigate through each path segment
+    for(size_t seg_idx = 0; seg_idx < path->count; seg_idx++){
+        DrJsonPathSegment segment = path->segments[seg_idx];
+
+        // Find the child item that matches this segment
+        _Bool found = 0;
+        int child_depth = nav->items[current_idx].depth + 1;
+
+        // Look through children (items with greater depth immediately following)
+        for(size_t i = current_idx + 1; i < nav->item_count; i++){
+            NavItem* child = &nav->items[i];
+
+            // Stop if we've left this container's children
+            if(child->depth < child_depth) break;
+
+            // Skip if not a direct child
+            if(child->depth != child_depth) continue;
+
+            // Check if this child matches the segment
+            _Bool matches = 0;
+            if(segment.kind == DRJSON_PATH_KEY && child->key.bits == segment.key.bits){
+                matches = 1;
+            }
+            else if(segment.kind == DRJSON_PATH_INDEX && child->index == segment.index){
+                matches = 1;
+            }
+
+            if(matches){
+                current_idx = i;
+                current_val = child->value;
+                found = 1;
+
+                // If there are more segments and this is a container, expand it
+                if(seg_idx + 1 < path->count && nav_is_container(current_val)){
+                    if(!bs_contains(&nav->expanded, nav_get_container_id(current_val))){
+                        bs_add(&nav->expanded, nav_get_container_id(current_val));
+                        nav->needs_rebuild = 1;
+                        nav_rebuild(nav);
+                        // Restart navigation from the beginning since indices changed
+                        return nav_navigate_to_path(nav, container_idx, path);
+                    }
+                }
+                break;
+            }
+        }
+
+        if(!found){
+            // Path navigation failed, return original index
+            return container_idx;
+        }
+    }
+
+    return current_idx;
+}
+
 // Unified search function - searches forward or backward with optional container expansion
 // direction: 1 = forward, -1 = backward
 static
@@ -1415,7 +1517,13 @@ nav_search_internal(JsonNav* nav, int direction){
 
             // Check if this visible item matches
             if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
-                nav->cursor_pos = i;
+                // For SEARCH_QUERY mode, navigate to the actual field
+                if(nav->search_mode == SEARCH_QUERY){
+                    nav->cursor_pos = nav_navigate_to_path(nav, i, &nav->search_query_path);
+                }
+                else {
+                    nav->cursor_pos = i;
+                }
                 return;
             }
 
@@ -1443,7 +1551,13 @@ nav_search_internal(JsonNav* nav, int direction){
 
             // Check if this visible item matches
             if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
-                nav->cursor_pos = i;
+                // For SEARCH_QUERY mode, navigate to the actual field
+                if(nav->search_mode == SEARCH_QUERY){
+                    nav->cursor_pos = nav_navigate_to_path(nav, i, &nav->search_query_path);
+                }
+                else {
+                    nav->cursor_pos = i;
+                }
                 return;
             }
 
@@ -1474,7 +1588,13 @@ nav_search_internal(JsonNav* nav, int direction){
 
                 // Check if this visible item matches
                 if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
-                    nav->cursor_pos = idx;
+                    // For SEARCH_QUERY mode, navigate to the actual field
+                    if(nav->search_mode == SEARCH_QUERY){
+                        nav->cursor_pos = nav_navigate_to_path(nav, idx, &nav->search_query_path);
+                    }
+                    else {
+                        nav->cursor_pos = idx;
+                    }
                     return;
                 }
 
@@ -4822,7 +4942,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
 
     // Render status line at top
     drt_push_state(drt);
-    if(nav->search_mode == SEARCH_RECURSIVE){
+    if(nav->search_input_active){
         drt_puts(drt, " Search: ", 9);
         int start_x = 9;
         le_render(drt, &nav->search_buffer);
@@ -5543,25 +5663,81 @@ main(int argc, const char* const* argv){
         }
 
         // Handle search input mode
-        if(nav.search_mode != SEARCH_INACTIVE){
+        if(nav.search_input_active){
             switch(c){
                 case ESC:
                 case CTRL_C:
                     // Cancel search
                     nav.search_mode = SEARCH_INACTIVE;
+                    nav.search_input_active = 0;
                     le_clear(&nav.search_buffer);
                     continue;
                 case ENTER:
-                case CTRL_J:
+                case CTRL_J:{
                     // Add to history before searching
                     le_history_add(&nav.search_history, nav.search_buffer.data, nav.search_buffer.length);
                     le_history_reset(&nav.search_buffer);
 
-                    // Perform search (recursive if in recursive mode)
-                    nav.search_mode = SEARCH_INACTIVE;
+                    // Parse search input: check if it's /?query pattern
+                    const char* input = nav.search_buffer.data;
+                    size_t input_len = nav.search_buffer.length;
+
+                    if(input_len > 1 && input[0] == '?'){
+                        // Query-based search: /?query pattern
+                        // Use drjson_path_parse_greedy to parse the query part
+                        const char* remainder = NULL;
+                        DrJsonPath path = {0};
+                        int parse_result = drjson_path_parse_greedy(nav.jctx, input + 1, input_len - 1, &path, &remainder);
+
+                        if(parse_result == 0 && path.count > 0 && remainder != NULL){
+                            // Store the parsed path
+                            nav.search_query_path = path;
+
+                            // Parse pattern from remainder
+                            // Skip leading whitespace
+                            while(remainder < input + input_len && (*remainder == ' ' || *remainder == '\t')){
+                                remainder++;
+                            }
+                            // Optionally allow ':' after the query
+                            if(remainder < input + input_len && *remainder == ':'){
+                                remainder++;
+                                // Skip whitespace after ':'
+                                while(remainder < input + input_len && (*remainder == ' ' || *remainder == '\t')){
+                                    remainder++;
+                                }
+                            }
+
+                            // Rest is the pattern
+                            nav.search_pattern_len = (input + input_len) - remainder;
+                            if(nav.search_pattern_len > sizeof(nav.search_pattern) - 1){
+                                nav.search_pattern_len = sizeof(nav.search_pattern) - 1;
+                            }
+                            if(nav.search_pattern_len > 0){
+                                memcpy(nav.search_pattern, remainder, nav.search_pattern_len);
+                                nav.search_pattern[nav.search_pattern_len] = '\0';
+                                nav.search_mode = SEARCH_QUERY;
+                            }
+                            else {
+                                // No pattern provided, treat as regular search
+                                nav.search_mode = SEARCH_RECURSIVE;
+                            }
+                        }
+                        else {
+                            // Parse failed, treat as regular search
+                            nav.search_mode = SEARCH_RECURSIVE;
+                        }
+                    }
+                    else {
+                        // Regular recursive search
+                        nav.search_mode = SEARCH_RECURSIVE;
+                    }
+
+                    // Perform search
                     nav_search_recursive(&nav);
+                    nav.search_input_active = 0;
                     nav_center_cursor(&nav, globals.screenh);
                     continue;
+                }
                 case UP:
                 case CTRL_P:
                     // Navigate to previous history entry
@@ -6189,6 +6365,7 @@ main(int argc, const char* const* argv){
             case '/':
                 // Enter search mode (always recursive)
                 nav.search_mode = SEARCH_RECURSIVE;
+                nav.search_input_active = 1;
                 le_clear(&nav.search_buffer);
                 break;
 
