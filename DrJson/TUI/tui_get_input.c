@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #endif
 
+// static inline void __attribute__((format(printf,1, 2))) LOG(const char* fmt, ...);
 static
 void
 enable_raw(TermState* ts){
@@ -89,7 +90,7 @@ read_one(TermState* TS, int* needs_rescale, char* buff, _Bool block){
             *needs_rescale = 1;
             if(!block) continue;
             *buff = 0;
-            if(0)LOG("window size event: %hd, %hd", record.Event.WindowBufferSizeEvent.dwSize.X, record.Event.WindowBufferSizeEvent.dwSize.Y);
+            // if(0)LOG("window size event: %hd, %hd", record.Event.WindowBufferSizeEvent.dwSize.X, record.Event.WindowBufferSizeEvent.dwSize.Y);
             return 0;
         }
         if(record.EventType != KEY_EVENT){
@@ -203,6 +204,7 @@ get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* p
     if(c == ESC){
         if(read_one_nb(TS, needs_rescale, sequence) == -1) return -1;
         if(read_one_nb(TS, needs_rescale, sequence+1) == -1) return -1;
+        // LOG("sequence[1]: %d\n", (int)sequence[1]);
         if(sequence[0] == '['){
             if(sequence[1] == '<'){
                 // See https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Extended-coordinates
@@ -267,15 +269,18 @@ get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* p
                         break;
                 }
             }
-            else if (sequence[1] >= '0' && sequence[1] <= '9'){
+            else if(sequence[1] >= '0' && sequence[1] <= '9'){
+                // LOG("sequence[1]: %d\n", (int)sequence[1]);
                 // Extended escape, read additional byte.
-                if (read_one_nb(TS, needs_rescale, sequence+2) == -1) return -1;
-                if (sequence[2] == '~') {
-                    switch(sequence[1]) {
+                if(read_one_nb(TS, needs_rescale, sequence+2) == -1) return -1;
+                if(sequence[2] == '~'){
+                    switch(sequence[1]){
                     case '1':
                         c = HOME;
                         break;
-                    // 2 is INSERT, which idk what that would do.
+                    case '2': // INSERT
+                        c = INSERT;
+                        break;
                     case '3': /* Delete key. */
                         c = DELETE;
                         break;
@@ -345,6 +350,18 @@ get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* p
                     break;
                 case 'F': // End
                     c = END;
+                    break;
+                case 'P': // F1
+                    c = F1;
+                    break;
+                case 'Q': // F2
+                    c = F2;
+                    break;
+                case 'R': // F3
+                    c = F3;
+                    break;
+                case 'S': // F4
+                    c = F4;
                     break;
             }
         }

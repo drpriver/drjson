@@ -69,6 +69,11 @@ enum {
     LCLICK_DOWN = -11,
     LCLICK_UP = -12,
     LDRAG = -13,
+    F1 = -14,
+    F2 = -15,
+    F3 = -16,
+    F4 = -17,
+    INSERT = -18,
 };
 
 #endif

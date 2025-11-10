@@ -5678,16 +5678,16 @@ main(int argc, const char* const* argv){
                     le_history_add(&nav.search_history, nav.search_buffer.data, nav.search_buffer.length);
                     le_history_reset(&nav.search_buffer);
 
-                    // Parse search input: check if it's /?query pattern
+                    // Parse search input.
                     const char* input = nav.search_buffer.data;
                     size_t input_len = nav.search_buffer.length;
 
-                    if(input_len > 1 && input[0] == '?'){
-                        // Query-based search: /?query pattern
+                    if(nav.search_mode == SEARCH_QUERY){
+                        // Query-based search: path pattern
                         // Use drjson_path_parse_greedy to parse the query part
                         const char* remainder = NULL;
                         DrJsonPath path = {0};
-                        int parse_result = drjson_path_parse_greedy(nav.jctx, input + 1, input_len - 1, &path, &remainder);
+                        int parse_result = drjson_path_parse_greedy(nav.jctx, input, input_len, &path, &remainder);
 
                         if(parse_result == 0 && path.count > 0 && remainder != NULL){
                             // Store the parsed path
@@ -6356,6 +6356,13 @@ main(int argc, const char* const* argv){
                 break;
 
             case '?':
+                // Enter query search mode
+                nav.search_mode = SEARCH_QUERY;
+                nav.search_input_active = 1;
+                le_clear(&nav.search_buffer);
+                break;
+
+            case F1:
                 nav.show_help = 1;
                 nav.help_lines = HELP_LINES;
                 nav.help_lines_count = sizeof HELP_LINES / sizeof HELP_LINES[0];
