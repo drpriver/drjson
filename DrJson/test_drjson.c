@@ -23,6 +23,7 @@ static TestFunc TestIntern;
 static TestFunc TestDoubleParsing;
 static TestFunc TestSerialization;
 static TestFunc TestPrettyPrint;
+static TestFunc TestBracelessPrint;
 static TestFunc TestEscape;
 static TestFunc TestObject;
 static TestFunc TestPathParse;
@@ -37,6 +38,7 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestDoubleParsing);
     RegisterTest(TestSerialization);
     RegisterTest(TestPrettyPrint);
+    RegisterTest(TestBracelessPrint);
     RegisterTest(TestEscape);
     RegisterTest(TestObject);
     RegisterTest(TestPathParse);
@@ -482,6 +484,70 @@ TestFunction(TestPrettyPrint){
     TestAssert(printed);
     TestAssertEquals(buff[printed-1], '\0');
     TestAssertEquals2(str_eq, buff, "{\"foo\":3}");
+    drjson_gc(ctx, 0, 0);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestBracelessPrint){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Create an object {"name": "Alice", "age": 30}
+    DrJsonValue obj = drjson_make_object(ctx);
+    DrJsonAtom name, age;
+    int err = drjson_atomize(ctx, "name", 4, &name);
+    TestAssertFalse(err);
+    err = drjson_atomize(ctx, "age", 3, &age);
+    TestAssertFalse(err);
+    err = drjson_object_set_item_atom(ctx, obj, name, drjson_make_string(ctx, "Alice", 5));
+    TestAssertFalse(err);
+    err = drjson_object_set_item_atom(ctx, obj, age, drjson_make_int(30));
+    TestAssertFalse(err);
+
+    // Test braceless printing
+    char buff[512];
+    size_t printed;
+    err = drjson_print_value_mem(ctx, buff, sizeof buff, obj, 0, DRJSON_PRINT_BRACELESS | DRJSON_APPEND_ZERO, &printed);
+    TestAssertFalse(err);
+    TestAssert(printed <= sizeof buff);
+    TestAssert(printed);
+    TestAssertEquals(buff[printed-1], '\0');
+
+    // Should not have braces
+    TestAssert(buff[0] != '{');
+    TestAssert(buff[printed-2] != '}'); // -2 because -1 is the null terminator
+
+    // Should contain the key-value pairs
+    TestAssert(strstr(buff, "\"name\"") != NULL);
+    TestAssert(strstr(buff, "\"Alice\"") != NULL);
+    TestAssert(strstr(buff, "\"age\"") != NULL);
+    TestAssert(strstr(buff, "30") != NULL);
+
+    // Test round-trip: parse braceless and reserialize normally
+    DrJsonValue reparsed = drjson_parse_string(ctx, buff, printed - 1, DRJSON_PARSE_FLAG_BRACELESS_OBJECT);
+    TestAssertNotEqual((int)reparsed.kind, DRJSON_ERROR);
+    TestAssertEquals((int)reparsed.kind, DRJSON_OBJECT);
+
+    // Verify the values match
+    DrJsonValue name_val = drjson_object_get_item_atom(ctx, reparsed, name);
+    TestAssertEquals((int)name_val.kind, DRJSON_STRING);
+    DrJsonValue age_val = drjson_object_get_item_atom(ctx, reparsed, age);
+    TestAssert(drjson_is_numeric(age_val));
+    // Could be INTEGER or UINTEGER depending on parser
+    if(age_val.kind == DRJSON_INTEGER)
+        TestAssertEquals(age_val.integer, 30);
+    else
+        TestAssertEquals(age_val.uinteger, 30);
+
+    // Print normally and verify it has braces
+    char buff2[512];
+    err = drjson_print_value_mem(ctx, buff2, sizeof buff2, reparsed, 0, DRJSON_APPEND_ZERO, &printed);
+    TestAssertFalse(err);
+    TestAssertEquals(buff2[0], '{');
+    TestAssertEquals(buff2[printed-2], '}');
+
     drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();

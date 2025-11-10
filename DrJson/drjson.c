@@ -2226,13 +2226,62 @@ drjson_print_value(const DrJsonContext* ctx, const DrJsonTextWriter* restrict wr
     buffer.cursor = 0;
     buffer.writer = writer;
     buffer.errored = 0;
-    if(flags & DRJSON_PRETTY_PRINT){
-        for(int i = 0; i < indent; i++)
-            drjson_buff_putc(&buffer, ' ');
-        drjson_pretty_print_value_inner(ctx, &buffer, v, indent);
+
+    // Handle DRJSON_PRINT_BRACELESS for objects
+    if((flags & DRJSON_PRINT_BRACELESS) && v.kind == DRJSON_OBJECT){
+        const DrJsonObject* odata = ctx->objects.data;
+        const DrJsonObject* object = &odata[v.object_idx];
+        DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
+
+        if(flags & DRJSON_PRETTY_PRINT){
+            for(int i = 0; i < indent; i++)
+                drjson_buff_putc(&buffer, ' ');
+
+            int newlined = 0;
+            for(size_t i = 0; i < object->count; i++){
+                DrJsonObjectPair* o = &pairs[i];
+                if(newlined)
+                    drjson_buff_putc(&buffer, ',');
+                drjson_buff_putc(&buffer, '\n');
+                newlined = 1;
+                for(int ind = 0; ind < indent; ind++)
+                    drjson_buff_putc(&buffer, ' ');
+
+                DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
+                drjson_buff_putc(&buffer, '"');
+                drjson_buff_write(&buffer, s.pointer, s.length);
+                drjson_buff_putc(&buffer, '"');
+                drjson_buff_putc(&buffer, ':');
+                drjson_buff_putc(&buffer, ' ');
+                drjson_pretty_print_value_inner(ctx, &buffer, o->value, indent);
+            }
+        }
+        else {
+            int newlined = 0;
+            for(size_t i = 0; i < object->count; i++){
+                DrJsonObjectPair* o = &pairs[i];
+                if(newlined)
+                    drjson_buff_putc(&buffer, ',');
+                newlined = 1;
+                DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
+                drjson_buff_putc(&buffer, '"');
+                drjson_buff_write(&buffer, s.pointer, s.length);
+                drjson_buff_putc(&buffer, '"');
+                drjson_buff_putc(&buffer, ':');
+                drjson_print_value_inner(ctx, &buffer, o->value);
+            }
+        }
     }
-    else
-        drjson_print_value_inner(ctx, &buffer, v);
+    else {
+        if(flags & DRJSON_PRETTY_PRINT){
+            for(int i = 0; i < indent; i++)
+                drjson_buff_putc(&buffer, ' ');
+            drjson_pretty_print_value_inner(ctx, &buffer, v, indent);
+        }
+        else
+            drjson_print_value_inner(ctx, &buffer, v);
+    }
+
     if(flags & DRJSON_APPEND_NEWLINE)
         drjson_buff_putc(&buffer, '\n');
     if(flags & DRJSON_APPEND_ZERO)

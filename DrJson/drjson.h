@@ -629,6 +629,7 @@ enum {
     DRJSON_PRETTY_PRINT   = 0x1,
     DRJSON_APPEND_NEWLINE = 0x2,
     DRJSON_APPEND_ZERO    = 0x4,
+    DRJSON_PRINT_BRACELESS = 0x8, // Omit outer braces for objects (for BRACELESS_OBJECT parsing)
 };
 
 // Returns 0 on success, 1 on error.
