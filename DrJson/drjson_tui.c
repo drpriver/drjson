@@ -2278,12 +2278,14 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
 
     // Determine what to yank: if item has a key, yank {key: value}, else just value
     DrJsonValue yank_value = item->value;
+    unsigned print_flags = 0;
 
     if(item->key.bits != 0){
-        // Create a temporary object with {key: value}
+        // Create a temporary object with {key: value} and use braceless printing
         DrJsonValue temp_obj = drjson_make_object(nav->jctx);
         drjson_object_set_item_atom(nav->jctx, temp_obj, item->key, item->value);
         yank_value = temp_obj;
+        print_flags = DRJSON_PRINT_BRACELESS;
     }
 
     #ifdef _WIN32
@@ -2294,7 +2296,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
         .write = membuf_write,
     };
 
-    int print_err = drjson_print_value(nav->jctx, &writer, yank_value, 0, 0);
+    int print_err = drjson_print_value(nav->jctx, &writer, yank_value, 0, print_flags);
 
     if(print_err){
         free(buf.data);
@@ -2324,7 +2326,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
         .write = membuf_write,
     };
 
-    int print_err = drjson_print_value(nav->jctx, &writer, yank_value, 0, DRJSON_APPEND_ZERO);
+    int print_err = drjson_print_value(nav->jctx, &writer, yank_value, 0, print_flags | DRJSON_APPEND_ZERO);
 
     if(print_err){
         free(buf.data);
@@ -2369,7 +2371,7 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
-    int print_err = drjson_print_value_fp(nav->jctx, pipe, yank_value, 0, 0);
+    int print_err = drjson_print_value_fp(nav->jctx, pipe, yank_value, 0, print_flags);
     int status = pclose(pipe);
 
     if(print_err || status != 0){
@@ -2385,29 +2387,21 @@ cmd_yank(JsonNav* nav, const char* args, size_t args_len){
 static
 int
 do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
-    DrJsonValue paste_value;
-    {
-        // Read from clipboard
-        LongString clipboard_text = {0};
-        if(read_from_clipboard(&clipboard_text) != 0){
-            nav_set_messagef(nav, "Error: Could not read from clipboard");
-            return CMD_ERROR;
-        }
-
-        if(clipboard_text.length == 0){
-            free((void*)clipboard_text.text);
-            nav_set_messagef(nav, "Error: Clipboard is empty");
-            return CMD_ERROR;
-        }
-
-        int err = parse_as_value(nav->jctx, clipboard_text.text, clipboard_text.length, &paste_value);
-        free((void*)clipboard_text.text);
-        if(err || paste_value.kind == DRJSON_ERROR){
-            nav_set_messagef(nav, "Error: Clipboard does not contain valid JSON");
-            return CMD_ERROR;
-        }
-        LOG("Read %zu bytes from clipboard\n", clipboard_text.length);
+    LongString clipboard_text = {0};
+    // Read from clipboard
+    if(read_from_clipboard(&clipboard_text) != 0){
+        nav_set_messagef(nav, "Error: Could not read from clipboard");
+        return CMD_ERROR;
     }
+
+    if(clipboard_text.length == 0){
+        free((void*)clipboard_text.text);
+        nav_set_messagef(nav, "Error: Clipboard is empty");
+        return CMD_ERROR;
+    }
+
+    LOG("Read %zu bytes from clipboard\n", clipboard_text.length);
+
     NavItem* parent = NULL;
     size_t insert_idx = 0;
     {
@@ -2428,28 +2422,40 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
                 }
             }
             if(!parent){
+                free((void*)clipboard_text.text);
                 nav_set_messagef(nav, "Error: can't find parent");
                 return CMD_ERROR;
             }
             if(after) insert_idx++;
         }
     }
-    if(parent->value.kind == DRJSON_ARRAY){
-        int err = drjson_array_insert_item(nav->jctx, parent->value, insert_idx, paste_value);
-        if(err){
-            nav_set_messagef(nav, "Error: couldn't insert into array at index %zu", insert_idx);
-            return CMD_ERROR;
+
+    // Parse clipboard text with appropriate flags based on parent type
+    DrJsonValue paste_value;
+    if(parent->value.kind == DRJSON_OBJECT){
+        // Pasting into object - check if we need braceless parsing
+        const char* txt = clipboard_text.text;
+        size_t len = clipboard_text.length;
+
+        // Skip leading whitespace
+        while(len > 0 && (*txt == ' ' || *txt == '\t' || *txt == '\n' || *txt == '\r')){
+            txt++;
+            len--;
         }
-    }
-    else {
-        if(parent->value.kind != DRJSON_OBJECT)
-            return CMD_ERROR;
+
+        // If doesn't start with '{', use braceless parsing
+        unsigned parse_flags = (len > 0 && *txt != '{') ? DRJSON_PARSE_FLAG_BRACELESS_OBJECT : 0;
+        paste_value = drjson_parse_string(nav->jctx, txt, len, parse_flags);
+        free((void*)clipboard_text.text);
+
         if(paste_value.kind != DRJSON_OBJECT){
             nav_set_messagef(nav, "Error: can only paste objects into objects");
             return CMD_ERROR;
         }
-        size_t len = drjson_len(nav->jctx, paste_value);
-        for(size_t i = 0; i < len; i++){
+
+        // Insert all key-value pairs from pasted object
+        size_t pair_count = drjson_len(nav->jctx, paste_value);
+        for(size_t i = 0; i < pair_count; i++){
             DrJsonValue key = drjson_get_by_index(nav->jctx, drjson_object_keys(paste_value), i);
             DrJsonValue value = drjson_get_by_index(nav->jctx, drjson_object_values(paste_value), i);
             int err = drjson_object_insert_item_at_index(nav->jctx, parent->value, key.atom, value, insert_idx);
@@ -2460,6 +2466,27 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
                 insert_idx++;
             }
         }
+    }
+    else if(parent->value.kind == DRJSON_ARRAY){
+        // Pasting into array - normal parsing
+        int err = parse_as_value(nav->jctx, clipboard_text.text, clipboard_text.length, &paste_value);
+        free((void*)clipboard_text.text);
+
+        if(err || paste_value.kind == DRJSON_ERROR){
+            nav_set_messagef(nav, "Error: Clipboard does not contain valid JSON");
+            return CMD_ERROR;
+        }
+
+        err = drjson_array_insert_item(nav->jctx, parent->value, insert_idx, paste_value);
+        if(err){
+            nav_set_messagef(nav, "Error: couldn't insert into array at index %zu", insert_idx);
+            return CMD_ERROR;
+        }
+    }
+    else {
+        free((void*)clipboard_text.text);
+        nav_set_messagef(nav, "Error: Invalid parent type");
+        return CMD_ERROR;
     }
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
