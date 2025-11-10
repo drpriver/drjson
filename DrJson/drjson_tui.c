@@ -1587,7 +1587,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload, cmd_sort;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload, cmd_sort, cmd_filter;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -1617,6 +1617,8 @@ static const Command commands[] = {
     {SV("focus"), SV(":focus"), SV("  Focus on the current array or object"), cmd_focus},
     {SV("unfocus"), SV(":unfocus"), SV("  Return to the previous (less focused) view"), cmd_unfocus},
     {SV("sort"), SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
+    {SV("filter"), SV(":filter <query>"), SV("  Filter array/object based on a query"), cmd_filter},
+    {SV("f"), SV(":f <query>"), SV("  Alias for :filter"), cmd_filter},
 };
 
 static void build_command_helps(void);
@@ -2659,75 +2661,7 @@ cmd_reload(JsonNav* nav, const char* args, size_t args_len){
 // Sorting Helpers
 //------------------------------------------------------------
 
-// Defines the sort order for different JSON types.
-static int get_type_rank(DrJsonValue v) {
-    switch (v.kind) {
-        case DRJSON_NULL: return 0;
-        case DRJSON_BOOL: return 1;
-        case DRJSON_NUMBER:
-        case DRJSON_INTEGER:
-        case DRJSON_UINTEGER: return 2;
-        case DRJSON_STRING: return 3;
-        case DRJSON_ARRAY: return 4;
-        case DRJSON_OBJECT: return 5;
-        default: return 6; // Errors and others
-    }
-}
-
-// Comparison function for two DrJsonValues.
-static double drj_to_double_for_sort(DrJsonValue val) {
-    switch (val.kind) {
-        case DRJSON_NUMBER: return val.number;
-        case DRJSON_INTEGER: return (double)val.integer;
-        case DRJSON_UINTEGER: return (double)val.uinteger;
-        default: return 0.0;
-    }
-}
-
-static int compare_values(DrJsonValue a, DrJsonValue b, DrJsonContext* jctx) {
-    int rank_a = get_type_rank(a);
-    int rank_b = get_type_rank(b);
-    if (rank_a != rank_b) return rank_a - rank_b;
-
-    // Types are the same, compare by value
-    switch (a.kind) {
-        case DRJSON_BOOL:
-            return (int)a.boolean - (int)b.boolean;
-
-        case DRJSON_NUMBER:
-        case DRJSON_INTEGER:
-        case DRJSON_UINTEGER: {
-            double val_a = drj_to_double_for_sort(a);
-            double val_b = drj_to_double_for_sort(b);
-            if (val_a < val_b) return -1;
-            if (val_a > val_b) return 1;
-            return 0;
-        }
-
-        case DRJSON_STRING: {
-            const char *s1, *s2;
-            size_t l1, l2;
-            drjson_get_str_and_len(jctx, a, &s1, &l1);
-            drjson_get_str_and_len(jctx, b, &s2, &l2);
-            if (!s1 || !s2) return 0; // Should not happen
-            int cmp = memcmp(s1, s2, l1 < l2 ? l1 : l2);
-            if (cmp != 0) return cmp;
-            return (l1 < l2) ? -1 : (l1 > l2);
-        }
-
-        case DRJSON_ARRAY:
-        case DRJSON_OBJECT: {
-            int64_t len_a = drjson_len(jctx, a);
-            int64_t len_b = drjson_len(jctx, b);
-            if (len_a < len_b) return -1;
-            if (len_a > len_b) return 1;
-            return 0;
-        }
-
-        default:
-            return 0; // NULLs, Errors, etc.
-    }
-}
+static int compare_values(DrJsonValue a, DrJsonValue b, DrJsonContext* jctx);
 
 // Struct to pass context to qsort
 typedef struct {
@@ -2740,49 +2674,58 @@ typedef struct {
 static SortContext g_sort_context;
 
 // qsort compatible comparison function
-static int qsort_compare_values_wrapper(const void* a, const void* b) {
+static
+int
+qsort_compare_values_wrapper(const void* a, const void* b){
     DrJsonValue val_a = *(const DrJsonValue*)a;
     DrJsonValue val_b = *(const DrJsonValue*)b;
     return compare_values(val_a, val_b, g_sort_context.jctx) * g_sort_context.direction;
 }
 
 // Struct for sorting key-value pairs
-typedef struct {
+typedef struct KeyValuePair KeyValuePair;
+struct KeyValuePair {
     DrJsonAtom key;
     DrJsonValue value;
-} KeyValuePair;
+};
 
 // qsort compatible comparison function for sorting pairs by value
-static int qsort_compare_pairs_by_value(const void* a, const void* b) {
+static
+int
+qsort_compare_pairs_by_value(const void* a, const void* b){
     const KeyValuePair* pair_a = (const KeyValuePair*)a;
     const KeyValuePair* pair_b = (const KeyValuePair*)b;
     return compare_values(pair_a->value, pair_b->value, g_sort_context.jctx) * g_sort_context.direction;
 }
 
 // qsort wrapper for sorting an array of objects by a query on each object
-static int qsort_compare_array_by_query(const void* a, const void* b) {
+static
+int
+qsort_compare_array_by_query(const void* a, const void* b){
     DrJsonValue obj_a = *(const DrJsonValue*)a;
     DrJsonValue obj_b = *(const DrJsonValue*)b;
 
     DrJsonValue val_a = drjson_query(g_sort_context.jctx, obj_a, g_sort_context.sort_query, g_sort_context.sort_query_len);
     DrJsonValue val_b = drjson_query(g_sort_context.jctx, obj_b, g_sort_context.sort_query, g_sort_context.sort_query_len);
 
-    if (val_a.kind == DRJSON_ERROR) val_a = drjson_make_null();
-    if (val_b.kind == DRJSON_ERROR) val_b = drjson_make_null();
+    if(val_a.kind == DRJSON_ERROR) val_a = drjson_make_null();
+    if(val_b.kind == DRJSON_ERROR) val_b = drjson_make_null();
 
     return compare_values(val_a, val_b, g_sort_context.jctx) * g_sort_context.direction;
 }
 
 // qsort wrapper for sorting an object's KeyValuePairs by a query on the value
-static int qsort_compare_pairs_by_query(const void* a, const void* b) {
+static
+int
+qsort_compare_pairs_by_query(const void* a, const void* b){
     const KeyValuePair* pair_a = (const KeyValuePair*)a;
     const KeyValuePair* pair_b = (const KeyValuePair*)b;
 
     DrJsonValue val_a = drjson_query(g_sort_context.jctx, pair_a->value, g_sort_context.sort_query, g_sort_context.sort_query_len);
     DrJsonValue val_b = drjson_query(g_sort_context.jctx, pair_b->value, g_sort_context.sort_query, g_sort_context.sort_query_len);
 
-    if (val_a.kind == DRJSON_ERROR) val_a = drjson_make_null();
-    if (val_b.kind == DRJSON_ERROR) val_b = drjson_make_null();
+    if(val_a.kind == DRJSON_ERROR) val_a = drjson_make_null();
+    if(val_b.kind == DRJSON_ERROR) val_b = drjson_make_null();
 
     return compare_values(val_a, val_b, g_sort_context.jctx) * g_sort_context.direction;
 }
@@ -2791,7 +2734,7 @@ static int qsort_compare_pairs_by_query(const void* a, const void* b) {
 static
 int
 cmd_sort(JsonNav* nav, const char* args, size_t args_len){
-    if (nav->item_count == 0) {
+    if(nav->item_count == 0){
         nav_set_messagef(nav, "Error: Nothing to sort.");
         return CMD_ERROR;
     }
@@ -2805,24 +2748,28 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
     const char* part = args;
     const char* end = args + args_len;
 
-    while(part < end) {
+    while(part < end){
         while(part < end && *part == ' ') part++;
         const char* word_start = part;
         while(part < end && *part != ' ') part++;
         size_t part_len = part - word_start;
 
-        if (part_len == 0) continue;
+        if(part_len == 0) continue;
 
-        if (part_len == 4 && memcmp(word_start, "keys", 4) == 0) {
+        if(part_len == 4 && memcmp(word_start, "keys", 4) == 0){
             sort_by_values = 0;
-        } else if (part_len == 6 && memcmp(word_start, "values", 6) == 0) {
+        }
+        else if(part_len == 6 && memcmp(word_start, "values", 6) == 0){
             sort_by_values = 1;
-        } else if (part_len == 3 && memcmp(word_start, "asc", 3) == 0) {
+        }
+        else if(part_len == 3 && memcmp(word_start, "asc", 3) == 0){
             direction = 1;
-        } else if (part_len == 4 && memcmp(word_start, "desc", 4) == 0) {
+        }
+        else if(part_len == 4 && memcmp(word_start, "desc", 4) == 0){
             direction = -1;
-        } else {
-            if (query_str) {
+        }
+        else {
+            if(query_str){
                 nav_set_messagef(nav, "Error: Invalid argument '%.*s'. Query must be a single word.", (int)part_len, word_start);
                 return CMD_ERROR;
             }
@@ -2834,21 +2781,21 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
     NavItem* item = &nav->items[nav->cursor_pos];
     DrJsonValue val = item->value;
 
-    if (val.kind == DRJSON_ARRAY) {
+    if(val.kind == DRJSON_ARRAY){
         int64_t len = drjson_len(nav->jctx, val);
-        if (len <= 1) {
+        if(len <= 1){
             nav_set_messagef(nav, "Array has %lld elements, no sorting needed.", (long long)len);
             return CMD_OK;
         }
 
         DrJsonArray* arr = &nav->jctx->arrays.data[val.array_idx];
 
-        if (query_str) {
+        if(query_str){
             // --- Sort array by query ---
-            for (int64_t i = 0; i < len; i++) {
+            for(int64_t i = 0; i < len; i++){
                 DrJsonValue elem = arr->array_items[i];
                 DrJsonValue sort_val = drjson_query(nav->jctx, elem, query_str, query_len);
-                if (sort_val.kind == DRJSON_ERROR) {
+                if(sort_val.kind == DRJSON_ERROR){
                     nav_set_messagef(nav, "Error: Query '%.*s' failed on element at index %lld: %s", (int)query_len, query_str, (long long)i, sort_val.err_mess);
                     return CMD_ERROR;
                 }
@@ -2860,7 +2807,8 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
             g_sort_context.direction = direction;
             qsort(arr->array_items, len, sizeof(DrJsonValue), qsort_compare_array_by_query);
             nav_set_messagef(nav, "Array sorted by query '%.*s'.", (int)query_len, query_str);
-        } else {
+        }
+        else {
             // --- Sort simple array by value ---
             g_sort_context.jctx = nav->jctx;
             g_sort_context.direction = direction;
@@ -2868,33 +2816,33 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
             nav_set_messagef(nav, "Array sorted successfully.");
         }
     }
-    else if (val.kind == DRJSON_OBJECT) {
+    else if(val.kind == DRJSON_OBJECT){
         int64_t len = drjson_len(nav->jctx, val);
-        if (len <= 1) {
+        if(len <= 1){
             nav_set_messagef(nav, "Object has %lld members, no sorting needed.", (long long)len);
             return CMD_OK;
         }
 
         DrJsonValue new_obj = drjson_make_object(nav->jctx);
 
-        if (sort_by_values) {
+        if(sort_by_values){
             KeyValuePair* pairs = malloc(len * sizeof(KeyValuePair));
-            if (!pairs) {
+            if(!pairs){
                 nav_set_messagef(nav, "Error: Failed to allocate memory for sorting.");
                 return CMD_ERROR;
             }
 
             DrJsonValue keys_view = drjson_object_keys(val);
-            for (int64_t i = 0; i < len; i++) {
+            for(int64_t i = 0; i < len; i++){
                 pairs[i].key = drjson_get_by_index(nav->jctx, keys_view, i).atom;
                 pairs[i].value = drjson_object_get_item_atom(nav->jctx, val, pairs[i].key);
             }
 
-            if (query_str) {
+            if(query_str){
                 // --- Sort object by value with query ---
-                for (int64_t i = 0; i < len; i++) {
+                for(int64_t i = 0; i < len; i++){
                     DrJsonValue sort_val = drjson_query(nav->jctx, pairs[i].value, query_str, query_len);
-                    if (sort_val.kind == DRJSON_ERROR) {
+                    if(sort_val.kind == DRJSON_ERROR){
                         const char* key_str; size_t key_len;
                         drjson_get_atom_str_and_length(nav->jctx, pairs[i].key, &key_str, &key_len);
                         nav_set_messagef(nav, "Error: Query '%.*s' failed on value for key '%.*s': %s", (int)query_len, query_str, (int)key_len, key_str, sort_val.err_mess);
@@ -2908,7 +2856,8 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
                 g_sort_context.direction = direction;
                 qsort(pairs, len, sizeof(KeyValuePair), qsort_compare_pairs_by_query);
                 nav_set_messagef(nav, "Object sorted by query '%.*s'.", (int)query_len, query_str);
-            } else {
+            }
+            else {
                 // --- Sort object by value ---
                 g_sort_context.jctx = nav->jctx;
                 g_sort_context.direction = direction;
@@ -2916,19 +2865,20 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
                 nav_set_messagef(nav, "Object sorted by value.");
             }
 
-            for (int64_t i = 0; i < len; i++) {
+            for(int64_t i = 0; i < len; i++){
                 drjson_object_set_item_atom(nav->jctx, new_obj, pairs[i].key, pairs[i].value);
             }
             free(pairs);
-        } else {
+        }
+        else {
             // --- Sort by keys ---
-            if (query_str) {
+            if(query_str){
                 nav_set_messagef(nav, "Error: Query cannot be used when sorting object by key.");
                 return CMD_ERROR;
             }
             DrJsonValue keys_view = drjson_object_keys(val);
             DrJsonValue keys_copy = drjson_make_array(nav->jctx);
-            for (int64_t i = 0; i < len; i++) {
+            for(int64_t i = 0; i < len; i++){
                 drjson_array_push_item(nav->jctx, keys_copy, drjson_get_by_index(nav->jctx, keys_view, i));
             }
 
@@ -2937,7 +2887,7 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
             g_sort_context.direction = direction;
             qsort(keys_arr->array_items, len, sizeof(DrJsonValue), qsort_compare_values_wrapper);
 
-            for (int64_t i = 0; i < len; i++) {
+            for(int64_t i = 0; i < len; i++){
                 DrJsonValue key_val = keys_arr->array_items[i];
                 DrJsonValue value = drjson_object_get_item_atom(nav->jctx, val, key_val.atom);
                 drjson_object_set_item_atom(nav->jctx, new_obj, key_val.atom, value);
@@ -2947,24 +2897,342 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
 
         // Replace the old object with the new one
         size_t parent_idx = nav_find_parent(nav, nav->cursor_pos);
-        if (parent_idx == SIZE_MAX) { // It's the root
+        if(parent_idx == SIZE_MAX){ // It's the root
             nav->root = new_obj;
-        } else {
+        }
+        else {
             NavItem* parent_item = &nav->items[parent_idx];
-            if (parent_item->value.kind == DRJSON_OBJECT) {
+            if(parent_item->value.kind == DRJSON_OBJECT){
                 drjson_object_set_item_atom(nav->jctx, parent_item->value, item->key, new_obj);
-            } else if (parent_item->value.kind == DRJSON_ARRAY) {
+            }
+            else if(parent_item->value.kind == DRJSON_ARRAY){
                 drjson_array_set_by_index(nav->jctx, parent_item->value, item->index, new_obj);
             }
         }
         item->value = new_obj;
-    } else {
+    }
+    else {
         nav_set_messagef(nav, "Error: Can only sort arrays or objects.");
         return CMD_ERROR;
     }
 
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
+    return CMD_OK;
+}
+
+// Defines the sort order for different JSON types.
+static
+int
+get_type_rank(DrJsonValue v){
+    switch(v.kind){
+        case DRJSON_NULL: return 0;
+        case DRJSON_BOOL: return 1;
+        case DRJSON_NUMBER:
+        case DRJSON_INTEGER:
+        case DRJSON_UINTEGER: return 2;
+        case DRJSON_STRING: return 3;
+        case DRJSON_ARRAY: return 4;
+        case DRJSON_OBJECT: return 5;
+        default: return 6; // Errors and others
+    }
+}
+
+// Comparison function for two DrJsonValues.
+static
+double
+drj_to_double_for_sort(DrJsonValue val){
+    switch(val.kind){
+        case DRJSON_NUMBER: return val.number;
+        case DRJSON_INTEGER: return (double)val.integer;
+        case DRJSON_UINTEGER: return (double)val.uinteger;
+        default: return 0.0;
+    }
+}
+
+static
+int
+compare_values(DrJsonValue a, DrJsonValue b, DrJsonContext* jctx){
+    int rank_a = get_type_rank(a);
+    int rank_b = get_type_rank(b);
+    if(rank_a != rank_b) return rank_a - rank_b;
+
+    // Types are the same, compare by value
+    switch(a.kind){
+        case DRJSON_BOOL:
+            return (int)a.boolean - (int)b.boolean;
+
+        case DRJSON_NUMBER:
+        case DRJSON_INTEGER:
+        case DRJSON_UINTEGER: {
+            double val_a = drj_to_double_for_sort(a);
+            double val_b = drj_to_double_for_sort(b);
+            if(val_a < val_b) return -1;
+            if(val_a > val_b) return 1;
+            return 0;
+        }
+
+        case DRJSON_STRING: {
+            const char *s1, *s2;
+            size_t l1, l2;
+            drjson_get_str_and_len(jctx, a, &s1, &l1);
+            drjson_get_str_and_len(jctx, b, &s2, &l2);
+            if(!s1 || !s2) return 0; // Should not happen
+            int cmp = memcmp(s1, s2, l1 < l2 ? l1 : l2);
+            if(cmp != 0) return cmp;
+            return (l1 < l2) ? -1 : (l1 > l2);
+        }
+
+        case DRJSON_ARRAY:
+        case DRJSON_OBJECT: {
+            int64_t len_a = drjson_len(jctx, a);
+            int64_t len_b = drjson_len(jctx, b);
+            if(len_a < len_b) return -1;
+            if(len_a > len_b) return 1;
+            return 0;
+        }
+
+        default:
+            return 0; // NULLs, Errors, etc.
+    }
+}
+
+enum Operator {
+    OP_INVALID, OP_EQ, OP_NEQ, OP_GT, OP_GTE, OP_LT, OP_LTE
+};
+typedef enum Operator Operator;
+
+static
+const char*
+parse_operator(const char* p, const char* end, Operator* op){
+    while (p < end && *p == ' ') p++; // skip whitespace
+    if(p >= end) return NULL;
+
+    if(p + 1 < end){
+        if(p[0] == '=' && p[1] == '='){ *op = OP_EQ; return p + 2; }
+        if(p[0] == '!' && p[1] == '='){ *op = OP_NEQ; return p + 2; }
+        if(p[0] == '>' && p[1] == '='){ *op = OP_GTE; return p + 2; }
+        if(p[0] == '<' && p[1] == '='){ *op = OP_LTE; return p + 2; }
+    }
+    if(p[0] == '>'){ *op = OP_GT; return p + 1; }
+    if(p[0] == '<'){ *op = OP_LT; return p + 1; }
+
+    *op = OP_INVALID;
+    return NULL;
+}
+
+static
+const char*
+parse_literal(DrJsonContext* ctx, const char* p, const char* end, DrJsonValue* val){
+    while (p < end && *p == ' ') p++; // skip whitespace
+    if(p >= end) return NULL;
+
+    DrJsonParseContext pctx = {
+        .ctx = (DrJsonContext*)ctx,
+        .begin = p,
+        .cursor = p,
+        .end = end,
+        .depth = 0,
+    };
+    *val = drjson_parse(&pctx, DRJSON_PARSE_FLAG_NO_COPY_STRINGS);
+    if(val->kind == DRJSON_ERROR){
+        return NULL;
+    }
+    return pctx.cursor;
+}
+
+// Check if a DrJsonValue is considered "truthy" for filtering
+static
+_Bool
+is_truthy(DrJsonValue val, DrJsonContext* jctx){
+    switch(val.kind){
+        case DRJSON_NULL:
+        case DRJSON_ERROR:
+            return 0;
+        case DRJSON_BOOL:
+            return val.boolean;
+        case DRJSON_NUMBER:
+            return val.number != 0.0;
+        case DRJSON_INTEGER:
+            return val.integer != 0;
+        case DRJSON_UINTEGER:
+            return val.uinteger != 0;
+        case DRJSON_STRING:
+        case DRJSON_ARRAY:
+        case DRJSON_OBJECT:
+            return drjson_len(jctx, val) > 0;
+        default:
+            return 0;
+    }
+}
+
+typedef struct {
+    DrJsonPath path;
+    Operator op;
+    _Bool rhs_is_path;
+    union {
+        DrJsonPath rhs_path;
+        DrJsonValue rhs_literal;
+    };
+} TuiParsedExpression;
+
+// Parses the expression string into a structured representation.
+static
+int
+tui_parse_expression(JsonNav* nav, const char* expression, size_t expression_length, TuiParsedExpression* out_expr){
+    const char* p = expression;
+    const char* end = expression + expression_length;
+
+    // 1. Greedily parse the path from the beginning of the string.
+    const char* remainder = NULL;
+    int err = drjson_path_parse_greedy(nav->jctx, p, end - p, &out_expr->path, &remainder);
+    if(err){
+        return 1; // The start of the expression is not a valid path.
+    }
+
+    // 2. Check if there's anything left to parse after the path.
+    const char* op_start = remainder;
+    while (op_start < end && *op_start == ' ') op_start++; // skip whitespace
+
+    if(op_start == end){
+        // Nothing left after the path, so it's a truthy check.
+        out_expr->op = OP_INVALID;
+        return 0; // Success
+    }
+
+    // 3. Something exists after the path, so parse it as an operator and a RHS.
+    const char* rhs_start = parse_operator(op_start, end, &out_expr->op);
+    if(out_expr->op == OP_INVALID || !rhs_start){
+        return 1; // Invalid operator
+    }
+
+    while (rhs_start < end && *rhs_start == ' ') rhs_start++; // skip whitespace
+
+    if(rhs_start < end && (*rhs_start == '.' || *rhs_start == '[' || *rhs_start == '$')){
+        // RHS is a path
+        out_expr->rhs_is_path = 1;
+        const char* rhs_remainder = NULL;
+        err = drjson_path_parse_greedy(nav->jctx, rhs_start, end - rhs_start, &out_expr->rhs_path, &rhs_remainder);
+        if(err) return 1; // RHS path failed to parse
+        // Ensure the entire rest of the string was consumed by the path parser
+        while(rhs_remainder < end && *rhs_remainder == ' ') rhs_remainder++;
+        if(rhs_remainder != end) return 1;
+    }
+    else {
+        // RHS is a literal
+        out_expr->rhs_is_path = 0;
+        const char* literal_end = parse_literal(nav->jctx, rhs_start, end, &out_expr->rhs_literal);
+        if(!literal_end){
+            return 1; // RHS literal failed to parse
+        }
+    }
+
+    return 0; // Success
+}
+
+// Evaluates a pre-parsed expression against a given value.
+static
+DrJsonValue
+tui_eval_expression(JsonNav* nav, DrJsonValue v, const TuiParsedExpression* expr){
+    // 1. Evaluate the path to get the LHS value
+    DrJsonValue lhs = drjson_evaluate_path(nav->jctx, v, &expr->path);
+    if(lhs.kind == DRJSON_ERROR) return lhs;
+
+    // 2. If in truthy mode, check truthiness of the path result
+    if(expr->op == OP_INVALID)
+        return drjson_make_bool(is_truthy(lhs, nav->jctx));
+
+    // 3. Get the RHS value
+    DrJsonValue rhs;
+    if(expr->rhs_is_path){
+        rhs = drjson_evaluate_path(nav->jctx, v, &expr->rhs_path);
+        if(rhs.kind == DRJSON_ERROR) return rhs;
+    }
+    else {
+        rhs = expr->rhs_literal;
+    }
+
+    // 4. Perform the comparison
+    int cmp = compare_values(lhs, rhs, nav->jctx);
+    _Bool result = 0;
+    switch(expr->op){
+        case OP_EQ:  result = (cmp == 0); break;
+        case OP_NEQ: result = (cmp != 0); break;
+        case OP_GT:  result = (cmp > 0);  break;
+        case OP_GTE: result = (cmp >= 0); break;
+        case OP_LT:  result = (cmp < 0);  break;
+        case OP_LTE: result = (cmp <= 0); break;
+        case OP_INVALID: return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Invalid operator");
+    }
+
+    return drjson_make_bool(result);
+}
+
+static
+int
+cmd_filter(JsonNav* nav, const char* args, size_t args_len){
+    if(args_len == 0){
+        nav_set_messagef(nav, "Error: :filter requires a query.");
+        return CMD_ERROR;
+    }
+
+    if(nav->item_count == 0){
+        nav_set_messagef(nav, "Error: Nothing to filter.");
+        return CMD_ERROR;
+    }
+
+    // Parse the expression once before the loop
+    TuiParsedExpression expr;
+    if(tui_parse_expression(nav, args, args_len, &expr) != 0){
+        nav_set_messagef(nav, "Error: Invalid filter expression.");
+        return CMD_ERROR;
+    }
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+    DrJsonValue val = item->value;
+
+    if(val.kind != DRJSON_ARRAY && val.kind != DRJSON_OBJECT){
+        nav_set_messagef(nav, "Error: Can only filter arrays or objects.");
+        return CMD_ERROR;
+    }
+
+    int64_t original_len = drjson_len(nav->jctx, val);
+    int64_t filtered_count = 0;
+
+    if(val.kind == DRJSON_ARRAY){
+        DrJsonValue new_array = drjson_make_array(nav->jctx);
+        for(int64_t i = 0; i < original_len; i++){
+            DrJsonValue elem = drjson_get_by_index(nav->jctx, val, i);
+            DrJsonValue query_result = tui_eval_expression(nav, elem, &expr);
+
+            if(query_result.kind == DRJSON_BOOL && query_result.boolean){
+                drjson_array_push_item(nav->jctx, new_array, elem);
+                filtered_count++;
+            }
+        }
+        nav_focus_stack_push(nav, nav->root);
+        nav->root = new_array;
+    }
+    else { // DRJSON_OBJECT
+        DrJsonValue new_obj = drjson_make_object(nav->jctx);
+        DrJsonValue keys = drjson_object_keys(val);
+        for(int64_t i = 0; i < original_len; i++){
+            DrJsonValue key_val = drjson_get_by_index(nav->jctx, keys, i);
+            DrJsonValue value = drjson_object_get_item_atom(nav->jctx, val, key_val.atom);
+
+            DrJsonValue query_result = tui_eval_expression(nav, value, &expr);
+
+            if(query_result.kind == DRJSON_BOOL && query_result.boolean){
+                drjson_object_set_item_atom(nav->jctx, new_obj, key_val.atom, value);
+                filtered_count++;
+            }
+        }
+        nav_focus_stack_push(nav, nav->root);
+        nav->root = new_obj;
+    }
+
+    nav_reinit(nav);
+    nav_set_messagef(nav, "Filtered to %lld items.", (long long)filtered_count);
     return CMD_OK;
 }
 

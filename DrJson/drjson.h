@@ -547,23 +547,26 @@ drjson_clear(const DrJsonContext* ctx, DrJsonValue v);
 
 enum {DRJSON_PATH_MAX_DEPTH=32};
 
-typedef enum DrJsonPathSegmentKind {
+enum DrJsonPathSegmentKind {
     DRJSON_PATH_KEY,
     DRJSON_PATH_INDEX,
-} DrJsonPathSegmentKind;
+};
+typedef enum DrJsonPathSegmentKind DrJsonPathSegmentKind;
 
-typedef struct DrJsonPathSegment {
+typedef struct DrJsonPathSegment DrJsonPathSegment;
+struct DrJsonPathSegment {
     DrJsonPathSegmentKind kind;
     union {
         DrJsonAtom key;
         int64_t index;
     };
-} DrJsonPathSegment;
+};
 
-typedef struct DrJsonPath {
+typedef struct DrJsonPath DrJsonPath;
+struct DrJsonPath {
     DrJsonPathSegment segments[DRJSON_PATH_MAX_DEPTH];
     size_t count;
-} DrJsonPath;
+};
 
 DRJSON_API
 int // 0 on success
@@ -575,7 +578,18 @@ drjson_path_add_index(DrJsonPath* path, int64_t index);
 
 DRJSON_API
 int // 0 on success
-drjson_path_parse(DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path);
+drjson_path_add_special(DrJsonPath* path, DrJsonPathSegmentKind k);
+
+// NOTE: the path is invalidated if new keys are inserted into the ctx as
+// it assumes missing keys won't math.
+DRJSON_API
+int // 0 on success
+drjson_path_parse(const DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path);
+
+DRJSON_API
+int
+drjson_path_parse_greedy(const DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path, const char* _Nullable * _Nonnull remainder);
+
 
 //------------------------------------------------------------
 
@@ -586,6 +600,12 @@ drjson_path_parse(DrJsonContext* ctx, const char* path_str, size_t path_len, DrJ
 DRJSON_API
 DrJsonValue
 drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t query_length);
+
+DRJSON_API
+DrJsonValue
+drjson_evaluate_path(const DrJsonContext* ctx, DrJsonValue v, const DrJsonPath* path);
+
+
 
 DRJSON_API
 DrJsonValue

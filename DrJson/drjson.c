@@ -395,6 +395,13 @@ struct DrJsonContext {
         size_t count;
         size_t capacity;
     } interned_arrays;
+    // Pre-atomized magic keys for allocation-free queries
+    struct {
+        DrJsonAtom length;
+        DrJsonAtom keys;
+        DrJsonAtom values;
+        DrJsonAtom items;
+    } magic_keys;
 };
 
 static inline
@@ -474,6 +481,13 @@ drjson_create_ctx(DrJsonAllocator allocator){
     if(!ctx) return NULL;
     drj_memset(ctx, 0, sizeof *ctx);
     ctx->allocator = allocator;
+
+    // Pre-atomize magic keys for allocation-free queries
+    DRJSON_ATOMIZE(ctx, "length", &ctx->magic_keys.length);
+    DRJSON_ATOMIZE(ctx, "keys", &ctx->magic_keys.keys);
+    DRJSON_ATOMIZE(ctx, "values", &ctx->magic_keys.values);
+    DRJSON_ATOMIZE(ctx, "items", &ctx->magic_keys.items);
+
     return ctx;
 }
 
@@ -1717,100 +1731,132 @@ drjson_path_add_index(DrJsonPath* path, int64_t index){
 
 DRJSON_API
 int
-drjson_path_parse(DrJsonContext* ctx, const char* query, size_t length, DrJsonPath* path){
-    path->count = 0;
-    size_t begin = 0;
+drjson_path_parse(const DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path){
+    const char* remainder = NULL;
+    int err = drjson_path_parse_greedy(ctx, path_str, path_len, path, &remainder);
+    if(err) return err;
+    if(remainder != path_str + path_len) return 1; // Did not consume whole string
+    return 0;
+}
+
+DRJSON_API
+int
+drjson_path_parse_greedy(const DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path, const char* _Nullable * _Nonnull remainder){
     size_t i = 0;
-
-    if(i == length) return 1; // Empty path
-
-Ldispatch:
-    for(;i < length; i++){
-        char c = query[i];
-        switch(c){
-            case '.':
-                i++;
-            LHack:
-                begin = i;
-                if(i == length) return 1; // Empty query after a '.'
-                switch(query[i]){
-                    case '\"':
-                        i++;
-                        begin = i;
-                        goto Lquoted_getitem;
-                    default:
-                        goto Lgetitem;
-                }
-            case '[':
-                i++;
-                begin = i;
-                goto Lsubscript;
-            default:
-                if(i == 0)
-                    goto LHack;
-                return 1; // Queries must continue with '.', '['
-        }
+    size_t begin = 0;
+    if(!path_str) return 1;
+    if(!path) return 1;
+    path->count = 0;
+    if(path_len && path_str[0] == '$'){
+        i = 1;
     }
-    goto Ldone;
 
-Lgetitem:
-    for(;i!=length;i++){
-        switch(query[i]){
+    Ldispatch:
+    if(i >= path_len) goto Ldone;
+
+    switch(path_str[i]){
+        case '.':
+            i++;
+            begin = i;
+            if(i == path_len) return 1; // unexpected eof
+            if(path_str[i] == '\"'){
+                i++;
+                begin=i;
+                goto Lquoted_getitem;
+            }
+            goto Lgetitem;
+        case '[':
+            i++;
+            begin = i;
+            goto Lsubscript;
+        case CASE_a_z:
+        case CASE_A_Z:
+        case '_':
+            // Allow bare identifier at start of path
+            if(i == 0 || (i == 1 && path_str[0] == '$')){
+                begin = i;
+                goto Lgetitem;
+            }
+            goto Ldone;
+        default:
+            if(i == 0 || (i == 1 && path_str[0] == '$')) return 1;
+            goto Ldone;
+    }
+
+    Lgetitem:
+    for(;i<path_len;i++){
+        switch(path_str[i]){
             case '.':
             case '[':
                 goto Ldo_getitem;
-            default:
+            case CASE_a_z:
+            case CASE_A_Z:
+            case CASE_0_9:
+            case '/':
+            case '_':
+            case '-':
+            case '+':
+            case '*':
                 continue;
+            default:
+                goto Ldo_getitem;
         }
     }
-    // fall-through
-Ldo_getitem:
-    if(i == begin) return 1; // 0 length query after '.'
+    Ldo_getitem:
+    if(i == begin) return 1;
     {
         DrJsonAtom atom;
-        int err = drjson_atomize(ctx, query + begin, i - begin, &atom);
-        if(err) return 1;
+        // Use get_atom_no_intern for allocation-free queries
+        int err = drjson_get_atom_no_intern(ctx, path_str + begin, i - begin, &atom);
+        if(err){
+            // Key not in atom table - won't be found in any object
+            // Store sentinel value (bits = 0)
+            atom = (DrJsonAtom){.bits = 0};
+        }
         err = drjson_path_add_key(path, atom);
         if(err) return 1;
     }
     goto Ldispatch;
 
-Lsubscript:
-    for(;i!=length;i++){
-        switch(query[i]){
+    Lsubscript:
+    for(;i<path_len;i++){
+        switch(path_str[i]){
+            case '-':
+            case CASE_0_9:
+                continue;
             case ']':
                 goto Ldo_subscript;
             default:
-                continue;
+                return 1;
         }
     }
-    return 1; // No ']' found to close a subscript
-
-Ldo_subscript:
-    {
-        Int64Result pr = parse_int64(query+begin, i-begin);
-        if(pr.errored){
-            return 1;
-        }
-        int err = drjson_path_add_index(path, pr.result);
-        if(err) return 1;
-    }
+    return 1;
+    Ldo_subscript:;
+    Int64Result pr = parse_int64(path_str+begin, i-begin);
+    if(pr.errored) return 1;
+    int err = drjson_path_add_index(path, pr.result);
+    if(err) return 1;
     i++;
     goto Ldispatch;
 
-Lquoted_getitem:
-    for(;i!=length;i++){
-        if(query[i] == '\"'){
+    Lquoted_getitem:
+    for(;i<path_len;i++){
+        if(path_str[i] == '\"'){
             size_t nbackslash = 0;
             for(size_t back = i-1; back != begin; back--){
-                if(query[back] != '\\') break;
+                if(path_str[back] != '\\') break;
                 nbackslash++;
             }
             if(nbackslash & 1) continue;
             {
                 DrJsonAtom atom;
-                int err = drjson_atomize(ctx, query + begin, i - begin, &atom);
-                if(err) return 1;
+                // Use get_atom_no_intern for allocation-free queries
+                int err = drjson_get_atom_no_intern(ctx, path_str + begin, i - begin, &atom);
+                if(err){
+                    // Key not in atom table - won't be found in any object
+                    // Store sentinel value (bits = 0)
+                    atom = (DrJsonAtom){.bits = 0};
+                }
                 err = drjson_path_add_key(path, atom);
                 if(err) return 1;
             }
@@ -1818,191 +1864,81 @@ Lquoted_getitem:
             goto Ldispatch;
         }
     }
-    return 1; // Unterminated quoted query
+    return 1;
 
 Ldone:
+    *remainder = path_str + i;
     return 0;
 }
 
 DRJSON_API
 DrJsonValue
 drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t length){
-    enum {
-        GETITEM,
-        SUBSCRIPT,
-        QUOTED_GETITEM,
-        KEYS,
-        VALUES,
-        // GLOB,
-    };
-    size_t begin = 0;
-    size_t i = 0;
-    DrJsonValue o = v;
-    // This macro is vestigial, could just be replaced by returning the error.
-    #define RETERROR(code, mess) return drjson_make_error(code, mess)
-    if(i == length) RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Query is 0 length");
-    Ldispatch:
-    for(;i < length; i++){
-        char c = query[i];
-        switch(c){
-            case '.':
-                i++;
-                LHack:
-                begin = i;
-                if(i == length) RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Empty query after a '.'");
-                switch(query[i]){
-                    case '"':
-                        i++;
-                        begin = i;
-                        goto Lquoted_getitem;
-                    case '#':
-                    case '$':
-                    case '@':
-                        i++;
-                        if(length - i >= sizeof("keys")-1 && memcmp(query+i, "keys", sizeof("keys")-1) == 0){
-                            i += sizeof("keys")-1;
-                            goto Lkeys;
-                        }
-                        if(length - i >= sizeof("values")-1 && memcmp(query+i, "values", sizeof("values")-1) == 0){
-                            i += sizeof("values")-1;
-                            goto Lvalues;
-                        }
-                        if(length - i >= sizeof("items")-1 && memcmp(query+i, "items", sizeof("items")-1) == 0){
-                            i += sizeof("items")-1;
-                            goto Litems;
-                        }
-                        if(length - i >= sizeof("length")-1 && memcmp(query+i, "length", sizeof("length")-1) == 0){
-                            i += sizeof("length")-1;
-                            goto Llength;
-                        }
-                        RETERROR(DRJSON_ERROR_INVALID_CHAR, "Unknown special key");
-                    case CASE_0_9:
-                    case CASE_a_z:
-                    case CASE_A_Z:
-                    case '/':
-                    case '_':
-                        goto Lgetitem;
-                    default:
-                        RETERROR(DRJSON_ERROR_INVALID_CHAR, "Invalid character identifier");
-                }
-            case '[':
-                i++;
-                begin = i;
-                goto Lsubscript;
-            case CASE_0_9:
-                if(o.kind == DRJSON_ARRAY){
-                    begin = i;
-                    while(++i < length){
-                        switch(query[i]){
-                            case CASE_0_9:
-                                continue;
-                            default:
-                                break;
-                        }
-                        break;
-                    }
-                    goto Ldo_subscript;
-                }
-            #ifdef __GNUC__
-                __attribute__((fallthrough));
-            #endif
-            default:
-                if(i == 0)
-                    goto LHack;
-                RETERROR(DRJSON_ERROR_INVALID_CHAR, "Queries must continue with '.', '['");
-        }
+    DrJsonPath path;
+    int err = drjson_path_parse(ctx, query, length, &path);
+    if(err) return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Invalid query path");
+    return drjson_evaluate_path(ctx, v, &path);
+}
+
+// Helper function to check if a key is a magic property and handle it
+static
+DrJsonValue
+drjson_try_magic_key(const DrJsonContext* ctx, DrJsonValue current, DrJsonAtom key){
+    // Check for magic properties using pre-atomized keys
+    if(key.bits == ctx->magic_keys.length.bits){
+        int64_t len = drjson_len(ctx, current);
+        if(len < 0)
+            return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "length on non-container");
+        return drjson_make_int(len);
     }
-    goto Ldone;
-    Lgetitem:
-        for(;i!=length;i++){
-            switch(query[i]){
-                case '.':
-                case '[':
-                    goto Ldo_getitem;
-                case CASE_a_z:
-                case CASE_A_Z:
-                case CASE_0_9:
-                case '/':
-                case '_':
-                case '-':
-                case '+':
-                case '*':
-                    continue;
-                default:
-                    RETERROR(DRJSON_ERROR_INVALID_CHAR, "Invalid character in identifier query");
+    if(key.bits == ctx->magic_keys.keys.bits){
+        return drjson_object_keys(current);
+    }
+    if(key.bits == ctx->magic_keys.values.bits){
+        return drjson_object_values(current);
+    }
+    if(key.bits == ctx->magic_keys.items.bits){
+        return drjson_object_items(current);
+    }
+
+    // Not a magic key
+    return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "Key not found");
+}
+
+DRJSON_API
+DrJsonValue
+drjson_evaluate_path(const DrJsonContext* ctx, DrJsonValue v, const DrJsonPath* path){
+    DrJsonValue current_value = v;
+    for(size_t i = 0; i < path->count; i++){
+        const DrJsonPathSegment* seg = &path->segments[i];
+        if(seg->kind == DRJSON_PATH_KEY){
+            // Check for sentinel (key not in atom table)
+            if(seg->key.bits == 0){
+                // Key doesn't exist in atom table, check if it's a magic key
+                // (This shouldn't happen since we pre-atomize magic keys, but handle it anyway)
+                return drjson_make_error(DRJSON_ERROR_MISSING_KEY, "Key not found");
             }
-        }
-        // fall-through
-    Ldo_getitem:
-        if(i == begin) RETERROR(DRJSON_ERROR_INVALID_CHAR, "0 length query after '.'");
-        o = drjson_object_get_item(ctx, o, query+begin, i-begin);
-        if(o.kind == DRJSON_ERROR) RETERROR(DRJSON_ERROR_MISSING_KEY, "Key not found");
-        goto Ldispatch;
-    Lsubscript:
-        for(;i!=length;i++){
-            switch(query[i]){
-                case '-':
-                case CASE_0_9:
-                    continue;
-                case ']':
-                    goto Ldo_subscript;
-                default:
-                    RETERROR(DRJSON_ERROR_MISSING_KEY, "Invalid subscript character (must be integer)");
-            }
-        }
-        // Need to see a ']'
-        RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "No ']' found to close a subscript");
-    Ldo_subscript:
-        {
-            // lazy
-            Int64Result pr = parse_int64(query+begin, i-begin);
-            if(pr.errored){
-                RETERROR(DRJSON_ERROR_INVALID_VALUE, "Unable to parse number for subscript");
-            }
-            int64_t index = pr.result;
-            o = drjson_get_by_index(ctx, o, index);
-            if(o.kind == DRJSON_ERROR) return o;
-        }
-        i++;
-        goto Ldispatch;
-    Lquoted_getitem:
-        for(;i!=length;i++){
-            if(query[i] == '"'){
-                assert(i != begin);
-                assert(i);
-                size_t nbackslash = 0;
-                for(size_t back = i-1; back != begin; back--){
-                    if(query[back] != '\\') break;
-                    nbackslash++;
+
+            // Save the value before lookup
+            DrJsonValue pre_lookup_value = current_value;
+
+            // Try normal key lookup first
+            current_value = drjson_object_get_item_atom(ctx, current_value, seg->key);
+
+            // If that failed, try magic keys on the original value
+            if(current_value.kind == DRJSON_ERROR){
+                DrJsonValue magic_result = drjson_try_magic_key(ctx, pre_lookup_value, seg->key);
+                // Only use magic result if it's not a "key not found" error
+                if(magic_result.kind != DRJSON_ERROR || magic_result.error_code != DRJSON_ERROR_MISSING_KEY){
+                    current_value = magic_result;
                 }
-                if(nbackslash & 1) continue;
-                o = drjson_object_get_item(ctx, o, query+begin, i-begin);
-                if(o.kind == DRJSON_ERROR) RETERROR(DRJSON_ERROR_MISSING_KEY, "Key not found");
-                i++;
-                goto Ldispatch;
             }
+        } else { // DRJSON_PATH_INDEX
+            current_value = drjson_get_by_index(ctx, current_value, seg->index);
         }
-        RETERROR(DRJSON_ERROR_UNEXPECTED_EOF, "Unterminated quoted query");
-    Llength:;
-        int64_t len = drjson_len(ctx, o);
-        if(len < 0) RETERROR(DRJSON_ERROR_TYPE_ERROR, "Length applied to non-object, non-array, non-string");
-        o = drjson_make_uint((uint64_t)len);
-        goto Ldispatch;
-    Lkeys:
-        if(o.kind != DRJSON_OBJECT) RETERROR(DRJSON_ERROR_TYPE_ERROR, "@keys applied to non-object");
-        o = drjson_make_obj_keys(o);
-        goto Ldispatch;
-    Lvalues:
-        if(o.kind != DRJSON_OBJECT) RETERROR(DRJSON_ERROR_TYPE_ERROR, "Querying @values of non-object type");
-        o = drjson_make_obj_values(o);
-        goto Ldispatch;
-    Litems:
-        if(o.kind != DRJSON_OBJECT) RETERROR(DRJSON_ERROR_TYPE_ERROR, "Querying @items of non-object type");
-        o = drjson_make_obj_items(o);
-        goto Ldispatch;
-    Ldone:
-        return o;
-    #undef RETERROR
+        if(current_value.kind == DRJSON_ERROR) return current_value;
+    }
+    return current_value;
 }
 
 DRJSON_API
