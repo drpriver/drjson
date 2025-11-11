@@ -200,6 +200,14 @@ struct JsonNav {
     char search_pattern[256];       // Pattern part (e.g., "Smith" from "/?metadata.author.name Smith")
     size_t search_pattern_len;
 
+    // Numeric search optimization
+    struct {
+        _Bool is_numeric;           // True if pattern parsed as number
+        _Bool is_integer;           // True if it's an integer (not float)
+        int64_t int_value;          // Parsed integer value
+        double double_value;        // Parsed double value
+    } search_numeric;
+
     // Inline edit mode
     _Bool edit_mode;                // In inline edit mode
     _Bool edit_key_mode;            // If true, editing key; if false, editing value
@@ -1295,6 +1303,22 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
         if(nav->search_pattern_len == 0)
             return 1;
 
+        // Fast path: numeric comparison
+        if(nav->search_numeric.is_numeric){
+            if(nav->search_numeric.is_integer){
+                // Integer comparison
+                if(result.kind == DRJSON_INTEGER && result.integer == nav->search_numeric.int_value)
+                    return 1;
+                if(result.kind == DRJSON_UINTEGER && (int64_t)result.uinteger == nav->search_numeric.int_value)
+                    return 1;
+            }
+            else {
+                // Floating point comparison
+                if(result.kind == DRJSON_NUMBER && result.number == nav->search_numeric.double_value)
+                    return 1;
+            }
+        }
+
         // Check if result matches the pattern
         if(result.kind == DRJSON_STRING){
             const char* str = NULL;
@@ -1308,6 +1332,22 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
             int64_t len = drjson_len(nav->jctx, result);
             for(int64_t i = 0; i < len; i++){
                 DrJsonValue elem = drjson_get_by_index(nav->jctx, result, i);
+
+                // Fast path: numeric comparison for array elements
+                if(nav->search_numeric.is_numeric){
+                    if(nav->search_numeric.is_integer){
+                        if(elem.kind == DRJSON_INTEGER && elem.integer == nav->search_numeric.int_value)
+                            return 1;
+                        if(elem.kind == DRJSON_UINTEGER && (int64_t)elem.uinteger == nav->search_numeric.int_value)
+                            return 1;
+                    }
+                    else {
+                        if(elem.kind == DRJSON_NUMBER && elem.number == nav->search_numeric.double_value)
+                            return 1;
+                    }
+                }
+
+                // String matching for array elements
                 if(elem.kind == DRJSON_STRING){
                     const char* str = NULL;
                     size_t slen = 0;
@@ -5719,6 +5759,35 @@ main(int argc, const char* const* argv){
                             if(nav.search_pattern_len > 0){
                                 memcpy(nav.search_pattern, remainder, nav.search_pattern_len);
                                 nav.search_pattern[nav.search_pattern_len] = '\0';
+
+                                // Try to parse pattern as number for fast numeric comparison
+                                nav.search_numeric.is_numeric = 0;
+
+                                // Try int64 first
+                                Int64Result int_res = parse_int64(nav.search_pattern, nav.search_pattern_len);
+                                if(int_res.errored == PARSENUMBER_NO_ERROR){
+                                    nav.search_numeric.is_numeric = 1;
+                                    nav.search_numeric.is_integer = 1;
+                                    nav.search_numeric.int_value = int_res.result;
+                                }
+                                else {
+                                    // Try uint64
+                                    Uint64Result uint_res = parse_uint64(nav.search_pattern, nav.search_pattern_len);
+                                    if(uint_res.errored == PARSENUMBER_NO_ERROR){
+                                        nav.search_numeric.is_numeric = 1;
+                                        nav.search_numeric.is_integer = 1;
+                                        nav.search_numeric.int_value = (int64_t)uint_res.result;
+                                    }
+                                    else {
+                                        // Try double
+                                        DoubleResult double_res = parse_double(nav.search_pattern, nav.search_pattern_len);
+                                        if(double_res.errored == PARSENUMBER_NO_ERROR){
+                                            nav.search_numeric.is_numeric = 1;
+                                            nav.search_numeric.is_integer = 0;
+                                            nav.search_numeric.double_value = double_res.result;
+                                        }
+                                    }
+                                }
                             }
                             // Always set to SEARCH_QUERY if path parsing was successful
                             nav.search_mode = SEARCH_QUERY;
