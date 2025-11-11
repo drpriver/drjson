@@ -4987,17 +4987,21 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     // Render status line at top
     drt_push_state(drt);
     if(nav->search_input_active){
-        drt_puts(drt, " Search: ", 9);
-        int start_x = 9;
+        const char* prompt = (nav->search_mode == SEARCH_QUERY) ? " Query Search: " : " Search: ";
+        int prompt_len = (nav->search_mode == SEARCH_QUERY) ? 15 : 9;
+        drt_puts(drt, prompt, prompt_len);
+        int start_x = prompt_len;
         le_render(drt, &nav->search_buffer);
         cursor_x = start_x + (int)nav->search_buffer.cursor_pos;
         cursor_y = 0;
         show_cursor = 1;
     }
     else if(nav->search_buffer.length > 0){
-        drt_printf(drt, " %s — %zu items — Search: %.*s ",
+        const char* search_label = (nav->search_mode == SEARCH_QUERY) ? "Query Search" : "Search";
+        drt_printf(drt, " %s — %zu items — %s: %.*s ",
                    nav->filename[0] ? nav->filename : "DrJson TUI",
                    nav->item_count,
+                   search_label,
                    (int)nav->search_buffer.length, nav->search_buffer.data);
     }
     else {
