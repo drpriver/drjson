@@ -4567,7 +4567,7 @@ static const StringView HELP_LINES[] = {
     SV("Search:"),
     SV("  /           Start recursive search (case-insensitive)"),
     SV("              Supports re patterns: foo.*bar, test"),
-    SV("  ?           Start query search (case-insensitive)"),
+    SV("  //          Start query search (press / twice, case-insensitive)"),
     SV("              Parses first part as a query, rest is the text pattern"),
     SV("  *           Search for word under cursor"),
     SV("  n           Next match"),
@@ -4642,7 +4642,7 @@ static const StringView HELP_LINES[] = {
     SV("Other:"),
     SV("  q/Q         Quit"),
     SV("  Ctrl-Z      Suspend (Unix only)"),
-    SV("  F1          Toggle this help"),
+    SV("  ?/F1        Toggle this help"),
     SV(""),
     SV("Help Navigation:"),
     SV("  n/→         Next page"),
@@ -5716,6 +5716,14 @@ main(int argc, const char* const* argv){
                     nav.search_input_active = 0;
                     le_clear(&nav.search_buffer);
                     continue;
+                case '/':
+                    // If buffer is empty and in recursive mode, switch to query mode
+                    if(nav.search_buffer.length == 0 && nav.search_mode == SEARCH_RECURSIVE){
+                        nav.search_mode = SEARCH_QUERY;
+                        continue;
+                    }
+                    // Otherwise, treat as regular character input
+                    break;
                 case ENTER:
                 case CTRL_J:{
                     // Add to history before searching
@@ -6426,12 +6434,6 @@ main(int argc, const char* const* argv){
                 break;
 
             case '?':
-                // Enter query search mode
-                nav.search_mode = SEARCH_QUERY;
-                nav.search_input_active = 1;
-                le_clear(&nav.search_buffer);
-                break;
-
             case F1:
                 nav.show_help = 1;
                 nav.help_lines = HELP_LINES;
