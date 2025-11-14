@@ -58,6 +58,8 @@ Bin/test_static$(EXE): DrJson/test_drjson.c | Bin Deps
 Bin/test_unity$(EXE): DrJson/test_drjson.c | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_unity.dep -fvisibility=hidden -I. -g -DDRJSON_UNITY=1
 
+Bin/test_tui$(EXE): DrJson/test_drjson_tui.c | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_tui.dep -fvisibility=hidden -I. -g
 
 README.html: README.md README.css
 	pandoc README.md README.css -f markdown -o $@ -s --toc
@@ -85,6 +87,7 @@ all: Bin/demo$(EXE)
 all: Bin/test$(EXE)
 all: Bin/test_static$(EXE)
 all: Bin/test_unity$(EXE)
+all: Bin/test_tui$(EXE)
 
 TestResults/%: Bin/%$(EXE) | TestResults
 	$< --tee $@
@@ -93,6 +96,7 @@ TestResults: ; mkdir -p $@
 tests: TestResults/test
 tests: TestResults/test_static
 tests: TestResults/test_unity
+tests: TestResults/test_tui
 
 
 .DEFAULT_GOAL:=all

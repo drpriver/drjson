@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include "long_string.h"
 
 // History for line editors
 typedef struct LineEditorHistory LineEditorHistory;
@@ -18,8 +19,13 @@ struct LineEditorHistory {
 
 typedef struct LineEditor LineEditor;
 struct LineEditor {
-    char* data;
-    size_t length;
+    union {
+        struct {
+            size_t length;
+            char* data;
+        };
+        StringView sv;
+    };
     size_t capacity;
     size_t cursor_pos;       // Cursor position (0 to length)
     LineEditorHistory* history; // Optional history

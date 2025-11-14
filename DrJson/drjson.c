@@ -436,6 +436,7 @@ drj_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Nullabl
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_get_atom_str_and_length(const DrJsonContext* ctx, DrJsonAtom atom, const char*_Nullable*_Nonnull string, size_t* slen){
     DrjAtomStr s = drj_get_atom_str(&ctx->atoms, atom);
@@ -445,12 +446,14 @@ drjson_get_atom_str_and_length(const DrJsonContext* ctx, DrJsonAtom atom, const 
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Nullable*_Nonnull string, size_t* slen){
     return drj_get_str_and_len(ctx, v, string, slen);
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_get_atom_no_intern(const DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
     if(len >= ATOM_MAX_LEN) return 1;
@@ -459,6 +462,7 @@ drjson_get_atom_no_intern(const DrJsonContext* ctx, const char* str, size_t len,
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_atomize(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
     if(len >= ATOM_MAX_LEN) return 1;
@@ -467,6 +471,7 @@ drjson_atomize(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outa
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_atomize_no_copy(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom){
     if(len >= ATOM_MAX_LEN) return 1;
@@ -475,6 +480,7 @@ drjson_atomize_no_copy(DrJsonContext* ctx, const char* str, size_t len, DrJsonAt
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 DrJsonContext*_Nullable
 drjson_create_ctx(DrJsonAllocator allocator){
     DrJsonContext* ctx = allocator.alloc(allocator.user_pointer, sizeof *ctx);
@@ -483,10 +489,16 @@ drjson_create_ctx(DrJsonAllocator allocator){
     ctx->allocator = allocator;
 
     // Pre-atomize magic keys for allocation-free queries
-    DRJSON_ATOMIZE(ctx, "length", &ctx->magic_keys.length);
-    DRJSON_ATOMIZE(ctx, "keys", &ctx->magic_keys.keys);
-    DRJSON_ATOMIZE(ctx, "values", &ctx->magic_keys.values);
-    DRJSON_ATOMIZE(ctx, "items", &ctx->magic_keys.items);
+    // However, it's ok if they fail.
+    int err;
+    err = DRJSON_ATOMIZE(ctx, "length", &ctx->magic_keys.length);
+    (void)err;
+    err = DRJSON_ATOMIZE(ctx, "keys", &ctx->magic_keys.keys);
+    (void)err;
+    err = DRJSON_ATOMIZE(ctx, "values", &ctx->magic_keys.values);
+    (void)err;
+    err = DRJSON_ATOMIZE(ctx, "items", &ctx->magic_keys.items);
+    (void)err;
 
     return ctx;
 }
@@ -1740,6 +1752,7 @@ drjson_path_parse(const DrJsonContext* ctx, const char* path_str, size_t path_le
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_path_parse_greedy(const DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path, const char* _Nullable * _Nonnull remainder){
     size_t i = 0;
@@ -2787,6 +2800,7 @@ drjson_escape_string2(const DrJsonAllocator* restrict allocator, const char* res
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t length, DrJsonAtom* outatom){
     if(!outatom) return 1;

@@ -45,6 +45,25 @@
 
 #endif
 
+#ifndef DRJSON_WARN_UNUSED
+// This macro should not be used for regular fallible functions,
+// but for functions where it ignoring the return value is a safety
+// issue as a data structure might not be initialized on error.
+
+#if defined(__GNUC__) || defined(__clang__)
+#define DRJSON_WARN_UNUSED __attribute__((warn_unused_result))
+#elif defined(_MSC_VER)
+#if __cplusplus >= 201703L || (defined(_HAS_CXX17) && _HAS_CXX17)
+#define DRJSON_WARN_UNUSED [[nodiscard]]
+#else
+#define DRJSON_WARN_UNUSED __checkReturn
+#endif
+#else
+#define DRJSON_WARN_UNUSED
+#endif
+
+#endif
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -86,6 +105,7 @@ drjson_stdc_allocator(void);
 typedef struct DrJsonContext DrJsonContext;
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 DrJsonContext*_Nullable
 drjson_create_ctx(DrJsonAllocator allocator);
 
@@ -135,6 +155,7 @@ struct DrJsonAtom {
 
 // NOTE: duplicates the string into the atom table.
 DRJSON_API
+DRJSON_WARN_UNUSED
 int // 0 on success
 drjson_atomize(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom);
 
@@ -142,6 +163,7 @@ drjson_atomize(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outa
 //       to outlive the context (like a string literal). Use the macro
 //       DRJSON_ATOMIZE for actual string literals.
 DRJSON_API
+DRJSON_WARN_UNUSED
 int // 0 on success
 drjson_atomize_no_copy(DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom);
 
@@ -150,10 +172,12 @@ drjson_atomize_no_copy(DrJsonContext* ctx, const char* str, size_t len, DrJsonAt
 // Retrieves the corresponding atom for the string, but if it is not
 // already atomized then an error is returned instead of atomizing.
 DRJSON_API
+DRJSON_WARN_UNUSED
 int // 0 on success
 drjson_get_atom_no_intern(const DrJsonContext* ctx, const char* str, size_t len, DrJsonAtom* outatom);
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_get_atom_str_and_length(const DrJsonContext* ctx, DrJsonAtom atom, const char*_Nullable*_Nonnull str, size_t* length);
 
@@ -288,6 +312,7 @@ drjson_eq(DrJsonValue a, DrJsonValue b){
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int // returns 1 on error (not an atom)
 drjson_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Nullable*_Nonnull string, size_t* slen);
 
@@ -581,12 +606,13 @@ int // 0 on success
 drjson_path_add_special(DrJsonPath* path, DrJsonPathSegmentKind k);
 
 // NOTE: the path is invalidated if new keys are inserted into the ctx as
-// it assumes missing keys won't math.
+// it assumes missing keys won't match.
 DRJSON_API
 int // 0 on success
 drjson_path_parse(const DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path);
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_path_parse_greedy(const DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path, const char* _Nullable * _Nonnull remainder);
 
@@ -689,6 +715,7 @@ drjson_print_error_HANDLE(void* hnd, const char* filename, size_t filename_len, 
 
 // If mutating the json tree, use this to escape strings.
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t length, DrJsonAtom* outatom);
 

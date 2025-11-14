@@ -173,7 +173,7 @@ struct JsonNav {
 
     // Message display
     char message[512];        // Message to display to user
-    _Bool has_message;        // Whether there's a message to show
+    size_t message_length;    // Length of message
 
     // Command mode
     LineEditor command_buffer;      // Command input buffer
@@ -302,6 +302,7 @@ expand_tilde_to_buffer(const char* path, size_t path_len, char* buffer, size_t b
 }
 
 static inline
+DRJSON_WARN_UNUSED
 int
 read_file_streamed(FILE* fp, LongString* out){
     size_t nalloced = 1024;
@@ -335,6 +336,7 @@ read_file_streamed(FILE* fp, LongString* out){
 }
 
 static inline
+DRJSON_WARN_UNUSED
 int
 read_file(const char* filepath, LongString* out){
     int status = -1;
@@ -640,7 +642,7 @@ nav_reinit(JsonNav* nav){
     nav->cursor_pos = 0;
     nav->scroll_offset = 0;
     nav->needs_rebuild = 1;
-    nav->has_message = 0;
+    nav->message_length = 0;
     nav->show_help = 0;
     nav->command_mode = 0;
     nav->pending_key = 0;
@@ -1323,8 +1325,8 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
         if(result.kind == DRJSON_STRING){
             const char* str = NULL;
             size_t len = 0;
-            drjson_get_str_and_len(nav->jctx, result, &str, &len);
-            if(str && string_matches_query(str, len, nav->search_pattern, nav->search_pattern_len))
+            int err = drjson_get_str_and_len(nav->jctx, result, &str, &len);
+            if(!err && str && string_matches_query(str, len, nav->search_pattern, nav->search_pattern_len))
                 return 1;
         }
         // Also match in arrays: check if any element matches
@@ -1351,8 +1353,8 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
                 if(elem.kind == DRJSON_STRING){
                     const char* str = NULL;
                     size_t slen = 0;
-                    drjson_get_str_and_len(nav->jctx, elem, &str, &slen);
-                    if(str && string_matches_query(str, slen, nav->search_pattern, nav->search_pattern_len)){
+                    int err = drjson_get_str_and_len(nav->jctx, elem, &str, &slen);
+                    if(!err && str && string_matches_query(str, slen, nav->search_pattern, nav->search_pattern_len)){
                         return 1;
                     }
                 }
@@ -1368,8 +1370,8 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
         const char* key_str = NULL;
         size_t key_len = 0;
         DrJsonValue key_val = drjson_atom_to_value(key);
-        drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-        if(key_str && string_matches_query(key_str, key_len, query, query_len)){
+        int err = drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+        if(!err && key_str && string_matches_query(key_str, key_len, query, query_len)){
             return 1;
         }
     }
@@ -1378,8 +1380,8 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
     if(val.kind == DRJSON_STRING){
         const char* str = NULL;
         size_t len = 0;
-        drjson_get_str_and_len(nav->jctx, val, &str, &len);
-        if(str && string_matches_query(str, len, query, query_len)){
+        int err = drjson_get_str_and_len(nav->jctx, val, &str, &len);
+        if(!err && str && string_matches_query(str, len, query, query_len)){
             return 1;
         }
     }
@@ -1766,19 +1768,29 @@ void
 nav_set_messagef(JsonNav* nav, const char* fmt, ...){
     va_list args;
     va_start(args, fmt);
-    vsnprintf(nav->message, sizeof(nav->message), fmt, args);
+    int len = vsnprintf(nav->message, sizeof(nav->message), fmt, args);
     va_end(args);
-    nav->has_message = 1;
+    if(len < 0){
+        nav->message_length = 0;
+    }
+    else if((size_t)len >= sizeof(nav->message)){
+        nav->message_length = sizeof(nav->message) - 1;
+    }
+    else{
+        nav->message_length = (size_t)len;
+    }
 }
 
 // Clear the current message
 static inline
 void
 nav_clear_message(JsonNav* nav){
-    nav->has_message = 0;
+    nav->message_length = 0;
 }
 
+DRJSON_WARN_UNUSED
 static int parse_as_string(DrJsonContext* jctx, const char* txt, size_t len, DrJsonAtom* outatom);
+DRJSON_WARN_UNUSED
 static int parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJsonValue* outvalue);
 
 //------------------------------------------------------------
@@ -2293,6 +2305,7 @@ membuf_write(void* user_data, const void* data, size_t len){
 // Returns 0 on success, -1 on failure
 #ifdef _WIN32
 static
+DRJSON_WARN_UNUSED
 int
 read_from_clipboard(LongString* out){
     if(!OpenClipboard(NULL)){
@@ -2329,6 +2342,7 @@ read_from_clipboard(LongString* out){
 }
 #elif defined(__APPLE__)
 static
+DRJSON_WARN_UNUSED
 int
 read_from_clipboard(LongString* out){
 #pragma clang diagnostic push
@@ -2375,6 +2389,7 @@ read_from_clipboard(LongString* out){
 }
 #else
 static
+DRJSON_WARN_UNUSED
 int
 read_from_clipboard(LongString* out){
     // Linux - try tmux, then xclip, then xsel
@@ -2708,8 +2723,11 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
             if(next.kind == DRJSON_ERROR){
                 const char* key_str;
                 size_t key_len;
-                drjson_get_atom_str_and_length(nav->jctx, seg->key, &key_str, &key_len);
-                nav_set_messagef(nav, "Error: Key '%.*s' not found", (int)key_len, key_str);
+                int err = drjson_get_atom_str_and_length(nav->jctx, seg->key, &key_str, &key_len);
+                if(!err)
+                    nav_set_messagef(nav, "Error: Key '%.*s' not found", (int)key_len, key_str);
+                else
+                    nav_set_messagef(nav, "Error: Key not found");
                 return CMD_ERROR;
             }
 
@@ -2965,16 +2983,17 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
 
         if(part_len == 0) continue;
 
-        if(part_len == 4 && memcmp(word_start, "keys", 4) == 0){
+        StringView part_sv = {.text = word_start, .length = part_len};
+        if(SV_equals(part_sv, SV("keys"))){
             sort_by_values = 0;
         }
-        else if(part_len == 6 && memcmp(word_start, "values", 6) == 0){
+        else if(SV_equals(part_sv, SV("values"))){
             sort_by_values = 1;
         }
-        else if(part_len == 3 && memcmp(word_start, "asc", 3) == 0){
+        else if(SV_equals(part_sv, SV("asc"))){
             direction = 1;
         }
-        else if(part_len == 4 && memcmp(word_start, "desc", 4) == 0){
+        else if(SV_equals(part_sv, SV("desc"))){
             direction = -1;
         }
         else {
@@ -3053,8 +3072,11 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
                     DrJsonValue sort_val = drjson_query(nav->jctx, pairs[i].value, query_str, query_len);
                     if(sort_val.kind == DRJSON_ERROR){
                         const char* key_str; size_t key_len;
-                        drjson_get_atom_str_and_length(nav->jctx, pairs[i].key, &key_str, &key_len);
-                        nav_set_messagef(nav, "Error: Query '%.*s' failed on value for key '%.*s': %s", (int)query_len, query_str, (int)key_len, key_str, sort_val.err_mess);
+                        int err = drjson_get_atom_str_and_length(nav->jctx, pairs[i].key, &key_str, &key_len);
+                        if(!err)
+                            nav_set_messagef(nav, "Error: Query '%.*s' failed on value for key '%.*s': %s", (int)query_len, query_str, (int)key_len, key_str, sort_val.err_mess);
+                        else
+                            nav_set_messagef(nav, "Error: Query '%.*s' failed: %s", (int)query_len, query_str, sort_val.err_mess);
                         free(pairs);
                         return CMD_ERROR;
                     }
@@ -3182,14 +3204,11 @@ compare_values(DrJsonValue a, DrJsonValue b, DrJsonContext* jctx){
         }
 
         case DRJSON_STRING: {
-            const char *s1, *s2;
-            size_t l1, l2;
-            drjson_get_str_and_len(jctx, a, &s1, &l1);
-            drjson_get_str_and_len(jctx, b, &s2, &l2);
-            if(!s1 || !s2) return 0; // Should not happen
-            int cmp = memcmp(s1, s2, l1 < l2 ? l1 : l2);
-            if(cmp != 0) return cmp;
-            return (l1 < l2) ? -1 : (l1 > l2);
+            StringView sv1, sv2;
+            int err1 = drjson_get_str_and_len(jctx, a, &sv1.text, &sv1.length);
+            int err2 = drjson_get_str_and_len(jctx, b, &sv2.text, &sv2.length);
+            if(err1 || err2 || !sv1.text || !sv2.text) return 0; // Should not happen
+            return StringView_cmp(&sv1, &sv2);
         }
 
         case DRJSON_ARRAY:
@@ -3287,6 +3306,7 @@ typedef struct {
 
 // Parses the expression string into a structured representation.
 static
+DRJSON_WARN_UNUSED
 int
 tui_parse_expression(JsonNav* nav, const char* expression, size_t expression_length, TuiParsedExpression* out_expr){
     const char* p = expression;
@@ -3661,8 +3681,7 @@ nav_complete_command(JsonNav* nav){
 
             // Check if it matches the prefix
             size_t entry_len = strlen(entry->d_name);
-            if(entry_len >= file_prefix_len &&
-               memcmp(entry->d_name, file_prefix, file_prefix_len) == 0){
+            if(entry_len >= file_prefix_len && memcmp(entry->d_name, file_prefix, file_prefix_len) == 0){
 
                 // Build the full completed path for this match
                 char completed[256];
@@ -3697,9 +3716,8 @@ nav_complete_command(JsonNav* nav){
         }
         closedir(d);
 
-        if(nav->completion_count == 0){
+        if(nav->completion_count == 0)
             return 0; // No matches
-        }
 
         // Show completion menu
         nav->in_completion_menu = 1;
@@ -3716,9 +3734,92 @@ nav_complete_command(JsonNav* nav){
 
         return 1;
         #else
-        // Windows file completion - similar but with FindFirstFile
-        // For brevity, just return no completion on Windows for now
-        return 0;
+        // Windows file completion using FindFirstFile/FindNextFile
+        WIN32_FIND_DATAA find_data;
+        char search_pattern[512];
+        size_t pattern_len = 0;
+
+        // Build search pattern: dir_path + "*"
+        // dir_path is either "." or "path/to/dir/" (includes trailing separator)
+        size_t dir_len = strlen(dir_path);
+        for(size_t i = 0; i < dir_len && pattern_len < sizeof(search_pattern) - 2; i++){
+            search_pattern[pattern_len++] = dir_path[i];
+        }
+        // If dir_path is ".", append "\*", otherwise just append "*"
+        if(dir_len == 1 && dir_path[0] == '.'){
+            search_pattern[pattern_len++] = '\\';
+        }
+        search_pattern[pattern_len++] = '*';
+        search_pattern[pattern_len] = '\0';
+
+        HANDLE hFind = FindFirstFileA(search_pattern, &find_data);
+        if(hFind == INVALID_HANDLE_VALUE){
+            return 0;
+        }
+
+        // Collect matching entries
+        do {
+            // Skip . and ..
+            if(strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0){
+                continue;
+            }
+
+            // Check if it matches the prefix
+            size_t entry_len = strlen(find_data.cFileName);
+            if(entry_len >= file_prefix_len && memcmp(find_data.cFileName, file_prefix, file_prefix_len) == 0){
+                // Build the full completed path for this match
+                char completed[256];
+                size_t completed_len = 0;
+
+                // Copy command part from saved original
+                for(size_t i = 0; i < path_start; i++){
+                    if(completed_len < sizeof(completed) - 1){
+                        completed[completed_len++] = source[i];
+                    }
+                }
+
+                // Copy directory part if present
+                if(dir_path[0] != '.' || dir_path[1] != '\0'){
+                    size_t dir_len2 = strlen(dir_path);
+                    for(size_t i = 0; i < dir_len2 && completed_len < sizeof(completed) - 1; i++){
+                        completed[completed_len++] = dir_path[i];
+                    }
+                }
+
+                // Copy matched filename
+                for(size_t i = 0; i < entry_len && completed_len < sizeof(completed) - 1; i++){
+                    completed[completed_len++] = find_data.cFileName[i];
+                }
+
+                completed[completed_len] = '\0';
+
+                // Store in completion matches
+                memcpy(nav->completion_matches[nav->completion_count], completed, completed_len + 1);
+                nav->completion_count++;
+
+                if(nav->completion_count >= 64) break;
+            }
+        } while(FindNextFileA(hFind, &find_data));
+
+        FindClose(hFind);
+
+        if(nav->completion_count == 0)
+            return 0; // No matches
+
+        // Show completion menu
+        nav->in_completion_menu = 1;
+        nav->completion_selected = 0;
+        nav->completion_scroll = 0;
+
+        // Update buffer with first completion
+        const char* first = nav->completion_matches[0];
+        size_t first_len = strlen(first);
+        le->length = first_len < le->capacity ? first_len : le->capacity - 1;
+        memcpy(le->data, first, le->length);
+        le->data[le->length] = '\0';
+        le->cursor_pos = le->length;
+
+        return 1;
         #endif
     }
 }
@@ -3840,9 +3941,9 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
     if(cmd_len == 0) cmd_len = command_len;
 
     // Look up command in command table
+    StringView cmd_sv = {.text = command, .length = cmd_len};
     for(size_t i = 0; i < sizeof commands / sizeof commands[0]; i++){
-        size_t name_len = commands[i].name.length;
-        if(name_len == cmd_len && memcmp(commands[i].name.text, command, cmd_len) == 0){
+        if(SV_equals(commands[i].name, cmd_sv)){
             // Found matching command, call handler
             const char* args = arg_start ? arg_start : "";
             size_t args_len = arg_start ? arg_len : 0;
@@ -3886,8 +3987,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
         case DRJSON_STRING: {
             const char* str = NULL;
             size_t len = 0;
-            drjson_get_str_and_len(jctx, val, &str, &len);
-            if(str){
+            int err = drjson_get_str_and_len(jctx, val, &str, &len);
+            if(!err && str){
                 drt_putc(drt, '"');
                 // Truncate if too long
                 size_t to_print = len;
@@ -3973,8 +4074,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                         case DRJSON_STRING: {
                             const char* str = NULL;
                             size_t slen = 0;
-                            drjson_get_str_and_len(jctx, item, &str, &slen);
-                            if(str && budget >= 4){ // At least room for ""
+                            int err = drjson_get_str_and_len(jctx, item, &str, &slen);
+                            if(!err && str && budget >= 4){ // At least room for ""
                                 drt_putc(drt, '"');
                                 budget--;
                                 size_t to_print = slen;
@@ -4071,8 +4172,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                         case DRJSON_STRING: {
                                             const char* str = NULL;
                                             size_t slen = 0;
-                                            drjson_get_str_and_len(jctx, arr_item, &str, &slen);
-                                            if(str && arr_budget >= 4){
+                                            int err = drjson_get_str_and_len(jctx, arr_item, &str, &slen);
+                                            if(!err && str && arr_budget >= 4){
                                                 drt_putc(drt, '"');
                                                 consumed = 1;
                                                 size_t to_print = slen;
@@ -4138,9 +4239,9 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                     DrJsonValue okey = drjson_get_by_index(jctx, obj_keys, ki);
                                     const char* okey_str = NULL;
                                     size_t okey_len = 0;
-                                    drjson_get_str_and_len(jctx, okey, &okey_str, &okey_len);
+                                    int err = drjson_get_str_and_len(jctx, okey, &okey_str, &okey_len);
 
-                                    if(!okey_str){
+                                    if(err || !okey_str){
                                         show_values = 0;
                                         break;
                                     }
@@ -4231,8 +4332,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                         case DRJSON_STRING: {
                                             const char* str = NULL;
                                             size_t slen = 0;
-                                            drjson_get_str_and_len(jctx, oval, &str, &slen);
-                                            if(str && obj_budget >= 4){
+                                            int err = drjson_get_str_and_len(jctx, oval, &str, &slen);
+                                            if(!err && str && obj_budget >= 4){
                                                 drt_putc(drt, '"');
                                                 consumed = 1;
                                                 size_t str_to_print = slen;
@@ -4270,9 +4371,9 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                     DrJsonValue okey = drjson_get_by_index(jctx, obj_keys, ki);
                                     const char* okey_str = NULL;
                                     size_t okey_len = 0;
-                                    drjson_get_str_and_len(jctx, okey, &okey_str, &okey_len);
+                                    int err = drjson_get_str_and_len(jctx, okey, &okey_str, &okey_len);
 
-                                    if(okey_str){
+                                    if(!err && okey_str){
                                         if(obj_shown > 0){
                                             drt_puts(drt, ", ", 2);
                                             budget -= 2;
@@ -4345,9 +4446,9 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                     DrJsonValue key = drjson_get_by_index(jctx, keys, i);
                     const char* key_str = NULL;
                     size_t key_len = 0;
-                    drjson_get_str_and_len(jctx, key, &key_str, &key_len);
+                    int err = drjson_get_str_and_len(jctx, key, &key_str, &key_len);
 
-                    if(key_str){
+                    if(!err && key_str){
                         if(i > 0){
                             drt_puts(drt, ", ", 2);
                             budget -= 2;
@@ -4423,8 +4524,8 @@ nav_render_value_summary(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int max
                                 case DRJSON_STRING: {
                                     const char* str = NULL;
                                     size_t slen = 0;
-                                    drjson_get_str_and_len(jctx, value, &str, &slen);
-                                    if(str && budget >= 4){
+                                    int err = drjson_get_str_and_len(jctx, value, &str, &slen);
+                                    if(!err && str && budget >= 4){
                                         drt_putc(drt, '"');
                                         consumed = 1;
                                         size_t str_to_print = slen;
@@ -4894,8 +4995,8 @@ nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
             DrJsonValue key_val = drjson_atom_to_value(components[i].key);
             const char* key_str = NULL;
             size_t key_len = 0;
-            drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-            if(key_str && written + key_len + 1 < buf_size){
+            int err = drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+            if(!err && key_str && written + key_len + 1 < buf_size){
                 buf[written++] = '.';
                 memcpy(buf + written, key_str, key_len);
                 written += key_len;
@@ -5097,11 +5198,12 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
                         // Entering value - show the key we already entered
                         const char* key_str;
                         size_t key_len;
-                        drjson_get_atom_str_and_length(nav->jctx, nav->insert_object_key, &key_str, &key_len);
+                        int err = drjson_get_atom_str_and_length(nav->jctx, nav->insert_object_key, &key_str, &key_len);
 
                         drt_push_state(drt);
                         drt_set_8bit_color(drt, 6); // cyan
-                        drt_puts(drt, key_str, key_len);
+                        if(!err)
+                            drt_puts(drt, key_str, key_len);
                         drt_pop_state(drt);
                         drt_puts(drt, ": ", 2);
 
@@ -5175,8 +5277,8 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
                     const char* key_str = NULL;
                     size_t key_len = 0;
                     DrJsonValue key_val = drjson_atom_to_value(item->key);
-                    drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
-                    if(key_str){
+                    int err = drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
+                    if(!err && key_str){
                         drt_push_state(drt);
                         drt_set_8bit_color(drt, 6); // cyan
                         drt_puts(drt, key_str, key_len);
@@ -5281,12 +5383,14 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
                     // Entering value - show the key we already entered
                     const char* key_str;
                     size_t key_len;
-                    drjson_get_atom_str_and_length(nav->jctx, nav->insert_object_key, &key_str, &key_len);
+                    int err = drjson_get_atom_str_and_length(nav->jctx, nav->insert_object_key, &key_str, &key_len);
 
-                    drt_push_state(drt);
-                    drt_set_8bit_color(drt, 6); // cyan
-                    drt_puts(drt, key_str, key_len);
-                    drt_pop_state(drt);
+                    if(!err){
+                        drt_push_state(drt);
+                        drt_set_8bit_color(drt, 6); // cyan
+                        drt_puts(drt, key_str, key_len);
+                        drt_pop_state(drt);
+                    }
                     drt_puts(drt, ": ", 2);
 
                     // Render edit buffer (value)
@@ -5354,11 +5458,11 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         cursor_y = screenh - 1;
         show_cursor = 1;
     }
-    else if(nav->has_message){
+    else if(nav->message_length > 0){
         // Show message to user (bold for visibility)
         drt_putc(drt, ' ');
         drt_set_style(drt, DRT_STYLE_BOLD);
-        drt_puts(drt, nav->message, strlen(nav->message));
+        drt_puts(drt, nav->message, nav->message_length);
         drt_putc(drt, ' ');
     }
     else if(nav->item_count > 0){
@@ -5451,6 +5555,7 @@ sighandler(int sig){
 
 
 static
+DRJSON_WARN_UNUSED
 int
 parse_as_string(DrJsonContext* jctx, const char* txt, size_t len, DrJsonAtom* outatom){
     strip_whitespace(&txt, &len);
@@ -5474,6 +5579,7 @@ parse_as_string(DrJsonContext* jctx, const char* txt, size_t len, DrJsonAtom* ou
 }
 
 static
+DRJSON_WARN_UNUSED
 int
 parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJsonValue* outvalue){
     strip_whitespace(&txt, &len);
@@ -6082,7 +6188,7 @@ main(int argc, const char* const* argv){
         }
 
         // Clear any displayed message on user action
-        if(nav.has_message)
+        if(nav.message_length > 0)
             nav_clear_message(&nav);
 
         // Handle pending multi-key sequences
@@ -6405,11 +6511,13 @@ main(int argc, const char* const* argv){
                         // Get the current key string and populate edit buffer (without quotes)
                         const char* key_str;
                         size_t key_len;
-                        drjson_get_atom_str_and_length(nav.jctx, item->key, &key_str, &key_len);
+                        int err = drjson_get_atom_str_and_length(nav.jctx, item->key, &key_str, &key_len);
 
                         // Copy key as-is (no quotes)
-                        for(size_t i = 0; i < key_len && nav.edit_buffer.length < nav.edit_buffer.capacity - 1; i++){
-                            le_append_char(&nav.edit_buffer, key_str[i]);
+                        if(!err){
+                            for(size_t i = 0; i < key_len && nav.edit_buffer.length < nav.edit_buffer.capacity - 1; i++){
+                                le_append_char(&nav.edit_buffer, key_str[i]);
+                            }
                         }
                     }
                     else {
@@ -6469,11 +6577,11 @@ main(int argc, const char* const* argv){
                     // Try to get the key first
                     if(item->key.bits != 0){
                         DrJsonValue key_val = drjson_atom_to_value(item->key);
-                        drjson_get_str_and_len(nav.jctx, key_val, &search_text, &search_len);
+                        (void)drjson_get_str_and_len(nav.jctx, key_val, &search_text, &search_len);
                     }
                     // If no key, try to get the value if it's a string
                     else if(item->value.kind == DRJSON_STRING){
-                        drjson_get_str_and_len(nav.jctx, item->value, &search_text, &search_len);
+                        (void)drjson_get_str_and_len(nav.jctx, item->value, &search_text, &search_len);
                     }
 
                     // If we found text, search for it
