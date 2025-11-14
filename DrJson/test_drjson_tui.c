@@ -559,10 +559,8 @@ TestFunction(TestLineEditorWordOperations){
 
     // Setup: "hello world test"
     LongString text = LS("hello world test");
-    for(size_t i = 0; i < text.length; i++){
-        le_append_char(&le, text.text[i]);
-    }
-    TestExpectEquals(le.length, text.length);
+    le_write(&le, text.text, text.length);
+    TestExpectEquals2(SV_equals, le.sv, LS_to_SV(text));
 
     // Kill to end
     le.cursor_pos = 5; // After "hello"
@@ -571,9 +569,8 @@ TestFunction(TestLineEditorWordOperations){
 
     // Setup again for word deletion
     le_clear(&le);
-    for(size_t i = 0; i < text.length; i++){
-        le_append_char(&le, text.text[i]);
-    }
+    le_write(&le, text.text, text.length);
+    TestExpectEquals2(SV_equals, le.sv, LS_to_SV(text));
 
     // Delete word backward from end
     le_delete_word_backward(&le);
@@ -1187,9 +1184,7 @@ TestFunction(TestLineEditorEdgeCases){
 
     // Delete word with only spaces
     le_clear(&le);
-    le_append_char(&le, ' ');
-    le_append_char(&le, ' ');
-    le_append_char(&le, ' ');
+    le_write(&le, "   ", 3);
     le_delete_word_backward(&le);
     TestExpectTrue(le.length < 3);
 
@@ -1284,9 +1279,7 @@ TestFunction(TestSearchNavigation){
 
     // Set search pattern
     le_init(&nav.search_buffer, 256);
-    for(const char* p = "test"; *p; p++){
-        le_append_char(&nav.search_buffer, *p);
-    }
+    le_write(&nav.search_buffer, "test", 4);
 
     // Start at position 0
     nav.cursor_pos = 0;
@@ -1631,9 +1624,7 @@ TestFunction(TestSearchWithExpansion){
 
     // Set search pattern to "target"
     le_init(&nav.search_buffer, 256);
-    for(const char* p = "target"; *p; p++){
-        le_append_char(&nav.search_buffer, *p);
-    }
+    le_write(&nav.search_buffer, "target", 4);
 
     nav.cursor_pos = 0;
     size_t initial_pos = nav.cursor_pos;
@@ -2767,15 +2758,13 @@ TestFunction(TestNavReinit){
     // Allocate and populate line editors
     le_init(&nav.command_buffer, 256);
     LongString test_cmd = LS("test command");
-    memcpy(nav.command_buffer.data, test_cmd.text, test_cmd.length + 1);
-    nav.command_buffer.length = test_cmd.length;
-    nav.command_buffer.cursor_pos = 5;
+    int err = le_write(&nav.command_buffer, test_cmd.text, test_cmd.length);
+    TestAssertFalse(err);
 
     le_init(&nav.search_buffer, 256);
     LongString search_txt = LS("search text");
-    memcpy(nav.search_buffer.data, search_txt.text, search_txt.length + 1);
-    nav.search_buffer.length = search_txt.length;
-    nav.search_buffer.cursor_pos = 7;
+    err = le_write(&nav.search_buffer, search_txt.text, search_txt.length);
+    TestAssertFalse(err);
 
     // Add some expanded containers
     uint64_t container_id = nav_get_container_id(root);

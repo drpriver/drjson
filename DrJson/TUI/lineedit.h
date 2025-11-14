@@ -115,7 +115,7 @@ le_clear(LineEditor* le){
 }
 
 static inline
-void
+int
 le_append_char(LineEditor* le, char c){
     if(le->length + 1 < le->capacity){
         // Insert character at cursor position
@@ -129,8 +129,31 @@ le_append_char(LineEditor* le, char c){
         le->length++;
         le->cursor_pos++;
         le->data[le->length] = '\0';
+        return 0;
     }
+    return 1;
 }
+
+static inline
+int
+le_write(LineEditor* le, const void* c, size_t len){
+    if(le->length + len < le->capacity){
+        // Insert character at cursor position
+        if(le->cursor_pos < le->length){
+            // Shift characters to the right
+            memmove(le->data + le->cursor_pos + len,
+                    le->data + le->cursor_pos,
+                    le->length - le->cursor_pos);
+        }
+        memcpy(le->data + le->cursor_pos, c, len);
+        le->length += len;
+        le->cursor_pos += len;
+        le->data[le->length] = '\0';
+        return 0;
+    }
+    return 1;
+}
+
 
 static inline
 void
