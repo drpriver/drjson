@@ -305,6 +305,7 @@ TestFunction(TestStringMatchesQuery){
 // Test nav_value_matches_query() function from TUI
 TestFunction(TestNavValueMatchesQuery){
     TESTBEGIN();
+    int err;
 
     DrJsonAllocator a = get_test_allocator();
     DrJsonContext* ctx = drjson_create_ctx(a);
@@ -319,32 +320,18 @@ TestFunction(TestNavValueMatchesQuery){
     JsonNav nav = {
         .jctx = ctx,
         .allocator = a,
-        .search_mode = SEARCH_QUERY,
     };
-
-    // Parse a simple path (now "age" should be in atom table)
-    LongString path_str = LS("age");
-    DrJsonPath path = {0};
-    const char* remainder = NULL;
-    int parse_result = drjson_path_parse_greedy(ctx, path_str.text, path_str.length, &path, &remainder);
-    TestAssertEquals(parse_result, 0);
-    TestAssertEquals((int)path.count, 1);
-    nav.search_query_path = path;
+    le_init(&nav.search_buffer, 256);
 
     // Set up search pattern for numeric search
-    memcpy(nav.search_pattern, "42", 3);
-    nav.search_pattern_len = 2;
-
-    // Parse the pattern as a number
-    Int64Result int_res = parse_int64(nav.search_pattern, nav.search_pattern_len);
-    TestAssertSuccess(int_res);
-    TestAssertEquals(int_res.result, 42);
-    nav.search_numeric.is_numeric = 1;
-    nav.search_numeric.is_integer = 1;
-    nav.search_numeric.int_value = int_res.result;
+    err = nav_setup_search(&nav, "age 42", 6, SEARCH_QUERY);
+    TestAssertFalse(err);
+    TestExpectTrue(nav.search_numeric.is_numeric);
+    TestExpectTrue(nav.search_numeric.is_integer);
+    TestExpectEquals(nav.search_numeric.int_value, 42);
 
     // Manually test the path evaluation first
-    DrJsonValue age_result = drjson_evaluate_path(ctx, root, &path);
+    DrJsonValue age_result = drjson_evaluate_path(ctx, root, &nav.search_query_path);
     TestAssertNotEqual((int)age_result.kind, DRJSON_ERROR);
     // Could be either INTEGER or UINTEGER
     _Bool is_42 = (age_result.kind == DRJSON_INTEGER && age_result.integer == 42) ||
@@ -364,17 +351,10 @@ TestFunction(TestNavValueMatchesQuery){
     LongString json3 = LS("{\"name\": \"Alice\"}");
     DrJsonValue root3 = drjson_parse_string(ctx, json3.text, json3.length, 0);
 
-    nav.search_mode = SEARCH_QUERY;
-    nav.search_numeric.is_numeric = 0; // Disable numeric search
-    memcpy(nav.search_pattern, "Alice", 6);
-    nav.search_pattern_len = 5;
-
-    // Parse path for name field
-    LongString name_path = LS("name");
-    DrJsonPath name_path_parsed = {0};
-    parse_result = drjson_path_parse_greedy(ctx, name_path.text, name_path.length, &name_path_parsed, &remainder);
-    TestAssertEquals(parse_result, 0);
-    nav.search_query_path = name_path_parsed;
+    err = nav_setup_search(&nav, "name Alice", 10, SEARCH_QUERY);
+    TestAssertFalse(err);
+    TestExpectFalse(nav.search_numeric.is_numeric);
+    TestExpectFalse(nav.search_numeric.is_integer);
 
     TestExpectTrue(nav_value_matches_query(&nav, root3, (DrJsonAtom){0}, "", 0));
 
@@ -384,15 +364,15 @@ TestFunction(TestNavValueMatchesQuery){
     TestExpectFalse(nav_value_matches_query(&nav, root4, (DrJsonAtom){0}, "", 0));
 
     // Test SEARCH_RECURSIVE mode with string matching
-    nav.search_mode = SEARCH_RECURSIVE;
-    LongString query = LS("Alice");
+    err = nav_setup_search(&nav, "Alice", 5, SEARCH_RECURSIVE);
+    TestAssertFalse(err);
     LongString alice_str = LS("\"Alice\"");
     DrJsonValue string_val = drjson_parse_string(ctx, alice_str.text, alice_str.length, 0);
-    TestExpectTrue(nav_value_matches_query(&nav, string_val, (DrJsonAtom){0}, query.text, query.length));
+    TestExpectTrue(nav_value_matches_query(&nav, string_val, (DrJsonAtom){0}, nav.search_buffer.data, nav.search_buffer.length));
 
     // Test with key matching
     DrJsonAtom key_atom;
-    int err = DRJSON_ATOMIZE(ctx, "username", &key_atom);
+    err = DRJSON_ATOMIZE(ctx, "username", &key_atom);
     TestAssertFalse(err);
     TestExpectTrue(nav_value_matches_query(&nav, string_val, key_atom, "user", 4));
 
