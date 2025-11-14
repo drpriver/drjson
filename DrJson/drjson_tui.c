@@ -150,6 +150,7 @@ struct JsonNav {
     DrJsonContext* jctx;      // DrJson context
     DrJsonValue root;         // Root document value
     char filename[1024];       // Name of file being viewed
+    DrJsonAllocator allocator; // Allocator for nav's dynamic memory
 
     // Flattened view (rebuilt when expansion state changes)
     NavItem* items;           // Dynamic array of visible items
@@ -369,7 +370,7 @@ finally:
 
 static inline
 void
-bs_ensure_capacity(BitSet* set, size_t id){
+bs_ensure_capacity(BitSet* set, size_t id, DrJsonAllocator* allocator){
     size_t idx = id / 64;
     if(idx >= set->capacity){
         size_t new_capacity = idx + 1;
@@ -383,7 +384,9 @@ bs_ensure_capacity(BitSet* set, size_t id){
         new_capacity |= new_capacity >> 32;
         new_capacity++;
 
-        uint64_t* new_ids = realloc(set->ids, new_capacity * sizeof(*set->ids));
+        size_t old_size = set->capacity * sizeof(uint64_t);
+        size_t new_size = new_capacity * sizeof(uint64_t);
+        uint64_t* new_ids = allocator->realloc(allocator->user_pointer, set->ids, old_size, new_size);
         if(!new_ids) __builtin_debugtrap();
         // Zero out the new portion
         memset(new_ids + set->capacity, 0, (new_capacity - set->capacity) * sizeof(*new_ids));
@@ -404,10 +407,10 @@ bs_contains(const BitSet* set, size_t id){
 
 static inline
 void
-bs_add(BitSet* set, size_t id){
+bs_add(BitSet* set, size_t id, DrJsonAllocator* allocator){
     size_t bit = id & 63;
     size_t idx = id / 64;
-    bs_ensure_capacity(set, id);
+    bs_ensure_capacity(set, id, allocator);
     set->ids[idx] |= 1lu << bit;
 }
 
@@ -422,10 +425,10 @@ bs_remove(BitSet* set, size_t id){
 
 static inline
 void
-bs_toggle(BitSet* set, size_t id){
+bs_toggle(BitSet* set, size_t id, DrJsonAllocator* allocator){
     size_t bit = id & 63;
     size_t idx = id / 64;
-    bs_ensure_capacity(set, id);
+    bs_ensure_capacity(set, id, allocator);
     set->ids[idx] ^= 1lu << bit;
 }
 
@@ -437,8 +440,9 @@ bs_clear(BitSet* set){
 
 static inline
 void
-bs_free(BitSet* set){
-    free(set->ids);
+bs_free(BitSet* set, DrJsonAllocator* allocator){
+    if(set->ids)
+        allocator->free(allocator->user_pointer, set->ids, set->capacity * sizeof *set->ids);
     set->ids = NULL;
     set->capacity = 0;
 }
@@ -479,7 +483,9 @@ void
 nav_append_item(JsonNav* nav, NavItem item){
     if(nav->item_count >= nav->item_capacity){
         size_t new_cap = nav->item_capacity ? nav->item_capacity * 2 : 256;
-        NavItem* new_items = realloc(nav->items, new_cap * sizeof *new_items);
+        size_t old_size = nav->item_capacity * sizeof(NavItem);
+        size_t new_size = new_cap * sizeof(NavItem);
+        NavItem* new_items = nav->allocator.realloc(nav->allocator.user_pointer, nav->items, old_size, new_size);
         if(!new_items) return; // allocation failed
         nav->items = new_items;
         nav->item_capacity = new_cap;
@@ -602,10 +608,11 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth, DrJsonAtom key, 
 
 static inline
 void
-nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filename){
+nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filename, DrJsonAllocator allocator){
     *nav = (JsonNav){
         .jctx = jctx,
         .root = root,
+        .allocator = allocator,
         .needs_rebuild = 1,
     };
     // Copy filename
@@ -620,7 +627,7 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filena
     }
     // Expand root document by default if it's a container
     if(nav_is_container(root)){
-        bs_add(&nav->expanded, nav_get_container_id(root));
+        bs_add(&nav->expanded, nav_get_container_id(root), &nav->allocator);
     }
     le_init(&nav->search_buffer, 256);
     le_history_init(&nav->search_history);
@@ -668,7 +675,7 @@ nav_reinit(JsonNav* nav){
     bs_clear(&nav->expanded);
 
     if(nav_is_container(nav->root)){
-        bs_add(&nav->expanded, nav_get_container_id(nav->root));
+        bs_add(&nav->expanded, nav_get_container_id(nav->root), &nav->allocator);
     }
     nav_rebuild(nav);
 }
@@ -677,12 +684,14 @@ nav_reinit(JsonNav* nav){
 static inline
 void
 nav_free(JsonNav* nav){
-    free(nav->items);
-    bs_free(&nav->expanded);
+    if(nav->items)
+        nav->allocator.free(nav->allocator.user_pointer, nav->items, nav->item_capacity * sizeof(NavItem));
+    bs_free(&nav->expanded, &nav->allocator);
     le_free(&nav->search_buffer);
     le_history_free(&nav->search_history);
     le_free(&nav->command_buffer);
-    free(nav->focus_stack);
+    if(nav->focus_stack)
+        nav->allocator.free(nav->allocator.user_pointer, nav->focus_stack, nav->focus_stack_capacity * sizeof(DrJsonValue));
     *nav = (JsonNav){0};
 }
 
@@ -708,7 +717,7 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
                     if(parent->depth == 0) return;
 
                     size_t id = nav_get_container_id(parent->value);
-                    bs_toggle(&nav->expanded, id);
+                    bs_toggle(&nav->expanded, id, &nav->allocator);
                     nav->needs_rebuild = 1;
                     nav_rebuild(nav);
                 }
@@ -722,7 +731,7 @@ nav_toggle_expand_at_cursor(JsonNav* nav){
     if(item->depth == 0) return;
 
     size_t id = nav_get_container_id(item->value);
-    bs_toggle(&nav->expanded, id);
+    bs_toggle(&nav->expanded, id, &nav->allocator);
     nav->needs_rebuild = 1;
     nav_rebuild(nav);
 }
@@ -735,7 +744,7 @@ nav_expand_recursive_helper(JsonNav* nav, DrJsonValue val){
         return;
 
     // Add this container to expansion set
-    bs_add(&nav->expanded, nav_get_container_id(val));
+    bs_add(&nav->expanded, nav_get_container_id(val), &nav->allocator);
 
     // Recursively expand children
     int64_t len = drjson_len(nav->jctx, val);
@@ -1088,7 +1097,7 @@ nav_jump_into_container(JsonNav* nav){
     // Expand if not already expanded
     if(!nav_is_expanded(nav, item->value)){
         size_t id = nav_get_container_id(item->value);
-        bs_add(&nav->expanded, id);
+        bs_add(&nav->expanded, id, &nav->allocator);
         nav->needs_rebuild = 1;
         nav_rebuild(nav);
     }
@@ -1144,7 +1153,7 @@ nav_collapse_all(JsonNav* nav){
     bs_clear(&nav->expanded);
     // Keep the root expanded
     if(nav_is_container(nav->root)){
-        bs_add(&nav->expanded, nav_get_container_id(nav->root));
+        bs_add(&nav->expanded, nav_get_container_id(nav->root), &nav->allocator);
     }
     nav->cursor_pos = 0;
     nav->scroll_offset = 0;
@@ -1543,7 +1552,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
         found_match = 1;
         // Expand this container if it's a container
         if(nav_is_container(val)){
-            bs_add(&nav->expanded, nav_get_container_id(val));
+            bs_add(&nav->expanded, nav_get_container_id(val), &nav->allocator);
         }
     }
 
@@ -1557,7 +1566,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
                 // Recursively search child - if it or its descendants match, expand this container
                 if(nav_search_recursive_helper(nav, child, (DrJsonAtom){0}, query, query_len)){
                     found_match = 1;
-                    bs_add(&nav->expanded, nav_get_container_id(val));
+                    bs_add(&nav->expanded, nav_get_container_id(val), &nav->allocator);
                 }
             }
         }
@@ -1570,7 +1579,7 @@ nav_search_recursive_helper(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const
                 // Recursively search child - if it or its descendants match, expand this container
                 if(nav_search_recursive_helper(nav, v, k.atom, query, query_len)){
                     found_match = 1;
-                    bs_add(&nav->expanded, nav_get_container_id(val));
+                    bs_add(&nav->expanded, nav_get_container_id(val), &nav->allocator);
                 }
             }
         }
@@ -1591,7 +1600,7 @@ nav_navigate_to_path(JsonNav* nav, size_t container_idx, const DrJsonPath* path)
 
     // Expand the container if needed
     if(nav_is_container(current_val) && !bs_contains(&nav->expanded, nav_get_container_id(current_val))){
-        bs_add(&nav->expanded, nav_get_container_id(current_val));
+        bs_add(&nav->expanded, nav_get_container_id(current_val), &nav->allocator);
         nav->needs_rebuild = 1;
         nav_rebuild(nav);
     }
@@ -1631,7 +1640,7 @@ nav_navigate_to_path(JsonNav* nav, size_t container_idx, const DrJsonPath* path)
                 // If there are more segments and this is a container, expand it
                 if(seg_idx + 1 < path->count && nav_is_container(current_val)){
                     if(!bs_contains(&nav->expanded, nav_get_container_id(current_val))){
-                        bs_add(&nav->expanded, nav_get_container_id(current_val));
+                        bs_add(&nav->expanded, nav_get_container_id(current_val), &nav->allocator);
                         nav->needs_rebuild = 1;
                         nav_rebuild(nav);
                         // Restart navigation from the beginning since indices changed
@@ -1675,7 +1684,7 @@ nav_search_internal(JsonNav* nav, int direction){
                         DrJsonValue container = nav->items[path_idx].value;
                         // Expand the container if not already expanded
                         if(!bs_contains(&nav->expanded, nav_get_container_id(container))){
-                            bs_add(&nav->expanded, nav_get_container_id(container));
+                            bs_add(&nav->expanded, nav_get_container_id(container), &nav->allocator);
                             nav->needs_rebuild = 1;
                             nav_rebuild(nav);
                         }
@@ -1723,7 +1732,7 @@ nav_search_internal(JsonNav* nav, int direction){
             if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
                 if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length)){
                     // Found a match inside! Expand ONLY this container (not recursively)
-                    bs_add(&nav->expanded, nav_get_container_id(item->value));
+                    bs_add(&nav->expanded, nav_get_container_id(item->value), &nav->allocator);
                     nav->needs_rebuild = 1;
                     nav_rebuild(nav);
 
@@ -1752,7 +1761,7 @@ nav_search_internal(JsonNav* nav, int direction){
                         DrJsonValue container = nav->items[path_idx].value;
                         // Expand the container if not already expanded
                         if(!bs_contains(&nav->expanded, nav_get_container_id(container))){
-                            bs_add(&nav->expanded, nav_get_container_id(container));
+                            bs_add(&nav->expanded, nav_get_container_id(container), &nav->allocator);
                             nav->needs_rebuild = 1;
                             nav_rebuild(nav);
                         }
@@ -1800,7 +1809,7 @@ nav_search_internal(JsonNav* nav, int direction){
             if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
                 if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length)){
                     // Found a match inside! Expand ONLY this container (not recursively)
-                    bs_add(&nav->expanded, nav_get_container_id(item->value));
+                    bs_add(&nav->expanded, nav_get_container_id(item->value), &nav->allocator);
                     nav->needs_rebuild = 1;
                     nav_rebuild(nav);
 
@@ -1831,7 +1840,7 @@ nav_search_internal(JsonNav* nav, int direction){
                             DrJsonValue container = nav->items[path_idx].value;
                             // Expand the container if not already expanded
                             if(!bs_contains(&nav->expanded, nav_get_container_id(container))){
-                                bs_add(&nav->expanded, nav_get_container_id(container));
+                                bs_add(&nav->expanded, nav_get_container_id(container), &nav->allocator);
                                 nav->needs_rebuild = 1;
                                 nav_rebuild(nav);
                             }
@@ -1859,7 +1868,7 @@ nav_search_internal(JsonNav* nav, int direction){
                 if(nav_is_container(item->value) && !bs_contains(&nav->expanded, nav_get_container_id(item->value))){
                     if(nav_contains_match(nav, item->value, item->key, nav->search_buffer.data, nav->search_buffer.length)){
                         // Found a match inside! Expand ONLY this container (not recursively)
-                        bs_add(&nav->expanded, nav_get_container_id(item->value));
+                        bs_add(&nav->expanded, nav_get_container_id(item->value), &nav->allocator);
                         nav->needs_rebuild = 1;
                         nav_rebuild(nav);
 
@@ -3076,7 +3085,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
 
             // Expand the current container if needed
             if(nav_is_container(current)){
-                bs_add(&nav->expanded, nav_get_container_id(current));
+                bs_add(&nav->expanded, nav_get_container_id(current), &nav->allocator);
             }
 
             current = next;
@@ -3096,7 +3105,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
 
             // Expand the current container if needed
             if(nav_is_container(current)){
-                bs_add(&nav->expanded, nav_get_container_id(current));
+                bs_add(&nav->expanded, nav_get_container_id(current), &nav->allocator);
             }
 
             current = next;
@@ -3125,8 +3134,10 @@ static
 void
 nav_focus_stack_push(JsonNav* nav, DrJsonValue val){
     if(nav->focus_stack_count >= nav->focus_stack_capacity){
+        size_t old_size = nav->focus_stack_capacity * sizeof *nav->focus_stack;
         size_t new_cap = nav->focus_stack_capacity ? nav->focus_stack_capacity * 2 : 8;
-        DrJsonValue* new_stack = realloc(nav->focus_stack, new_cap * sizeof(DrJsonValue));
+        size_t new_size = new_cap * sizeof *nav->focus_stack;
+        DrJsonValue* new_stack = nav->allocator.realloc(nav->allocator.user_pointer, nav->focus_stack, old_size, new_size);
         if(!new_stack) return; // allocation failure
         nav->focus_stack = new_stack;
         nav->focus_stack_capacity = new_cap;
@@ -3134,7 +3145,8 @@ nav_focus_stack_push(JsonNav* nav, DrJsonValue val){
     nav->focus_stack[nav->focus_stack_count++] = val;
 }
 
-static DrJsonValue
+static
+DrJsonValue
 nav_focus_stack_pop(JsonNav* nav){
     if(nav->focus_stack_count == 0){
         return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "focus stack empty");
@@ -3397,7 +3409,7 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
         DrJsonValue new_obj = drjson_make_object(nav->jctx);
 
         if(sort_by_values){
-            KeyValuePair* pairs = malloc(len * sizeof(KeyValuePair));
+            KeyValuePair* pairs = nav->allocator.alloc(nav->allocator.user_pointer, len * sizeof *pairs);
             if(!pairs){
                 nav_set_messagef(nav, "Error: Failed to allocate memory for sorting.");
                 return CMD_ERROR;
@@ -3442,7 +3454,7 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
             for(int64_t i = 0; i < len; i++){
                 drjson_object_set_item_atom(nav->jctx, new_obj, pairs[i].key, pairs[i].value);
             }
-            free(pairs);
+            nav->allocator.free(nav->allocator.user_pointer, pairs, len * sizeof *pairs);
         }
         else {
             // --- Sort by keys ---
@@ -6092,7 +6104,7 @@ main(int argc, const char* const* argv){
     }
     // Initialize navigation
     JsonNav nav;
-    nav_init(&nav, jctx, document, jsonpath.text);
+    nav_init(&nav, jctx, document, jsonpath.text, allocator);
 
     // Count buffer for vim-style numeric prefixes
     LineEditor count_buffer;

@@ -61,6 +61,9 @@ Bin/test_unity$(EXE): DrJson/test_drjson.c | Bin Deps
 Bin/test_tui$(EXE): DrJson/test_drjson_tui.c | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_tui.dep -fvisibility=hidden -I. -g
 
+Bin/test_tui_san$(EXE): DrJson/test_drjson_tui.c | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_tui.dep -fvisibility=hidden -I. -g -fsanitize=address,undefined
+
 README.html: README.md README.css
 	pandoc README.md README.css -f markdown -o $@ -s --toc
 
@@ -88,6 +91,7 @@ all: Bin/test$(EXE)
 all: Bin/test_static$(EXE)
 all: Bin/test_unity$(EXE)
 all: Bin/test_tui$(EXE)
+all: Bin/test_tui_san$(EXE)
 
 TestResults/%: Bin/%$(EXE) | TestResults
 	$< --tee $@
@@ -97,6 +101,7 @@ tests: TestResults/test
 tests: TestResults/test_static
 tests: TestResults/test_unity
 tests: TestResults/test_tui
+tests: TestResults/test_tui_san
 
 
 .DEFAULT_GOAL:=all

@@ -16,6 +16,7 @@
 #define main drjson_tui_main
 #include "drjson_tui.c"
 #undef main
+#include "test_allocator.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -155,6 +156,7 @@ TestFunction(TestNumericParsing){
         TestExpectFailure(res);
     }
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -162,7 +164,7 @@ TestFunction(TestNumericParsing){
 TestFunction(TestNumericSearchInteger){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Create a JSON object with an integer field
@@ -190,6 +192,7 @@ TestFunction(TestNumericSearchInteger){
     TestExpectTrue(age_value != 43);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -197,7 +200,7 @@ TestFunction(TestNumericSearchInteger){
 TestFunction(TestNumericSearchDouble){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Create a JSON object with a double field
@@ -213,6 +216,7 @@ TestFunction(TestNumericSearchDouble){
     TestExpectEquals(price_val.number, 19.99);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -220,7 +224,7 @@ TestFunction(TestNumericSearchDouble){
 TestFunction(TestNumericSearchNonNumeric){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Create a JSON object with string fields
@@ -249,6 +253,7 @@ TestFunction(TestNumericSearchNonNumeric){
     TestAssertEquals2(SV_equals, actual2, SV("12345"));
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -272,6 +277,7 @@ TestFunction(TestSubstringMatch){
     // Empty query should not match
     TestExpectFalse(substring_match("hello", 5, "", 0));
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -292,6 +298,7 @@ TestFunction(TestStringMatchesQuery){
     TestExpectFalse(string_matches_query("hello", 5, "world", 5));
     TestExpectFalse(string_matches_query("test", 4, "testing", 7));
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -299,7 +306,8 @@ TestFunction(TestStringMatchesQuery){
 TestFunction(TestNavValueMatchesQuery){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create a test JSON value with age field FIRST so "age" gets atomized
@@ -308,9 +316,11 @@ TestFunction(TestNavValueMatchesQuery){
     TestAssertEquals((int)root.kind, DRJSON_OBJECT);
 
     // Set up a mock JsonNav structure
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.search_mode = SEARCH_QUERY;
+    JsonNav nav = {
+        .jctx = ctx,
+        .allocator = a,
+        .search_mode = SEARCH_QUERY,
+    };
 
     // Parse a simple path (now "age" should be in atom table)
     LongString path_str = LS("age");
@@ -387,6 +397,7 @@ TestFunction(TestNavValueMatchesQuery){
     TestExpectTrue(nav_value_matches_query(&nav, string_val, key_atom, "user", 4));
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -394,6 +405,7 @@ TestFunction(TestNavValueMatchesQuery){
 TestFunction(TestBitSetOperations){
     TESTBEGIN();
 
+    DrJsonAllocator a = get_test_allocator();
     BitSet bs = {0};
 
     // Initially empty
@@ -401,16 +413,16 @@ TestFunction(TestBitSetOperations){
     TestExpectFalse(bs_contains(&bs, 42));
 
     // Add some values
-    bs_add(&bs, 5);
+    bs_add(&bs, 5, &a);
     TestExpectTrue(bs_contains(&bs, 5));
     TestExpectFalse(bs_contains(&bs, 6));
 
-    bs_add(&bs, 100);
+    bs_add(&bs, 100, &a);
     TestExpectTrue(bs_contains(&bs, 100));
     TestExpectTrue(bs_contains(&bs, 5));
 
     // Add same value again (should be idempotent)
-    bs_add(&bs, 5);
+    bs_add(&bs, 5, &a);
     TestExpectTrue(bs_contains(&bs, 5));
 
     // Remove value
@@ -428,12 +440,13 @@ TestFunction(TestBitSetOperations){
     TestExpectFalse(bs_contains(&bs, 5));
 
     // Test with large values
-    bs_add(&bs, 10000);
+    bs_add(&bs, 10000, &a);
     TestExpectTrue(bs_contains(&bs, 10000));
 
     // Cleanup
-    if(bs.ids) free(bs.ids);
+    bs_free(&bs, &a);
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -486,6 +499,7 @@ TestFunction(TestLineEditorBasics){
     TestExpectEquals(le.cursor_pos, 0);
 
     le_free(&le);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -532,6 +546,7 @@ TestFunction(TestLineEditorHistory){
 
     le_free(&le);
     le_history_free(&hist);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -567,6 +582,7 @@ TestFunction(TestLineEditorWordOperations){
     TestExpectEquals2(SV_equals, le.sv, SV("hello world "));
 
     le_free(&le);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -574,7 +590,8 @@ TestFunction(TestLineEditorWordOperations){
 TestFunction(TestPathBuilding){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create a simple nested structure
@@ -582,9 +599,11 @@ TestFunction(TestPathBuilding){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestAssertEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Build items array properly using nav_rebuild
     nav_rebuild(&nav);
@@ -598,8 +617,9 @@ TestFunction(TestPathBuilding){
     TestExpectTrue(len >= 0);
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -607,12 +627,15 @@ TestFunction(TestPathBuilding){
 TestFunction(TestNavContainsMatch){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.search_mode = SEARCH_RECURSIVE;
+    JsonNav nav = {
+        .jctx = ctx,
+        .search_mode = SEARCH_RECURSIVE,
+        .allocator = a,
+    };
 
     // Simple string value
     DrJsonValue str_val = drjson_parse_string(ctx, "\"hello world\"", 13, 0);
@@ -631,7 +654,9 @@ TestFunction(TestNavContainsMatch){
     TestExpectTrue(nav_contains_match(&nav, obj, (DrJsonAtom){0}, "found", 5));
     TestExpectFalse(nav_contains_match(&nav, obj, (DrJsonAtom){0}, "notfound", 8));
 
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -639,7 +664,7 @@ TestFunction(TestNavContainsMatch){
 TestFunction(TestNavigationTreeLogic){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Test nav_is_container
@@ -665,6 +690,7 @@ TestFunction(TestNavigationTreeLogic){
     TestExpectTrue(id1 != id3);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -672,43 +698,39 @@ TestFunction(TestNavigationTreeLogic){
 TestFunction(TestFocusStack){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     LongString json = LS("{\"a\": {\"b\": {\"c\": 1}}}");
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
-    nav.focus_stack = NULL;
-    nav.focus_stack_count = 0;
-    nav.focus_stack_capacity = 0;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Initially focused on root
     TestExpectEquals(nav.focus_stack_count, 0);
 
-    // Push focus (simplified - real implementation does more)
     DrJsonValue inner = drjson_query(ctx, root, "a", 1);
     TestAssertNotEqual((int)inner.kind, DRJSON_ERROR);
-
-    // Manually push to focus stack
-    if(nav.focus_stack_count >= nav.focus_stack_capacity){
-        nav.focus_stack_capacity = nav.focus_stack_capacity? nav.focus_stack_capacity * 2 : 4;
-        nav.focus_stack = realloc(nav.focus_stack, nav.focus_stack_capacity * sizeof(DrJsonValue));
-    }
-    nav.focus_stack[nav.focus_stack_count++] = root;
+    nav_focus_stack_push(&nav, root);
+    nav.root = inner;
 
     TestExpectEquals(nav.focus_stack_count, 1);
 
     // Pop focus
-    nav.focus_stack_count--;
+    nav.root = nav_focus_stack_pop(&nav);
     TestExpectEquals(nav.focus_stack_count, 0);
+    TestExpectTrue(drjson_eq(nav.root, root));
 
     // Cleanup
-    if(nav.focus_stack) free(nav.focus_stack);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -734,6 +756,7 @@ TestFunction(TestUTF8DisplayWidth){
     // Emoji (typically 4 bytes)
     TestExpectEquals(utf8_display_width("🎉", 4), 1);
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -741,7 +764,8 @@ TestFunction(TestUTF8DisplayWidth){
 TestFunction(TestNavigationJumps){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create array for sibling navigation
@@ -749,9 +773,11 @@ TestFunction(TestNavigationJumps){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestAssertEquals((int)root.kind, DRJSON_ARRAY);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
     nav_rebuild(&nav);
 
     // Should have items
@@ -771,8 +797,9 @@ TestFunction(TestNavigationJumps){
     TestExpectTrue(nav.cursor_pos <= old_cursor); // Should move back or stay
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -780,7 +807,8 @@ TestFunction(TestNavigationJumps){
 TestFunction(TestExpandCollapseRecursive){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create nested structure
@@ -788,9 +816,11 @@ TestFunction(TestExpandCollapseRecursive){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestAssertEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
     nav_rebuild(&nav);
 
     size_t initial_count = nav.item_count;
@@ -801,7 +831,7 @@ TestFunction(TestExpandCollapseRecursive){
         uint64_t id = nav_get_container_id(inner);
 
         // Expand it
-        bs_add(&nav.expanded, id);
+        bs_add(&nav.expanded, id, &a);
         nav.needs_rebuild = 1;
         nav_rebuild(&nav);
 
@@ -818,9 +848,9 @@ TestFunction(TestExpandCollapseRecursive){
     }
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -873,23 +903,25 @@ TestFunction(TestCommandLookup){
     }
     TestExpectTrue(cmd != NULL);
 
+    assert_all_freed();
     TESTEND();
 }
 
 // Test BitSet edge cases
 TestFunction(TestBitSetEdgeCases){
     TESTBEGIN();
+    DrJsonAllocator a = get_test_allocator();
 
     BitSet bs = {0};
 
     // Test with very large IDs
-    bs_add(&bs, 1000000);
+    bs_add(&bs, 1000000, &a);
     TestExpectTrue(bs_contains(&bs, 1000000));
     TestExpectFalse(bs_contains(&bs, 1000001));
 
     // Add many values to force resize
     for(uint64_t i = 0; i < 100; i++){
-        bs_add(&bs, i * 1000);
+        bs_add(&bs, i * 1000, &a);
     }
 
     // Verify all values still present
@@ -914,13 +946,14 @@ TestFunction(TestBitSetEdgeCases){
     }
 
     // Test zero ID
-    bs_add(&bs, 0);
+    bs_add(&bs, 0, &a);
     TestExpectTrue(bs_contains(&bs, 0));
     bs_remove(&bs, 0);
     TestExpectFalse(bs_contains(&bs, 0));
 
     // Cleanup
-    if(bs.ids) free(bs.ids);
+    bs_free(&bs, &a);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -928,7 +961,7 @@ TestFunction(TestBitSetEdgeCases){
 TestFunction(TestComplexNestedPaths){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Create deeply nested structure
@@ -969,6 +1002,7 @@ TestFunction(TestComplexNestedPaths){
     TestExpectEquals((int)invalid.kind, DRJSON_ERROR);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -976,12 +1010,15 @@ TestFunction(TestComplexNestedPaths){
 TestFunction(TestSearchRecursiveExpansion){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.search_mode = SEARCH_RECURSIVE;
+    JsonNav nav = {
+        .jctx = ctx,
+        .search_mode = SEARCH_RECURSIVE,
+        .allocator = a,
+    };
 
     // Nested structure with matches at different depths
     LongString json = LS("{\"outer\": {\"middle\": {\"inner\": \"target\"}}, \"other\": \"target\"}");
@@ -1005,8 +1042,9 @@ TestFunction(TestSearchRecursiveExpansion){
     TestExpectFalse(found);
 
     // Cleanup
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1014,15 +1052,18 @@ TestFunction(TestSearchRecursiveExpansion){
 TestFunction(TestNavigationBoundaries){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Empty array
     LongString json1 = LS("[]");
     DrJsonValue empty_arr = drjson_parse_string(ctx, json1.text, json1.length, 0);
-    JsonNav nav1 = {0};
-    nav1.jctx = ctx;
-    nav1.root = empty_arr;
+    JsonNav nav1 = {
+        .jctx = ctx,
+        .root = empty_arr,
+        .allocator = a,
+    };
     nav_rebuild(&nav1);
 
     TestExpectTrue(nav1.item_count >= 1); // At least root
@@ -1033,9 +1074,11 @@ TestFunction(TestNavigationBoundaries){
     // Single element array
     LongString json2 = LS("[42]");
     DrJsonValue single = drjson_parse_string(ctx, json2.text, json2.length, 0);
-    JsonNav nav2 = {0};
-    nav2.jctx = ctx;
-    nav2.root = single;
+    JsonNav nav2 = {
+        .jctx = ctx,
+        .root = single,
+        .allocator = a,
+    };
     nav_rebuild(&nav2);
 
     nav2.cursor_pos = 0;
@@ -1046,18 +1089,21 @@ TestFunction(TestNavigationBoundaries){
     // Empty object
     LongString json3 = LS("{}");
     DrJsonValue empty_obj = drjson_parse_string(ctx, json3.text, json3.length, 0);
-    JsonNav nav3 = {0};
-    nav3.jctx = ctx;
-    nav3.root = empty_obj;
+    JsonNav nav3 = {
+        .jctx = ctx,
+        .root = empty_obj,
+        .allocator = a,
+    };
     nav_rebuild(&nav3);
 
     TestExpectTrue(nav3.item_count >= 1);
 
     // Cleanup
-    if(nav1.items) free(nav1.items);
-    if(nav2.items) free(nav2.items);
-    if(nav3.items) free(nav3.items);
+    nav_free(&nav1);
+    nav_free(&nav2);
+    nav_free(&nav3);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1065,11 +1111,14 @@ TestFunction(TestNavigationBoundaries){
 TestFunction(TestMessageHandling){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
+    JsonNav nav = {
+        .jctx = ctx,
+        .allocator = a,
+    };
 
     // Set a message
     nav_set_messagef(&nav, "Test message: %d", 42);
@@ -1091,6 +1140,7 @@ TestFunction(TestMessageHandling){
     TestExpectTrue(nav.message_length < sizeof(nav.message));
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1144,6 +1194,7 @@ TestFunction(TestLineEditorEdgeCases){
     TestExpectTrue(le.length < 3);
 
     le_free(&le);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1151,11 +1202,12 @@ TestFunction(TestLineEditorEdgeCases){
 TestFunction(TestLargeJSONStructures){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Large array
-    char* large_arr = malloc(10000);
+    char* large_arr = a.alloc(a.user_pointer, 10000);
     size_t pos = 0;
     large_arr[pos++] = '[';
     for(int i = 0; i < 100; i++){
@@ -1173,9 +1225,11 @@ TestFunction(TestLargeJSONStructures){
     TestExpectEquals(drjson_len(ctx, arr), 101);
 
     // Navigate through large structure
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = arr;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
     nav_rebuild(&nav);
 
     // Should be able to build navigation (collapsed or flat view)
@@ -1197,9 +1251,10 @@ TestFunction(TestLargeJSONStructures){
     TestExpectEquals((int)deep_val.kind, DRJSON_STRING);
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    free(large_arr);
+    nav_free(&nav);
+    a.free(a.user_pointer, large_arr, 10000);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1207,7 +1262,8 @@ TestFunction(TestLargeJSONStructures){
 TestFunction(TestSearchNavigation){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // JSON with multiple matches for "test"
@@ -1215,13 +1271,15 @@ TestFunction(TestSearchNavigation){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_ARRAY);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Expand the array
     uint64_t arr_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, arr_id);
+    bs_add(&nav.expanded, arr_id, &a);
     nav_rebuild(&nav);
 
     // Set search pattern
@@ -1268,9 +1326,9 @@ TestFunction(TestSearchNavigation){
     TestExpectEquals(nav.cursor_pos, third_match);
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1278,7 +1336,7 @@ TestFunction(TestSearchNavigation){
 TestFunction(TestValueComparison){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Test type ordering: null < bool < number < string < array < object
@@ -1357,6 +1415,7 @@ TestFunction(TestValueComparison){
     TestExpectTrue(compare_values(arr_small, arr_large, ctx) < 0);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1364,7 +1423,7 @@ TestFunction(TestValueComparison){
 TestFunction(TestParseAsString){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     DrJsonAtom result;
@@ -1404,6 +1463,7 @@ TestFunction(TestParseAsString){
     TestExpectEquals(err, 0);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1411,7 +1471,7 @@ TestFunction(TestParseAsString){
 TestFunction(TestParseAsValue){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     DrJsonValue result;
@@ -1486,6 +1546,7 @@ TestFunction(TestParseAsValue){
     // This might succeed as bareword or fail
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1493,7 +1554,7 @@ TestFunction(TestParseAsValue){
 TestFunction(TestContainerID){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Create arrays and objects
@@ -1540,6 +1601,7 @@ TestFunction(TestContainerID){
     TestExpectEquals(nav_get_container_id(str), 0);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1547,7 +1609,8 @@ TestFunction(TestContainerID){
 TestFunction(TestSearchWithExpansion){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Nested JSON where match is inside collapsed container
@@ -1555,13 +1618,15 @@ TestFunction(TestSearchWithExpansion){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Start with root expanded, but not children
     uint64_t root_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, root_id);
+    bs_add(&nav.expanded, root_id, &a);
     nav_rebuild(&nav);
 
     // Set search pattern to "target"
@@ -1585,9 +1650,9 @@ TestFunction(TestSearchWithExpansion){
     TestExpectTrue(bs_contains(&nav.expanded, outer_id));
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1595,11 +1660,12 @@ TestFunction(TestSearchWithExpansion){
 TestFunction(TestFlatViewMode){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create array with 25 items (will create 3 rows with 10 items per row)
-    char* json = malloc(1000);
+    char* json = a.alloc(a.user_pointer, 1000);
     size_t json_pos = 0;
     json[json_pos++] = '[';
     for(int i = 0; i < 25; i++){
@@ -1615,13 +1681,15 @@ TestFunction(TestFlatViewMode){
     TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
     TestExpectEquals(drjson_len(ctx, arr), 25);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = arr;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
 
     // Expand array - should trigger flat view
     uint64_t arr_id = nav_get_container_id(arr);
-    bs_add(&nav.expanded, arr_id);
+    bs_add(&nav.expanded, arr_id, &a);
     nav_rebuild(&nav);
 
     // Check for flat view items
@@ -1637,10 +1705,10 @@ TestFunction(TestFlatViewMode){
     TestExpectTrue(found_flat_view);
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
-    free(json);
+    a.free(a.user_pointer, json, 1000);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1648,7 +1716,8 @@ TestFunction(TestFlatViewMode){
 TestFunction(TestSortingArrays){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create array of numbers in random order
@@ -1656,9 +1725,11 @@ TestFunction(TestSortingArrays){
     DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = arr;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
     nav_rebuild(&nav);
 
     // Position cursor on array
@@ -1691,8 +1762,9 @@ TestFunction(TestSortingArrays){
     TestExpectTrue(compare_values(elem0, elem5, ctx) > 0);
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1700,7 +1772,8 @@ TestFunction(TestSortingArrays){
 TestFunction(TestSortingObjects){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create object with numeric values
@@ -1708,9 +1781,11 @@ TestFunction(TestSortingObjects){
     DrJsonValue obj = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)obj.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = obj;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = obj,
+        .allocator = a,
+    };
     nav_rebuild(&nav);
 
     nav.cursor_pos = 0;
@@ -1725,8 +1800,9 @@ TestFunction(TestSortingObjects){
     TestExpectEquals(drjson_len(ctx, sorted), 3);
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1734,7 +1810,8 @@ TestFunction(TestSortingObjects){
 TestFunction(TestFilteringArrays){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create array with mix of values
@@ -1743,9 +1820,11 @@ TestFunction(TestFilteringArrays){
     TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
     TestExpectEquals(drjson_len(ctx, arr), 6);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = arr;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
     nav_rebuild(&nav);
 
     nav.cursor_pos = 0;
@@ -1764,8 +1843,9 @@ TestFunction(TestFilteringArrays){
     }
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1773,7 +1853,8 @@ TestFunction(TestFilteringArrays){
 TestFunction(TestFilteringObjects){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create object with mixed values
@@ -1782,9 +1863,11 @@ TestFunction(TestFilteringObjects){
     TestExpectEquals((int)obj.kind, DRJSON_OBJECT);
     TestExpectEquals(drjson_len(ctx, obj), 3);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = obj;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = obj,
+        .allocator = a,
+    };
     nav_rebuild(&nav);
 
     nav.cursor_pos = 0;
@@ -1803,8 +1886,9 @@ TestFunction(TestFilteringObjects){
     }
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1812,7 +1896,7 @@ TestFunction(TestFilteringObjects){
 TestFunction(TestTruthiness){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Test various truthy/falsy values
@@ -1847,6 +1931,7 @@ TestFunction(TestTruthiness){
     TestExpectTrue(is_truthy(nonempty_arr, ctx));
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1854,7 +1939,8 @@ TestFunction(TestTruthiness){
 TestFunction(TestNavRebuildRecursive){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create nested structure
@@ -1862,13 +1948,15 @@ TestFunction(TestNavRebuildRecursive){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Expand root only (not children)
     uint64_t root_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, root_id);
+    bs_add(&nav.expanded, root_id, &nav.allocator);
 
     nav_rebuild(&nav);
 
@@ -1878,7 +1966,7 @@ TestFunction(TestNavRebuildRecursive){
     // Now expand the array
     DrJsonValue arr = drjson_query(ctx, root, "arr", 3);
     uint64_t arr_id = nav_get_container_id(arr);
-    bs_add(&nav.expanded, arr_id);
+    bs_add(&nav.expanded, arr_id, &nav.allocator);
 
     size_t count_before = nav.item_count;
     nav_rebuild(&nav);
@@ -1897,9 +1985,9 @@ TestFunction(TestNavRebuildRecursive){
     TestExpectTrue(found_num);
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1938,6 +2026,7 @@ TestFunction(TestOperatorParsing){
     TestExpectTrue(result != NULL);
     TestExpectEquals((int)op, OP_LT);
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -1945,7 +2034,7 @@ TestFunction(TestOperatorParsing){
 TestFunction(TestLiteralParsing){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     DrJsonValue val;
@@ -1998,6 +2087,7 @@ TestFunction(TestLiteralParsing){
     TestExpectEquals((int)val.kind, DRJSON_STRING);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2005,7 +2095,8 @@ TestFunction(TestLiteralParsing){
 TestFunction(TestQueryCommand){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create nested JSON
@@ -2013,13 +2104,15 @@ TestFunction(TestQueryCommand){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Expand root
     uint64_t root_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, root_id);
+    bs_add(&nav.expanded, root_id, &nav.allocator);
     nav_rebuild(&nav);
 
     nav.cursor_pos = 0;
@@ -2044,9 +2137,9 @@ TestFunction(TestQueryCommand){
     TestExpectEquals(result, CMD_ERROR);
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2054,7 +2147,8 @@ TestFunction(TestQueryCommand){
 TestFunction(TestFocusUnfocusCommands){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create nested JSON
@@ -2062,13 +2156,15 @@ TestFunction(TestFocusUnfocusCommands){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Expand root
     uint64_t root_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, root_id);
+    bs_add(&nav.expanded, root_id, &nav.allocator);
     nav_rebuild(&nav);
 
     // Move to the "outer" object
@@ -2103,10 +2199,9 @@ TestFunction(TestFocusUnfocusCommands){
     TestExpectEquals(result, CMD_ERROR);
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
-    if(nav.focus_stack) free(nav.focus_stack);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2114,7 +2209,8 @@ TestFunction(TestFocusUnfocusCommands){
 TestFunction(TestNavJumpToNthChild){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create array with 10 items
@@ -2122,13 +2218,15 @@ TestFunction(TestNavJumpToNthChild){
     DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = arr;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
 
     // Expand array
     uint64_t arr_id = nav_get_container_id(arr);
-    bs_add(&nav.expanded, arr_id);
+    bs_add(&nav.expanded, arr_id, &nav.allocator);
     nav_rebuild(&nav);
 
     // Should have at least the root
@@ -2152,9 +2250,9 @@ TestFunction(TestNavJumpToNthChild){
     }
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2162,11 +2260,14 @@ TestFunction(TestNavJumpToNthChild){
 TestFunction(TestFocusStackOperations){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
+    JsonNav nav = {
+        .jctx = ctx,
+        .allocator = a,
+    };
 
     DrJsonValue val1 = drjson_make_int(42);
     DrJsonValue val2 = drjson_make_int(84);
@@ -2201,8 +2302,9 @@ TestFunction(TestFocusStackOperations){
     TestExpectEquals((int)popped.kind, DRJSON_ERROR);
 
     // Cleanup
-    if(nav.focus_stack) free(nav.focus_stack);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2210,7 +2312,7 @@ TestFunction(TestFocusStackOperations){
 TestFunction(TestComplexQueryPaths){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     // Create complex nested structure
@@ -2242,6 +2344,7 @@ TestFunction(TestComplexQueryPaths){
     TestExpectEquals((int)result.kind, DRJSON_ERROR);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2281,6 +2384,7 @@ TestFunction(TestStripWhitespace){
     strip_whitespace(&sv.text, &sv.length);
     TestExpectEquals(sv.length, 0);
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2288,7 +2392,8 @@ TestFunction(TestStripWhitespace){
 TestFunction(TestNavJumpToParent){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create nested structure
@@ -2296,21 +2401,23 @@ TestFunction(TestNavJumpToParent){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Expand all levels
     uint64_t root_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, root_id);
+    bs_add(&nav.expanded, root_id, &nav.allocator);
 
     DrJsonValue outer = drjson_query(ctx, root, "outer", 5);
     uint64_t outer_id = nav_get_container_id(outer);
-    bs_add(&nav.expanded, outer_id);
+    bs_add(&nav.expanded, outer_id, &nav.allocator);
 
     DrJsonValue inner = drjson_query(ctx, root, "outer.inner", 11);
     uint64_t inner_id = nav_get_container_id(inner);
-    bs_add(&nav.expanded, inner_id);
+    bs_add(&nav.expanded, inner_id, &nav.allocator);
 
     nav_rebuild(&nav);
 
@@ -2342,9 +2449,9 @@ TestFunction(TestNavJumpToParent){
     TestExpectEquals(nav.cursor_pos, orig_pos);
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2352,7 +2459,8 @@ TestFunction(TestNavJumpToParent){
 TestFunction(TestNavNavigateToPath){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create structure with array
@@ -2360,13 +2468,15 @@ TestFunction(TestNavNavigateToPath){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Expand root
     uint64_t root_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, root_id);
+    bs_add(&nav.expanded, root_id, &nav.allocator);
     nav_rebuild(&nav);
 
     // Create a path: data[1]
@@ -2386,9 +2496,9 @@ TestFunction(TestNavNavigateToPath){
     TestExpectEquals(result_idx, 0);
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2396,12 +2506,15 @@ TestFunction(TestNavNavigateToPath){
 TestFunction(TestTuiEvalExpression){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = drjson_make_null();
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = drjson_make_null(),
+        .allocator = a,
+    };
 
     // Create a test value
     LongString json = LS("{\"age\": 25, \"name\": \"Alice\"}");
@@ -2453,7 +2566,9 @@ TestFunction(TestTuiEvalExpression){
     TestExpectEquals((int)result.kind, DRJSON_BOOL);
     TestExpectTrue(result.boolean); // 25 < 30 is true
 
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2485,6 +2600,7 @@ TestFunction(TestDrjToDoubleForSort){
     d = drj_to_double_for_sort(bool_val);
     TestExpectTrue(d == 0.0);
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2492,7 +2608,8 @@ TestFunction(TestDrjToDoubleForSort){
 TestFunction(TestSortingWithQuery){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create array of objects
@@ -2500,9 +2617,11 @@ TestFunction(TestSortingWithQuery){
     DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = arr;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
     nav_rebuild(&nav);
 
     nav.cursor_pos = 0;
@@ -2523,8 +2642,9 @@ TestFunction(TestSortingWithQuery){
     }
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2532,23 +2652,26 @@ TestFunction(TestSortingWithQuery){
 TestFunction(TestNavIsExpanded){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     LongString json = LS("[1, 2, 3]");
     DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = arr;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
 
     // Initially not expanded
     TestExpectFalse(nav_is_expanded(&nav, arr));
 
     // Expand it
     uint64_t arr_id = nav_get_container_id(arr);
-    bs_add(&nav.expanded, arr_id);
+    bs_add(&nav.expanded, arr_id, &nav.allocator);
 
     // Now should be expanded
     TestExpectTrue(nav_is_expanded(&nav, arr));
@@ -2558,8 +2681,9 @@ TestFunction(TestNavIsExpanded){
     TestExpectFalse(nav_is_expanded(&nav, num));
 
     // Cleanup
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2567,10 +2691,10 @@ TestFunction(TestNavIsExpanded){
 TestFunction(TestNavAppendItem){
     TESTBEGIN();
 
-    JsonNav nav = {0};
-    nav.items = NULL;
-    nav.item_count = 0;
-    nav.item_capacity = 0;
+    DrJsonAllocator a = get_test_allocator();
+    JsonNav nav = {
+        .allocator = a,
+    };
 
     DrJsonValue dummy_val = drjson_make_int(42);
     DrJsonAtom dummy_key = {0};
@@ -2605,7 +2729,8 @@ TestFunction(TestNavAppendItem){
     TestExpectEquals((int)nav.items[nav.item_count-1].depth, 99);
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2613,16 +2738,19 @@ TestFunction(TestNavAppendItem){
 TestFunction(TestNavReinit){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     LongString json = LS("{\"a\": [1, 2, 3], \"b\": {\"x\": 10}}");
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Set various states
     nav.cursor_pos = 5;
@@ -2637,23 +2765,21 @@ TestFunction(TestNavReinit){
     nav.tab_count = 3;
 
     // Allocate and populate line editors
-    nav.command_buffer.data = malloc(256);
+    le_init(&nav.command_buffer, 256);
     LongString test_cmd = LS("test command");
     memcpy(nav.command_buffer.data, test_cmd.text, test_cmd.length + 1);
     nav.command_buffer.length = test_cmd.length;
-    nav.command_buffer.capacity = 256;
     nav.command_buffer.cursor_pos = 5;
 
-    nav.search_buffer.data = malloc(256);
+    le_init(&nav.search_buffer, 256);
     LongString search_txt = LS("search text");
     memcpy(nav.search_buffer.data, search_txt.text, search_txt.length + 1);
     nav.search_buffer.length = search_txt.length;
-    nav.search_buffer.capacity = 256;
     nav.search_buffer.cursor_pos = 7;
 
     // Add some expanded containers
     uint64_t container_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, container_id);
+    bs_add(&nav.expanded, container_id, &nav.allocator);
 
     // Call nav_reinit
     nav_reinit(&nav);
@@ -2679,11 +2805,9 @@ TestFunction(TestNavReinit){
     TestExpectTrue(nav.search_buffer.data != NULL); // Buffer kept
 
     // Cleanup
-    if(nav.command_buffer.data) free(nav.command_buffer.data);
-    if(nav.search_buffer.data) free(nav.search_buffer.data);
-    if(nav.expanded.ids) free(nav.expanded.ids);
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2715,6 +2839,7 @@ TestFunction(TestNavSetMessagef){
     nav_clear_message(&nav);
     TestExpectEquals((int)nav.message_length, 0);
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2722,12 +2847,13 @@ TestFunction(TestNavSetMessagef){
 TestFunction(TestBitSetRemoveToggleClear){
     TESTBEGIN();
 
+    DrJsonAllocator a = get_test_allocator();
     BitSet set = {0};
 
     // Add some bits
-    bs_add(&set, 5);
-    bs_add(&set, 100);
-    bs_add(&set, 200);
+    bs_add(&set, 5, &a);
+    bs_add(&set, 100, &a);
+    bs_add(&set, 200, &a);
 
     TestExpectTrue(bs_contains(&set, 5));
     TestExpectTrue(bs_contains(&set, 100));
@@ -2743,15 +2869,15 @@ TestFunction(TestBitSetRemoveToggleClear){
     bs_remove(&set, 9999);
 
     // Toggle a bit that's set (should clear it)
-    bs_toggle(&set, 5);
+    bs_toggle(&set, 5, &a);
     TestExpectFalse(bs_contains(&set, 5));
 
     // Toggle a bit that's not set (should set it)
-    bs_toggle(&set, 50);
+    bs_toggle(&set, 50, &a);
     TestExpectTrue(bs_contains(&set, 50));
 
     // Toggle it again (should clear)
-    bs_toggle(&set, 50);
+    bs_toggle(&set, 50, &a);
     TestExpectFalse(bs_contains(&set, 50));
 
     // Clear all bits
@@ -2761,11 +2887,12 @@ TestFunction(TestBitSetRemoveToggleClear){
     TestExpectFalse(bs_contains(&set, 200));
 
     // Add a bit after clear
-    bs_add(&set, 42);
+    bs_add(&set, 42, &a);
     TestExpectTrue(bs_contains(&set, 42));
 
     // Cleanup
-    bs_free(&set);
+    bs_free(&set, &a);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2790,6 +2917,7 @@ TestFunction(TestToLower){
     TestExpectEquals(to_lower('!'), '!');
     TestExpectEquals(to_lower('_'), '_');
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2821,6 +2949,7 @@ TestFunction(TestSubstringMatchFunc){
     // Empty query (should return false - no match)
     TestExpectFalse(substring_match("hello", 5, "", 0));
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2862,6 +2991,7 @@ TestFunction(TestGlobMatch){
     // Empty pattern
     TestExpectFalse(glob_match("hello", 5, "", 0));
 
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2869,16 +2999,19 @@ TestFunction(TestGlobMatch){
 TestFunction(TestNavFindParent){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     LongString json = LS("{\"a\": [1, 2, 3], \"b\": {\"x\": 10, \"y\": 20}}");
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Build navigation tree
     nav_rebuild(&nav);
@@ -2906,8 +3039,9 @@ TestFunction(TestNavFindParent){
     TestExpectEquals((int)invalid_parent, (int)SIZE_MAX);
 
     // Cleanup
-    if(nav.items) free(nav.items);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2922,7 +3056,7 @@ TestFunction(TestGetTypeRank){
     DrJsonValue uint_val = drjson_make_uint(42);
     DrJsonValue num_val = drjson_make_number(3.14);
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
     TestAssert(ctx != NULL);
 
     DrJsonValue str_val = drjson_make_string(ctx, "hello", 5);
@@ -2956,6 +3090,7 @@ TestFunction(TestGetTypeRank){
     TestExpectEquals(obj_rank, 5);
 
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -2963,7 +3098,8 @@ TestFunction(TestGetTypeRank){
 TestFunction(TestNavCollapseAll){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create nested structure
@@ -2971,21 +3107,23 @@ TestFunction(TestNavCollapseAll){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
 
     // Expand root and children
     uint64_t root_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, root_id);
+    bs_add(&nav.expanded, root_id, &nav.allocator);
 
     DrJsonValue arr = drjson_query(ctx, root, "arr", 3);
     uint64_t arr_id = nav_get_container_id(arr);
-    bs_add(&nav.expanded, arr_id);
+    bs_add(&nav.expanded, arr_id, &nav.allocator);
 
     DrJsonValue obj = drjson_query(ctx, root, "obj", 3);
     uint64_t obj_id = nav_get_container_id(obj);
-    bs_add(&nav.expanded, obj_id);
+    bs_add(&nav.expanded, obj_id, &nav.allocator);
 
     nav_rebuild(&nav);
 
@@ -3005,9 +3143,9 @@ TestFunction(TestNavCollapseAll){
     TestExpectFalse(nav_is_expanded(&nav, obj));
 
     // Cleanup
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -3015,7 +3153,8 @@ TestFunction(TestNavCollapseAll){
 TestFunction(TestNumericSearchRecursive){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create JSON with various numeric values
@@ -3024,24 +3163,26 @@ TestFunction(TestNumericSearchRecursive){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
     le_init(&nav.search_buffer, 256);
 
     // Expand root
     uint64_t root_id = nav_get_container_id(root);
-    bs_add(&nav.expanded, root_id);
+    bs_add(&nav.expanded, root_id, &nav.allocator);
     nav_rebuild(&nav);
 
     // Expand all containers to see nested values
     DrJsonValue b_obj = drjson_query(ctx, root, "b", 1);
     if(nav_is_container(b_obj)){
-        bs_add(&nav.expanded, nav_get_container_id(b_obj));
+        bs_add(&nav.expanded, nav_get_container_id(b_obj), &nav.allocator);
     }
     DrJsonValue e_arr = drjson_query(ctx, root, "e", 1);
     if(nav_is_container(e_arr)){
-        bs_add(&nav.expanded, nav_get_container_id(e_arr));
+        bs_add(&nav.expanded, nav_get_container_id(e_arr), &nav.allocator);
     }
     nav_rebuild(&nav);
 
@@ -3099,10 +3240,9 @@ TestFunction(TestNumericSearchRecursive){
     TestExpectEquals(matches_999, 0);
 
     // Cleanup
-    le_free(&nav.search_buffer);
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -3110,7 +3250,8 @@ TestFunction(TestNumericSearchRecursive){
 TestFunction(TestNumericSearchQueryFlatView){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create JSON with an all-numeric array (will render in flat view)
@@ -3119,20 +3260,22 @@ TestFunction(TestNumericSearchQueryFlatView){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
     le_init(&nav.search_buffer, 256);
 
     // Expand containers
-    bs_add(&nav.expanded, nav_get_container_id(root));
+    bs_add(&nav.expanded, nav_get_container_id(root), &nav.allocator);
     DrJsonValue data_obj = drjson_query(ctx, root, "data", 4);
     if(nav_is_container(data_obj)){
-        bs_add(&nav.expanded, nav_get_container_id(data_obj));
+        bs_add(&nav.expanded, nav_get_container_id(data_obj), &nav.allocator);
     }
     DrJsonValue values_arr = drjson_query(ctx, data_obj, "values", 6);
     if(nav_is_container(values_arr)){
-        bs_add(&nav.expanded, nav_get_container_id(values_arr));
+        bs_add(&nav.expanded, nav_get_container_id(values_arr), &nav.allocator);
     }
     nav_rebuild(&nav);
 
@@ -3170,10 +3313,9 @@ TestFunction(TestNumericSearchQueryFlatView){
     TestExpectTrue(flat_view_matched); // Verify it matched
 
     // Cleanup
-    le_free(&nav.search_buffer);
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
@@ -3181,7 +3323,8 @@ TestFunction(TestNumericSearchQueryFlatView){
 TestFunction(TestQuerySearchLandsOnElement){
     TESTBEGIN();
 
-    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
     TestAssert(ctx != NULL);
 
     // Create JSON: {foo:{bar:[1,2,3], baz:["a","b",3]}}
@@ -3189,9 +3332,11 @@ TestFunction(TestQuerySearchLandsOnElement){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav = {0};
-    nav.jctx = ctx;
-    nav.root = root;
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
     le_init(&nav.search_buffer, 256);
 
     nav_rebuild(&nav);
@@ -3265,13 +3410,13 @@ TestFunction(TestQuerySearchLandsOnElement){
     TestExpectEquals(cursor_item->key.bits, baz.bits);
 
     // Cleanup
-    le_free(&nav.search_buffer);
-    if(nav.items) free(nav.items);
-    if(nav.expanded.ids) free(nav.expanded.ids);
+    nav_free(&nav);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
     TESTEND();
 }
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
+#include "test_allocator.c"
