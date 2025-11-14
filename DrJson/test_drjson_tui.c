@@ -21,135 +21,87 @@
 #pragma clang assume_nonnull begin
 #endif
 
+// X-macro list of all tests
+// To add a new test:
+// 1. Add X(TestName) to this list
+// 2. Write TestFunction(TestName) { ... } somewhere below
+#define TEST_LIST(X) \
+    X(TestNumericParsing) \
+    X(TestNumericSearchInteger) \
+    X(TestNumericSearchDouble) \
+    X(TestNumericSearchNonNumeric) \
+    X(TestSubstringMatch) \
+    X(TestStringMatchesQuery) \
+    X(TestNavValueMatchesQuery) \
+    X(TestBitSetOperations) \
+    X(TestLineEditorBasics) \
+    X(TestLineEditorHistory) \
+    X(TestLineEditorWordOperations) \
+    X(TestPathBuilding) \
+    X(TestNavContainsMatch) \
+    X(TestNavigationTreeLogic) \
+    X(TestFocusStack) \
+    X(TestUTF8DisplayWidth) \
+    X(TestNavigationJumps) \
+    X(TestExpandCollapseRecursive) \
+    X(TestCommandLookup) \
+    X(TestBitSetEdgeCases) \
+    X(TestComplexNestedPaths) \
+    X(TestSearchRecursiveExpansion) \
+    X(TestNavigationBoundaries) \
+    X(TestMessageHandling) \
+    X(TestLineEditorEdgeCases) \
+    X(TestLargeJSONStructures) \
+    X(TestSearchNavigation) \
+    X(TestValueComparison) \
+    X(TestParseAsString) \
+    X(TestParseAsValue) \
+    X(TestContainerID) \
+    X(TestSearchWithExpansion) \
+    X(TestFlatViewMode) \
+    X(TestSortingArrays) \
+    X(TestSortingObjects) \
+    X(TestFilteringArrays) \
+    X(TestFilteringObjects) \
+    X(TestTruthiness) \
+    X(TestNavRebuildRecursive) \
+    X(TestOperatorParsing) \
+    X(TestLiteralParsing) \
+    X(TestQueryCommand) \
+    X(TestFocusUnfocusCommands) \
+    X(TestNavJumpToNthChild) \
+    X(TestFocusStackOperations) \
+    X(TestComplexQueryPaths) \
+    X(TestStripWhitespace) \
+    X(TestNavJumpToParent) \
+    X(TestNavNavigateToPath) \
+    X(TestTuiEvalExpression) \
+    X(TestDrjToDoubleForSort) \
+    X(TestSortingWithQuery) \
+    X(TestNavIsExpanded) \
+    X(TestNavAppendItem) \
+    X(TestNavReinit) \
+    X(TestNavSetMessagef) \
+    X(TestBitSetRemoveToggleClear) \
+    X(TestToLower) \
+    X(TestSubstringMatchFunc) \
+    X(TestGlobMatch) \
+    X(TestNavFindParent) \
+    X(TestGetTypeRank) \
+    X(TestNavCollapseAll) \
+    X(TestNumericSearchRecursive) \
+    X(TestNumericSearchQueryFlatView) \
+    X(TestQuerySearchLandsOnElement)
+
 // Forward declarations of test functions
-static TestFunc TestNumericParsing;
-static TestFunc TestNumericSearchInteger;
-static TestFunc TestNumericSearchDouble;
-static TestFunc TestNumericSearchNonNumeric;
-static TestFunc TestSubstringMatch;
-static TestFunc TestStringMatchesQuery;
-static TestFunc TestNavValueMatchesQuery;
-static TestFunc TestBitSetOperations;
-static TestFunc TestLineEditorBasics;
-static TestFunc TestLineEditorHistory;
-static TestFunc TestLineEditorWordOperations;
-static TestFunc TestPathBuilding;
-static TestFunc TestNavContainsMatch;
-static TestFunc TestNavigationTreeLogic;
-static TestFunc TestFocusStack;
-static TestFunc TestUTF8DisplayWidth;
-static TestFunc TestNavigationJumps;
-static TestFunc TestExpandCollapseRecursive;
-static TestFunc TestCommandLookup;
-static TestFunc TestBitSetEdgeCases;
-static TestFunc TestComplexNestedPaths;
-static TestFunc TestSearchRecursiveExpansion;
-static TestFunc TestNavigationBoundaries;
-static TestFunc TestMessageHandling;
-static TestFunc TestLineEditorEdgeCases;
-static TestFunc TestLargeJSONStructures;
-static TestFunc TestSearchNavigation;
-static TestFunc TestValueComparison;
-static TestFunc TestParseAsString;
-static TestFunc TestParseAsValue;
-static TestFunc TestContainerID;
-static TestFunc TestSearchWithExpansion;
-static TestFunc TestFlatViewMode;
-static TestFunc TestSortingArrays;
-static TestFunc TestSortingObjects;
-static TestFunc TestFilteringArrays;
-static TestFunc TestFilteringObjects;
-static TestFunc TestTruthiness;
-static TestFunc TestNavRebuildRecursive;
-static TestFunc TestOperatorParsing;
-static TestFunc TestLiteralParsing;
-static TestFunc TestQueryCommand;
-static TestFunc TestFocusUnfocusCommands;
-static TestFunc TestNavJumpToNthChild;
-static TestFunc TestFocusStackOperations;
-static TestFunc TestComplexQueryPaths;
-static TestFunc TestStripWhitespace;
-static TestFunc TestNavJumpToParent;
-static TestFunc TestNavNavigateToPath;
-static TestFunc TestTuiEvalExpression;
-static TestFunc TestDrjToDoubleForSort;
-static TestFunc TestSortingWithQuery;
-static TestFunc TestNavIsExpanded;
-static TestFunc TestNavAppendItem;
-static TestFunc TestNavReinit;
-static TestFunc TestNavSetMessagef;
-static TestFunc TestBitSetRemoveToggleClear;
-static TestFunc TestToLower;
-static TestFunc TestSubstringMatchFunc;
-static TestFunc TestGlobMatch;
-static TestFunc TestNavFindParent;
-static TestFunc TestGetTypeRank;
-static TestFunc TestNavCollapseAll;
+#define X(name) static TestFunc name;
+TEST_LIST(X)
+#undef X
 
 int main(int argc, char*_Nullable*_Nonnull argv){
-    RegisterTest(TestNumericParsing);
-    RegisterTest(TestNumericSearchInteger);
-    RegisterTest(TestNumericSearchDouble);
-    RegisterTest(TestNumericSearchNonNumeric);
-    RegisterTest(TestSubstringMatch);
-    RegisterTest(TestStringMatchesQuery);
-    RegisterTest(TestNavValueMatchesQuery);
-    RegisterTest(TestBitSetOperations);
-    RegisterTest(TestLineEditorBasics);
-    RegisterTest(TestLineEditorHistory);
-    RegisterTest(TestLineEditorWordOperations);
-    RegisterTest(TestPathBuilding);
-    RegisterTest(TestNavContainsMatch);
-    RegisterTest(TestNavigationTreeLogic);
-    RegisterTest(TestFocusStack);
-    RegisterTest(TestUTF8DisplayWidth);
-    RegisterTest(TestNavigationJumps);
-    RegisterTest(TestExpandCollapseRecursive);
-    RegisterTest(TestCommandLookup);
-    RegisterTest(TestBitSetEdgeCases);
-    RegisterTest(TestComplexNestedPaths);
-    RegisterTest(TestSearchRecursiveExpansion);
-    RegisterTest(TestNavigationBoundaries);
-    RegisterTest(TestMessageHandling);
-    RegisterTest(TestLineEditorEdgeCases);
-    RegisterTest(TestLargeJSONStructures);
-    RegisterTest(TestSearchNavigation);
-    RegisterTest(TestValueComparison);
-    RegisterTest(TestParseAsString);
-    RegisterTest(TestParseAsValue);
-    RegisterTest(TestContainerID);
-    RegisterTest(TestSearchWithExpansion);
-    RegisterTest(TestFlatViewMode);
-    RegisterTest(TestSortingArrays);
-    RegisterTest(TestSortingObjects);
-    RegisterTest(TestFilteringArrays);
-    RegisterTest(TestFilteringObjects);
-    RegisterTest(TestTruthiness);
-    RegisterTest(TestNavRebuildRecursive);
-    RegisterTest(TestOperatorParsing);
-    RegisterTest(TestLiteralParsing);
-    RegisterTest(TestQueryCommand);
-    RegisterTest(TestFocusUnfocusCommands);
-    RegisterTest(TestNavJumpToNthChild);
-    RegisterTest(TestFocusStackOperations);
-    RegisterTest(TestComplexQueryPaths);
-    RegisterTest(TestStripWhitespace);
-    RegisterTest(TestNavJumpToParent);
-    RegisterTest(TestNavNavigateToPath);
-    RegisterTest(TestTuiEvalExpression);
-    RegisterTest(TestDrjToDoubleForSort);
-    RegisterTest(TestSortingWithQuery);
-    RegisterTest(TestNavIsExpanded);
-    RegisterTest(TestNavAppendItem);
-    RegisterTest(TestNavReinit);
-    RegisterTest(TestNavSetMessagef);
-    RegisterTest(TestBitSetRemoveToggleClear);
-    RegisterTest(TestToLower);
-    RegisterTest(TestSubstringMatchFunc);
-    RegisterTest(TestGlobMatch);
-    RegisterTest(TestNavFindParent);
-    RegisterTest(TestGetTypeRank);
-    RegisterTest(TestNavCollapseAll);
+#define X(name) RegisterTest(name);
+    TEST_LIST(X)
+#undef X
     return test_main(argc, argv, NULL);
 }
 
@@ -3053,6 +3005,267 @@ TestFunction(TestNavCollapseAll){
     TestExpectFalse(nav_is_expanded(&nav, obj));
 
     // Cleanup
+    if(nav.items) free(nav.items);
+    if(nav.expanded.ids) free(nav.expanded.ids);
+    drjson_ctx_free_all(ctx);
+    TESTEND();
+}
+
+// Test numeric search in recursive mode
+TestFunction(TestNumericSearchRecursive){
+    TESTBEGIN();
+
+    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    TestAssert(ctx != NULL);
+
+    // Create JSON with various numeric values
+    // Include a string in array "e" to prevent flat view rendering
+    LongString json = LS("{\"a\": 42, \"b\": {\"c\": 42, \"d\": 100}, \"e\": [42, \"x\", 42], \"f\": 3.14}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav = {0};
+    nav.jctx = ctx;
+    nav.root = root;
+    le_init(&nav.search_buffer, 256);
+
+    // Expand root
+    uint64_t root_id = nav_get_container_id(root);
+    bs_add(&nav.expanded, root_id);
+    nav_rebuild(&nav);
+
+    // Expand all containers to see nested values
+    DrJsonValue b_obj = drjson_query(ctx, root, "b", 1);
+    if(nav_is_container(b_obj)){
+        bs_add(&nav.expanded, nav_get_container_id(b_obj));
+    }
+    DrJsonValue e_arr = drjson_query(ctx, root, "e", 1);
+    if(nav_is_container(e_arr)){
+        bs_add(&nav.expanded, nav_get_container_id(e_arr));
+    }
+    nav_rebuild(&nav);
+
+    // Test searching for integer 42
+    int result = nav_setup_search(&nav, "42", 2, SEARCH_RECURSIVE);
+    TestAssertEquals(result, 0);
+
+    // Count matches for 42
+    size_t matches_42 = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav_item_matches_query(&nav, &nav.items[i], nav.search_buffer.data, nav.search_buffer.length)){
+            matches_42++;
+        }
+    }
+    // Should match: "a": 42, "c": 42 (inside b), and two 42s in array "e"
+    TestExpectEquals(matches_42, 4);
+
+    // Test searching for integer 100
+    result = nav_setup_search(&nav, "100", 3, SEARCH_RECURSIVE);
+    TestAssertEquals(result, 0);
+
+    size_t matches_100 = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav_item_matches_query(&nav, &nav.items[i], nav.search_buffer.data, nav.search_buffer.length)){
+            matches_100++;
+        }
+    }
+    // Should match: the value 100 in nested "d"
+    TestExpectEquals(matches_100, 1);
+
+    // Test searching for double 3.14
+    result = nav_setup_search(&nav, "3.14", 4, SEARCH_RECURSIVE);
+    TestAssertEquals(result, 0);
+
+    size_t matches_pi = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav_item_matches_query(&nav, &nav.items[i], nav.search_buffer.data, nav.search_buffer.length)){
+            matches_pi++;
+        }
+    }
+    // Should match: the value 3.14 in "f"
+    TestExpectEquals(matches_pi, 1);
+
+    // Test searching for non-existent number
+    result = nav_setup_search(&nav, "999", 3, SEARCH_RECURSIVE);
+    TestAssertEquals(result, 0);
+
+    size_t matches_999 = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav_item_matches_query(&nav, &nav.items[i], nav.search_buffer.data, nav.search_buffer.length)){
+            matches_999++;
+        }
+    }
+    // Should not match anything
+    TestExpectEquals(matches_999, 0);
+
+    // Cleanup
+    le_free(&nav.search_buffer);
+    if(nav.items) free(nav.items);
+    if(nav.expanded.ids) free(nav.expanded.ids);
+    drjson_ctx_free_all(ctx);
+    TESTEND();
+}
+
+// Test numeric search in query mode with flat view arrays
+TestFunction(TestNumericSearchQueryFlatView){
+    TESTBEGIN();
+
+    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    TestAssert(ctx != NULL);
+
+    // Create JSON with an all-numeric array (will render in flat view)
+    // and a nested object containing such an array
+    LongString json = LS("{\"data\": {\"values\": [10, 20, 30, 40, 50]}}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav = {0};
+    nav.jctx = ctx;
+    nav.root = root;
+    le_init(&nav.search_buffer, 256);
+
+    // Expand containers
+    bs_add(&nav.expanded, nav_get_container_id(root));
+    DrJsonValue data_obj = drjson_query(ctx, root, "data", 4);
+    if(nav_is_container(data_obj)){
+        bs_add(&nav.expanded, nav_get_container_id(data_obj));
+    }
+    DrJsonValue values_arr = drjson_query(ctx, data_obj, "values", 6);
+    if(nav_is_container(values_arr)){
+        bs_add(&nav.expanded, nav_get_container_id(values_arr));
+    }
+    nav_rebuild(&nav);
+
+    // Set up search for "//data.values 30"
+    int result = nav_setup_search(&nav, "data.values 30", 14, SEARCH_QUERY);
+    TestAssertEquals(result, 0);
+
+    // The root object should match because data.values contains 30
+    TestExpectTrue(nav_value_matches_query(&nav, root, (DrJsonAtom){0}, nav.search_buffer.data, nav.search_buffer.length));
+
+    // Test with value not in array
+    result = nav_setup_search(&nav, "data.values 99", 14, SEARCH_QUERY);
+    TestAssertEquals(result, 0);
+    TestExpectFalse(nav_value_matches_query(&nav, root, (DrJsonAtom){0}, nav.search_buffer.data, nav.search_buffer.length));
+
+    // Now test with nav_item_matches_query on flat view items
+    // Reset to search for 30
+    result = nav_setup_search(&nav, "data.values 30", 14, SEARCH_QUERY);
+    TestAssertEquals(result, 0);
+
+    // Find a flat view item in nav.items
+    _Bool found_flat_view = 0;
+    _Bool flat_view_matched = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav.items[i].is_flat_view){
+            found_flat_view = 1;
+
+            // This flat view item contains 30, so it should match
+            if(nav_item_matches_query(&nav, &nav.items[i], nav.search_buffer.data, nav.search_buffer.length)){
+                flat_view_matched = 1;
+            }
+        }
+    }
+    TestExpectTrue(found_flat_view); // Verify we actually found a flat view item
+    TestExpectTrue(flat_view_matched); // Verify it matched
+
+    // Cleanup
+    le_free(&nav.search_buffer);
+    if(nav.items) free(nav.items);
+    if(nav.expanded.ids) free(nav.expanded.ids);
+    drjson_ctx_free_all(ctx);
+    TESTEND();
+}
+
+// Test that query search lands on the flat view item containing the matching element
+TestFunction(TestQuerySearchLandsOnElement){
+    TESTBEGIN();
+
+    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    TestAssert(ctx != NULL);
+
+    // Create JSON: {foo:{bar:[1,2,3], baz:["a","b",3]}}
+    LongString json = LS("{\"foo\":{\"bar\":[1, 2, 3], baz:[a,b,3]}}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav = {0};
+    nav.jctx = ctx;
+    nav.root = root;
+    le_init(&nav.search_buffer, 256);
+
+    nav_rebuild(&nav);
+
+    // Set up search for "//bar 2"
+    int result = nav_setup_search(&nav, "bar 2", 5, SEARCH_QUERY);
+    TestAssertEquals(result, 0);
+
+    // Perform search from beginning
+    nav.cursor_pos = 0;
+    nav_search_next(&nav);
+
+    // Should land on the flat view item containing "2"
+    TestAssert(nav.cursor_pos < nav.item_count);
+    NavItem* cursor_item = &nav.items[nav.cursor_pos];
+
+    // Verify we landed on a flat view item (since [1,2,3] is all numeric)
+    TestExpectTrue(cursor_item->is_flat_view);
+    TestExpectEquals((int)cursor_item->value.kind, DRJSON_ARRAY);
+
+    // Verify the flat view array contains the value 2 we searched for
+    int64_t len = drjson_len(ctx, cursor_item->value);
+    _Bool found_2 = 0;
+    for(int64_t i = 0; i < len; i++){
+        DrJsonValue elem = drjson_get_by_index(ctx, cursor_item->value, i);
+        if((elem.kind == DRJSON_INTEGER && elem.integer == 2) ||
+           (elem.kind == DRJSON_UINTEGER && elem.uinteger == 2)){
+            found_2 = 1;
+            break;
+        }
+    }
+    TestExpectTrue(found_2);
+
+    // Set up search for "//baz b"
+    result = nav_setup_search(&nav, "baz b", 5, SEARCH_QUERY);
+    TestAssertEquals(result, 0);
+
+    // Perform search from beginning
+    nav.cursor_pos = 0;
+    nav_search_next(&nav);
+
+    TestAssert(nav.cursor_pos < nav.item_count);
+    cursor_item = &nav.items[nav.cursor_pos];
+
+    // Verify we did not land on a flat view item (since [a,b,3] is mixed
+    TestExpectFalse(cursor_item->is_flat_view);
+    // should've landed on "b"
+    TestAssertEquals((int)cursor_item->value.kind, DRJSON_STRING);
+    StringView actual;
+    int err = drjson_get_str_and_len(ctx, cursor_item->value, &actual.text, &actual.length);
+    TestAssertFalse(err);
+    TestAssertEquals2(SV_equals, actual, SV("b"));
+
+    // Set up search for "//baz"
+    result = nav_setup_search(&nav, "baz", 3, SEARCH_QUERY);
+    TestAssertEquals(result, 0);
+
+    // Perform search from beginning
+    nav.cursor_pos = 0;
+    nav_search_next(&nav);
+
+    TestAssert(nav.cursor_pos < nav.item_count);
+    cursor_item = &nav.items[nav.cursor_pos];
+
+    TestExpectFalse(cursor_item->is_flat_view);
+    TestExpectTrue(cursor_item->key.bits);
+    TestExpectEquals((int)cursor_item->value.kind, DRJSON_ARRAY);
+    DrJsonAtom baz;
+    err = DRJSON_ATOMIZE(ctx, "baz", &baz);
+    TestAssertFalse(err);
+    TestExpectEquals(cursor_item->key.bits, baz.bits);
+
+    // Cleanup
+    le_free(&nav.search_buffer);
     if(nav.items) free(nav.items);
     if(nav.expanded.ids) free(nav.expanded.ids);
     drjson_ctx_free_all(ctx);

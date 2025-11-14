@@ -1282,11 +1282,96 @@ string_matches_query(const char* str, size_t str_len, const char* query, size_t 
 // Forward declaration
 static _Bool nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const char* query, size_t query_len);
 
+// Helper to check if a value matches the search pattern directly (no path evaluation)
+// Used when checking children in query search mode
+static
+_Bool
+nav_value_matches_pattern(JsonNav* nav, DrJsonValue val){
+    // Check numeric match
+    if(nav->search_numeric.is_numeric){
+        if(nav->search_numeric.is_integer){
+            if(val.kind == DRJSON_INTEGER && val.integer == nav->search_numeric.int_value)
+                return 1;
+            if(val.kind == DRJSON_UINTEGER && (int64_t)val.uinteger == nav->search_numeric.int_value)
+                return 1;
+        }
+        else {
+            if(val.kind == DRJSON_NUMBER && val.number == nav->search_numeric.double_value)
+                return 1;
+        }
+    }
+
+    // Check string match
+    if(val.kind == DRJSON_STRING){
+        const char* str = NULL;
+        size_t slen = 0;
+        int err = drjson_get_str_and_len(nav->jctx, val, &str, &slen);
+        if(!err && str && string_matches_query(str, slen, nav->search_pattern, nav->search_pattern_len)){
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 // Check if a NavItem matches the search query (uses regex matching)
 static
 _Bool
 nav_item_matches_query(JsonNav* nav, NavItem* item, const char* query, size_t query_len){
     if(query_len == 0) return 0;
+
+    // For flat view items, check all elements in the row
+    if(item->is_flat_view && item->value.kind == DRJSON_ARRAY){
+        int64_t len = drjson_len(nav->jctx, item->value);
+        size_t WRAP_WIDTH = 10;
+        int64_t row_start = (int64_t)item->index * (int64_t)WRAP_WIDTH;
+        int64_t row_end = row_start + (int64_t)WRAP_WIDTH;
+        if(row_end > len) row_end = len;
+
+        // In SEARCH_QUERY mode, flat view items represent array elements
+        // We should check if any element in the row directly matches the pattern
+        if(nav->search_mode == SEARCH_QUERY){
+            // Check each element directly against the numeric pattern
+            for(int64_t i = row_start; i < row_end; i++){
+                DrJsonValue elem = drjson_get_by_index(nav->jctx, item->value, i);
+
+                // Check numeric match
+                if(nav->search_numeric.is_numeric){
+                    if(nav->search_numeric.is_integer){
+                        if(elem.kind == DRJSON_INTEGER && elem.integer == nav->search_numeric.int_value)
+                            return 1;
+                        if(elem.kind == DRJSON_UINTEGER && (int64_t)elem.uinteger == nav->search_numeric.int_value)
+                            return 1;
+                    }
+                    else {
+                        if(elem.kind == DRJSON_NUMBER && elem.number == nav->search_numeric.double_value)
+                            return 1;
+                    }
+                }
+
+                // Check string match
+                if(elem.kind == DRJSON_STRING){
+                    const char* str = NULL;
+                    size_t slen = 0;
+                    int err = drjson_get_str_and_len(nav->jctx, elem, &str, &slen);
+                    if(!err && str && string_matches_query(str, slen, nav->search_pattern, nav->search_pattern_len)){
+                        return 1;
+                    }
+                }
+            }
+            return 0;
+        }
+        else {
+            // SEARCH_RECURSIVE mode: check each element in this row
+            for(int64_t i = row_start; i < row_end; i++){
+                DrJsonValue elem = drjson_get_by_index(nav->jctx, item->value, i);
+                if(nav_value_matches_query(nav, elem, (DrJsonAtom){0}, query, query_len)){
+                    return 1;
+                }
+            }
+            return 0;
+        }
+    }
 
     // Delegate to nav_value_matches_query which handles all search modes
     return nav_value_matches_query(nav, item->value, item->key, query, query_len);
@@ -1377,6 +1462,22 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
         int err = drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
         if(!err && key_str && string_matches_query(key_str, key_len, query, query_len)){
             return 1;
+        }
+    }
+
+    // Check value for numbers if query is numeric
+    if(nav->search_numeric.is_numeric){
+        if(nav->search_numeric.is_integer){
+            // Integer comparison
+            if(val.kind == DRJSON_INTEGER && val.integer == nav->search_numeric.int_value)
+                return 1;
+            if(val.kind == DRJSON_UINTEGER && (int64_t)val.uinteger == nav->search_numeric.int_value)
+                return 1;
+        }
+        else {
+            // Floating point comparison
+            if(val.kind == DRJSON_NUMBER && val.number == nav->search_numeric.double_value)
+                return 1;
         }
     }
 
@@ -1567,7 +1668,50 @@ nav_search_internal(JsonNav* nav, int direction){
             if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
                 // For SEARCH_QUERY mode, navigate to the actual field
                 if(nav->search_mode == SEARCH_QUERY){
-                    nav->cursor_pos = nav_navigate_to_path(nav, i, &nav->search_query_path);
+                    size_t path_idx = nav_navigate_to_path(nav, i, &nav->search_query_path);
+                    // If the path result is an array/object and there's a pattern, find the first matching child element
+                    if(path_idx < nav->item_count && nav_is_container(nav->items[path_idx].value) &&
+                       (nav->search_pattern_len > 0 || nav->search_numeric.is_numeric)){
+                        DrJsonValue container = nav->items[path_idx].value;
+                        // Expand the container if not already expanded
+                        if(!bs_contains(&nav->expanded, nav_get_container_id(container))){
+                            bs_add(&nav->expanded, nav_get_container_id(container));
+                            nav->needs_rebuild = 1;
+                            nav_rebuild(nav);
+                        }
+                        // Now look for matching children (check value directly, not via path evaluation)
+                        int child_depth = nav->items[path_idx].depth + 1;
+                        for(size_t j = path_idx + 1; j < nav->item_count; j++){
+                            if(nav->items[j].depth < child_depth) break; // Left container
+                            if(nav->items[j].depth != child_depth) continue; // Not direct child
+
+                            // For flat view items, check elements in the row
+                            if(nav->items[j].is_flat_view && nav->items[j].value.kind == DRJSON_ARRAY){
+                                int64_t len = drjson_len(nav->jctx, nav->items[j].value);
+                                size_t WRAP_WIDTH = 10;
+                                int64_t row_start = (int64_t)nav->items[j].index * (int64_t)WRAP_WIDTH;
+                                int64_t row_end = row_start + (int64_t)WRAP_WIDTH;
+                                if(row_end > len) row_end = len;
+
+                                _Bool found_in_flat = 0;
+                                for(int64_t k = row_start; k < row_end; k++){
+                                    DrJsonValue elem = drjson_get_by_index(nav->jctx, nav->items[j].value, k);
+                                    if(nav_value_matches_pattern(nav, elem)){
+                                        path_idx = j;
+                                        found_in_flat = 1;
+                                        break;
+                                    }
+                                }
+                                if(found_in_flat) break;
+                            }
+                            // Check if this child's value matches the pattern directly
+                            else if(nav_value_matches_pattern(nav, nav->items[j].value)){
+                                path_idx = j;
+                                break;
+                            }
+                        }
+                    }
+                    nav->cursor_pos = path_idx;
                 }
                 else {
                     nav->cursor_pos = i;
@@ -1601,7 +1745,50 @@ nav_search_internal(JsonNav* nav, int direction){
             if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
                 // For SEARCH_QUERY mode, navigate to the actual field
                 if(nav->search_mode == SEARCH_QUERY){
-                    nav->cursor_pos = nav_navigate_to_path(nav, i, &nav->search_query_path);
+                    size_t path_idx = nav_navigate_to_path(nav, i, &nav->search_query_path);
+                    // If the path result is an array/object and there's a pattern, find the first matching child element
+                    if(path_idx < nav->item_count && nav_is_container(nav->items[path_idx].value) &&
+                       (nav->search_pattern_len > 0 || nav->search_numeric.is_numeric)){
+                        DrJsonValue container = nav->items[path_idx].value;
+                        // Expand the container if not already expanded
+                        if(!bs_contains(&nav->expanded, nav_get_container_id(container))){
+                            bs_add(&nav->expanded, nav_get_container_id(container));
+                            nav->needs_rebuild = 1;
+                            nav_rebuild(nav);
+                        }
+                        // Now look for matching children (check value directly, not via path evaluation)
+                        int child_depth = nav->items[path_idx].depth + 1;
+                        for(size_t j = path_idx + 1; j < nav->item_count; j++){
+                            if(nav->items[j].depth < child_depth) break; // Left container
+                            if(nav->items[j].depth != child_depth) continue; // Not direct child
+
+                            // For flat view items, check elements in the row
+                            if(nav->items[j].is_flat_view && nav->items[j].value.kind == DRJSON_ARRAY){
+                                int64_t len = drjson_len(nav->jctx, nav->items[j].value);
+                                size_t WRAP_WIDTH = 10;
+                                int64_t row_start = (int64_t)nav->items[j].index * (int64_t)WRAP_WIDTH;
+                                int64_t row_end = row_start + (int64_t)WRAP_WIDTH;
+                                if(row_end > len) row_end = len;
+
+                                _Bool found_in_flat = 0;
+                                for(int64_t k = row_start; k < row_end; k++){
+                                    DrJsonValue elem = drjson_get_by_index(nav->jctx, nav->items[j].value, k);
+                                    if(nav_value_matches_pattern(nav, elem)){
+                                        path_idx = j;
+                                        found_in_flat = 1;
+                                        break;
+                                    }
+                                }
+                                if(found_in_flat) break;
+                            }
+                            // Check if this child's value matches the pattern directly
+                            else if(nav_value_matches_pattern(nav, nav->items[j].value)){
+                                path_idx = j;
+                                break;
+                            }
+                        }
+                    }
+                    nav->cursor_pos = path_idx;
                 }
                 else {
                     nav->cursor_pos = i;
@@ -1638,7 +1825,29 @@ nav_search_internal(JsonNav* nav, int direction){
                 if(nav_item_matches_query(nav, item, nav->search_buffer.data, nav->search_buffer.length)){
                     // For SEARCH_QUERY mode, navigate to the actual field
                     if(nav->search_mode == SEARCH_QUERY){
-                        nav->cursor_pos = nav_navigate_to_path(nav, idx, &nav->search_query_path);
+                        size_t path_idx = nav_navigate_to_path(nav, idx, &nav->search_query_path);
+                        // If the path result is an array/object, expand it and find the first matching child element
+                        if(path_idx < nav->item_count && nav_is_container(nav->items[path_idx].value)){
+                            DrJsonValue container = nav->items[path_idx].value;
+                            // Expand the container if not already expanded
+                            if(!bs_contains(&nav->expanded, nav_get_container_id(container))){
+                                bs_add(&nav->expanded, nav_get_container_id(container));
+                                nav->needs_rebuild = 1;
+                                nav_rebuild(nav);
+                            }
+                            // Now look for matching children
+                            int child_depth = nav->items[path_idx].depth + 1;
+                            for(size_t j = path_idx + 1; j < nav->item_count; j++){
+                                if(nav->items[j].depth < child_depth) break; // Left container
+                                if(nav->items[j].depth != child_depth) continue; // Not direct child
+                                // Check if this child matches the pattern
+                                if(nav_item_matches_query(nav, &nav->items[j], nav->search_buffer.data, nav->search_buffer.length)){
+                                    path_idx = j;
+                                    break;
+                                }
+                            }
+                        }
+                        nav->cursor_pos = path_idx;
                     }
                     else {
                         nav->cursor_pos = idx;
@@ -1723,6 +1932,136 @@ static inline
 void
 nav_search_prev(JsonNav* nav){
     nav_search_internal(nav, -1);
+}
+
+// Set up search from a string and mode
+// This helper consolidates all the search setup logic in one place
+// Returns 0 on success, non-zero if search couldn't be set up
+static
+int
+nav_setup_search(JsonNav* nav, const char* search_str, size_t search_len, enum SearchMode mode){
+    if(search_len == 0) return -1;
+    if(search_len >= nav->search_buffer.capacity) return -1;
+
+    // Copy search string to buffer
+    memcpy(nav->search_buffer.data, search_str, search_len);
+    nav->search_buffer.data[search_len] = '\0';
+    nav->search_buffer.length = search_len;
+    nav->search_buffer.cursor_pos = search_len;
+
+    // Reset numeric search state
+    nav->search_numeric.is_numeric = 0;
+    nav->search_numeric.is_integer = 0;
+    nav->search_numeric.int_value = 0;
+    nav->search_numeric.double_value = 0;
+
+    if(mode == SEARCH_QUERY){
+        // Query-based search: path pattern
+        // Use drjson_path_parse_greedy to parse the query part
+        const char* remainder = NULL;
+        DrJsonPath path = {0};
+        int parse_result = drjson_path_parse_greedy(nav->jctx, search_str, search_len, &path, &remainder);
+
+        if(parse_result == 0 && path.count > 0 && remainder != NULL){
+            // Store the parsed path
+            nav->search_query_path = path;
+
+            // Parse pattern from remainder
+            // Skip leading whitespace
+            while(remainder < search_str + search_len && (*remainder == ' ' || *remainder == '\t')){
+                remainder++;
+            }
+            // Optionally allow ':' after the query
+            if(remainder < search_str + search_len && *remainder == ':'){
+                remainder++;
+                // Skip whitespace after ':'
+                while(remainder < search_str + search_len && (*remainder == ' ' || *remainder == '\t')){
+                    remainder++;
+                }
+            }
+
+            // Rest is the pattern
+            nav->search_pattern_len = (search_str + search_len) - remainder;
+            if(nav->search_pattern_len > sizeof(nav->search_pattern) - 1){
+                nav->search_pattern_len = sizeof(nav->search_pattern) - 1;
+            }
+            if(nav->search_pattern_len > 0){
+                memcpy(nav->search_pattern, remainder, nav->search_pattern_len);
+                nav->search_pattern[nav->search_pattern_len] = '\0';
+
+                // Try to parse pattern as number for fast numeric comparison
+                // Try int64 first
+                Int64Result int_res = parse_int64(nav->search_pattern, nav->search_pattern_len);
+                if(int_res.errored == PARSENUMBER_NO_ERROR){
+                    nav->search_numeric.is_numeric = 1;
+                    nav->search_numeric.is_integer = 1;
+                    nav->search_numeric.int_value = int_res.result;
+                }
+                else {
+                    // Try uint64
+                    Uint64Result uint_res = parse_uint64(nav->search_pattern, nav->search_pattern_len);
+                    if(uint_res.errored == PARSENUMBER_NO_ERROR){
+                        nav->search_numeric.is_numeric = 1;
+                        nav->search_numeric.is_integer = 1;
+                        nav->search_numeric.int_value = (int64_t)uint_res.result;
+                    }
+                    else {
+                        // Try double
+                        DoubleResult double_res = parse_double(nav->search_pattern, nav->search_pattern_len);
+                        if(double_res.errored == PARSENUMBER_NO_ERROR){
+                            nav->search_numeric.is_numeric = 1;
+                            nav->search_numeric.is_integer = 0;
+                            nav->search_numeric.double_value = double_res.result;
+                        }
+                    }
+                }
+            }
+            else {
+                nav->search_pattern_len = 0;
+                nav->search_pattern[0] = '\0';
+            }
+            // Successfully set up query search
+            nav->search_mode = SEARCH_QUERY;
+            return 0;
+        }
+        else {
+            // Parse failed, can't do query search
+            return -1;
+        }
+    }
+    else {
+        // Regular recursive search
+        nav->search_mode = SEARCH_RECURSIVE;
+
+        // Try to parse search buffer as number for numeric comparison
+        // Try int64 first
+        Int64Result int_res = parse_int64(search_str, search_len);
+        if(int_res.errored == PARSENUMBER_NO_ERROR){
+            nav->search_numeric.is_numeric = 1;
+            nav->search_numeric.is_integer = 1;
+            nav->search_numeric.int_value = int_res.result;
+        }
+        else {
+            // Try uint64
+            Uint64Result uint_res = parse_uint64(search_str, search_len);
+            if(uint_res.errored == PARSENUMBER_NO_ERROR){
+                nav->search_numeric.is_numeric = 1;
+                nav->search_numeric.is_integer = 1;
+                nav->search_numeric.int_value = (int64_t)uint_res.result;
+            }
+            else {
+                // Try double
+                DoubleResult double_res = parse_double(search_str, search_len);
+                if(double_res.errored == PARSENUMBER_NO_ERROR){
+                    nav->search_numeric.is_numeric = 1;
+                    nav->search_numeric.is_integer = 0;
+                    nav->search_numeric.double_value = double_res.result;
+                }
+            }
+        }
+
+        return 0;
+    }
 }
 
 static inline
@@ -5844,84 +6183,17 @@ main(int argc, const char* const* argv){
                     le_history_add(&nav.search_history, nav.search_buffer.data, nav.search_buffer.length);
                     le_history_reset(&nav.search_buffer);
 
-                    // Parse search input.
-                    const char* input = nav.search_buffer.data;
-                    size_t input_len = nav.search_buffer.length;
+                    // Save search string before setup (since setup modifies the buffer)
+                    char search_str[256];
+                    size_t search_len = nav.search_buffer.length < sizeof(search_str) ? nav.search_buffer.length : sizeof(search_str) - 1;
+                    memcpy(search_str, nav.search_buffer.data, search_len);
+                    search_str[search_len] = '\0';
 
-                    if(nav.search_mode == SEARCH_QUERY){
-                        // Query-based search: path pattern
-                        // Use drjson_path_parse_greedy to parse the query part
-                        const char* remainder = NULL;
-                        DrJsonPath path = {0};
-                        int parse_result = drjson_path_parse_greedy(nav.jctx, input, input_len, &path, &remainder);
-
-                        if(parse_result == 0 && path.count > 0 && remainder != NULL){
-                            // Store the parsed path
-                            nav.search_query_path = path;
-
-                            // Parse pattern from remainder
-                            // Skip leading whitespace
-                            while(remainder < input + input_len && (*remainder == ' ' || *remainder == '\t')){
-                                remainder++;
-                            }
-                            // Optionally allow ':' after the query
-                            if(remainder < input + input_len && *remainder == ':'){
-                                remainder++;
-                                // Skip whitespace after ':'
-                                while(remainder < input + input_len && (*remainder == ' ' || *remainder == '\t')){
-                                    remainder++;
-                                }
-                            }
-
-                            // Rest is the pattern
-                            nav.search_pattern_len = (input + input_len) - remainder;
-                            if(nav.search_pattern_len > sizeof(nav.search_pattern) - 1){
-                                nav.search_pattern_len = sizeof(nav.search_pattern) - 1;
-                            }
-                            if(nav.search_pattern_len > 0){
-                                memcpy(nav.search_pattern, remainder, nav.search_pattern_len);
-                                nav.search_pattern[nav.search_pattern_len] = '\0';
-
-                                // Try to parse pattern as number for fast numeric comparison
-                                nav.search_numeric.is_numeric = 0;
-
-                                // Try int64 first
-                                Int64Result int_res = parse_int64(nav.search_pattern, nav.search_pattern_len);
-                                if(int_res.errored == PARSENUMBER_NO_ERROR){
-                                    nav.search_numeric.is_numeric = 1;
-                                    nav.search_numeric.is_integer = 1;
-                                    nav.search_numeric.int_value = int_res.result;
-                                }
-                                else {
-                                    // Try uint64
-                                    Uint64Result uint_res = parse_uint64(nav.search_pattern, nav.search_pattern_len);
-                                    if(uint_res.errored == PARSENUMBER_NO_ERROR){
-                                        nav.search_numeric.is_numeric = 1;
-                                        nav.search_numeric.is_integer = 1;
-                                        nav.search_numeric.int_value = (int64_t)uint_res.result;
-                                    }
-                                    else {
-                                        // Try double
-                                        DoubleResult double_res = parse_double(nav.search_pattern, nav.search_pattern_len);
-                                        if(double_res.errored == PARSENUMBER_NO_ERROR){
-                                            nav.search_numeric.is_numeric = 1;
-                                            nav.search_numeric.is_integer = 0;
-                                            nav.search_numeric.double_value = double_res.result;
-                                        }
-                                    }
-                                }
-                            }
-                            // Always set to SEARCH_QUERY if path parsing was successful
-                            nav.search_mode = SEARCH_QUERY;
-                        }
-                        else {
-                            // Parse failed, treat as regular search
-                            nav.search_mode = SEARCH_RECURSIVE;
-                        }
-                    }
-                    else {
-                        // Regular recursive search
-                        nav.search_mode = SEARCH_RECURSIVE;
+                    // Set up search using helper
+                    enum SearchMode mode = nav.search_mode;
+                    if(nav_setup_search(&nav, search_str, search_len, mode) != 0){
+                        // Setup failed (e.g., query parse failed), fall back to recursive
+                        nav_setup_search(&nav, search_str, search_len, SEARCH_RECURSIVE);
                     }
 
                     // Perform search
@@ -6587,6 +6859,20 @@ main(int argc, const char* const* argv){
                     else if(item->value.kind == DRJSON_STRING){
                         (void)drjson_get_str_and_len(nav.jctx, item->value, &search_text, &search_len);
                     }
+                    // If value is a number, convert it to string for searching
+                    else if(item->value.kind == DRJSON_INTEGER || item->value.kind == DRJSON_UINTEGER || item->value.kind == DRJSON_NUMBER){
+                        static char number_buf[64];
+                        if(item->value.kind == DRJSON_INTEGER){
+                            search_len = (size_t)snprintf(number_buf, sizeof(number_buf), "%lld", (long long)item->value.integer);
+                        }
+                        else if(item->value.kind == DRJSON_UINTEGER){
+                            search_len = (size_t)snprintf(number_buf, sizeof(number_buf), "%llu", (unsigned long long)item->value.uinteger);
+                        }
+                        else {
+                            search_len = (size_t)snprintf(number_buf, sizeof(number_buf), "%g", item->value.number);
+                        }
+                        search_text = number_buf;
+                    }
 
                     // If we found text, search for it
                     if(search_text && search_len > 0){
@@ -6595,6 +6881,34 @@ main(int argc, const char* const* argv){
                         for(size_t i = 0; i < search_len; i++){
                             le_append_char(&nav.search_buffer, search_text[i]);
                         }
+                        // Set search mode and parse as number
+                        nav.search_mode = SEARCH_RECURSIVE;
+                        nav.search_numeric.is_numeric = 0;
+
+                        // Try to parse as number
+                        Int64Result int_res = parse_int64(search_text, search_len);
+                        if(int_res.errored == PARSENUMBER_NO_ERROR){
+                            nav.search_numeric.is_numeric = 1;
+                            nav.search_numeric.is_integer = 1;
+                            nav.search_numeric.int_value = int_res.result;
+                        }
+                        else {
+                            Uint64Result uint_res = parse_uint64(search_text, search_len);
+                            if(uint_res.errored == PARSENUMBER_NO_ERROR){
+                                nav.search_numeric.is_numeric = 1;
+                                nav.search_numeric.is_integer = 1;
+                                nav.search_numeric.int_value = (int64_t)uint_res.result;
+                            }
+                            else {
+                                DoubleResult double_res = parse_double(search_text, search_len);
+                                if(double_res.errored == PARSENUMBER_NO_ERROR){
+                                    nav.search_numeric.is_numeric = 1;
+                                    nav.search_numeric.is_integer = 0;
+                                    nav.search_numeric.double_value = double_res.result;
+                                }
+                            }
+                        }
+
                         // Perform recursive search immediately
                         nav_search_recursive(&nav);
                         nav_center_cursor(&nav, globals.screenh);
