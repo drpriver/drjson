@@ -40,7 +40,7 @@ typedef long long ssize_t;
 #include <stdlib.h>
 #include "TUI/tui_get_input.h"
 #include "TUI/tui_get_input.c"
-#include "lineedit.h"
+#include "TUI/lineedit.h"
 #define DRJSON_API static inline
 #include "drjson.h"
 // Access to private APIs

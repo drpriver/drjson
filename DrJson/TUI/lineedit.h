@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stddef.h>
-#include "long_string.h"
+#include "../long_string.h"
 
 // Define key codes (should match caller's definitions)
 enum {
