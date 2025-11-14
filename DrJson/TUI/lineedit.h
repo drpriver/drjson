@@ -4,26 +4,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include "../long_string.h"
-
-// Define key codes (should match caller's definitions)
-enum {
-    LE_CTRL_A = 1,
-    LE_CTRL_B = 2,
-    LE_CTRL_D = 4,
-    LE_CTRL_E = 5,
-    LE_CTRL_F = 6,
-    LE_CTRL_H = 8,
-    LE_CTRL_K = 11,
-    LE_CTRL_U = 21,
-    LE_CTRL_W = 23,
-    LE_BACKSPACE = 127,
-    LE_DELETE = -1,
-    LE_LEFT = -4,
-    LE_RIGHT = -5,
-    LE_HOME = -6,
-    LE_END = -7,
-};
-
+#include "tui_get_input.h"
 
 // History for line editors
 typedef struct LineEditorHistory LineEditorHistory;
@@ -330,43 +311,43 @@ int
 le_handle_key(LineEditor* le, int key, _Bool reset_history){
     // Editing operations (reset history if requested)
     switch(key){
-        case LE_BACKSPACE:
-        case LE_CTRL_H:
+        case BACKSPACE:
+        case CTRL_H:
             if(reset_history) le_history_reset(le);
             le_backspace(le);
             return 1;
-        case LE_DELETE:
-        case LE_CTRL_D:
+        case DELETE:
+        case CTRL_D:
             if(reset_history) le_history_reset(le);
             le_delete(le);
             return 1;
-        case LE_CTRL_K:
+        case CTRL_K:
             if(reset_history) le_history_reset(le);
             le_kill_line(le);
             return 1;
-        case LE_CTRL_U:
+        case CTRL_U:
             if(reset_history) le_history_reset(le);
             le_kill_whole_line(le);
             return 1;
-        case LE_CTRL_W:
+        case CTRL_W:
             if(reset_history) le_history_reset(le);
             le_delete_word_backward(le);
             return 1;
         // Cursor movement operations (don't reset history)
-        case LE_LEFT:
-        case LE_CTRL_B:
+        case LEFT:
+        case CTRL_B:
             le_move_left(le);
             return 1;
-        case LE_RIGHT:
-        case LE_CTRL_F:
+        case RIGHT:
+        case CTRL_F:
             le_move_right(le);
             return 1;
-        case LE_HOME:
-        case LE_CTRL_A:
+        case HOME:
+        case CTRL_A:
             le_move_home(le);
             return 1;
-        case LE_END:
-        case LE_CTRL_E:
+        case END:
+        case CTRL_E:
             le_move_end(le);
             return 1;
         default:
