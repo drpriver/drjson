@@ -84,6 +84,7 @@ static TestFunc TestSubstringMatchFunc;
 static TestFunc TestGlobMatch;
 static TestFunc TestNavFindParent;
 static TestFunc TestGetTypeRank;
+static TestFunc TestNavCollapseAll;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestNumericParsing);
@@ -148,6 +149,7 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestGlobMatch);
     RegisterTest(TestNavFindParent);
     RegisterTest(TestGetTypeRank);
+    RegisterTest(TestNavCollapseAll);
     return test_main(argc, argv, NULL);
 }
 
@@ -3001,6 +3003,58 @@ TestFunction(TestGetTypeRank){
     TestExpectEquals(arr_rank, 4);
     TestExpectEquals(obj_rank, 5);
 
+    drjson_ctx_free_all(ctx);
+    TESTEND();
+}
+
+// Test nav_collapse_all - should not collapse the root
+TestFunction(TestNavCollapseAll){
+    TESTBEGIN();
+
+    DrJsonContext* ctx = drjson_create_ctx(drjson_stdc_allocator());
+    TestAssert(ctx != NULL);
+
+    // Create nested structure
+    LongString json = LS("{\"arr\": [1, 2, 3], \"obj\": {\"x\": 10}, \"num\": 42}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav = {0};
+    nav.jctx = ctx;
+    nav.root = root;
+
+    // Expand root and children
+    uint64_t root_id = nav_get_container_id(root);
+    bs_add(&nav.expanded, root_id);
+
+    DrJsonValue arr = drjson_query(ctx, root, "arr", 3);
+    uint64_t arr_id = nav_get_container_id(arr);
+    bs_add(&nav.expanded, arr_id);
+
+    DrJsonValue obj = drjson_query(ctx, root, "obj", 3);
+    uint64_t obj_id = nav_get_container_id(obj);
+    bs_add(&nav.expanded, obj_id);
+
+    nav_rebuild(&nav);
+
+    // Verify root and children are expanded
+    TestExpectTrue(nav_is_expanded(&nav, root));
+    TestExpectTrue(nav_is_expanded(&nav, arr));
+    TestExpectTrue(nav_is_expanded(&nav, obj));
+
+    // Collapse all
+    nav_collapse_all(&nav);
+
+    // Root should still be expanded
+    TestExpectTrue(nav_is_expanded(&nav, root));
+
+    // Children should be collapsed
+    TestExpectFalse(nav_is_expanded(&nav, arr));
+    TestExpectFalse(nav_is_expanded(&nav, obj));
+
+    // Cleanup
+    if(nav.items) free(nav.items);
+    if(nav.expanded.ids) free(nav.expanded.ids);
     drjson_ctx_free_all(ctx);
     TESTEND();
 }

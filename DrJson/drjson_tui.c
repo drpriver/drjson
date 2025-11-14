@@ -1142,6 +1142,10 @@ static inline
 void
 nav_collapse_all(JsonNav* nav){
     bs_clear(&nav->expanded);
+    // Keep the root expanded
+    if(nav_is_container(nav->root)){
+        bs_add(&nav->expanded, nav_get_container_id(nav->root));
+    }
     nav->cursor_pos = 0;
     nav->scroll_offset = 0;
     nav->needs_rebuild = 1;
