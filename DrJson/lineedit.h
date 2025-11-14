@@ -5,6 +5,26 @@
 #include <stddef.h>
 #include "long_string.h"
 
+// Define key codes (should match caller's definitions)
+enum {
+    LE_CTRL_A = 1,
+    LE_CTRL_B = 2,
+    LE_CTRL_D = 4,
+    LE_CTRL_E = 5,
+    LE_CTRL_F = 6,
+    LE_CTRL_H = 8,
+    LE_CTRL_K = 11,
+    LE_CTRL_U = 21,
+    LE_CTRL_W = 23,
+    LE_BACKSPACE = 127,
+    LE_DELETE = -1,
+    LE_LEFT = -4,
+    LE_RIGHT = -5,
+    LE_HOME = -6,
+    LE_END = -7,
+};
+
+
 // History for line editors
 typedef struct LineEditorHistory LineEditorHistory;
 struct LineEditorHistory {
@@ -308,70 +328,50 @@ le_history_reset(LineEditor* le){
 static inline
 int
 le_handle_key(LineEditor* le, int key, _Bool reset_history){
-    // Define key codes (should match caller's definitions)
-    enum {
-        LE_CTRL_A = 1,
-        LE_CTRL_B = 2,
-        LE_CTRL_D = 4,
-        LE_CTRL_E = 5,
-        LE_CTRL_F = 6,
-        LE_CTRL_H = 8,
-        LE_CTRL_K = 11,
-        LE_CTRL_U = 21,
-        LE_CTRL_W = 23,
-        LE_BACKSPACE = 127,
-        LE_DELETE = -1,
-        LE_LEFT = -4,
-        LE_RIGHT = -5,
-        LE_HOME = -6,
-        LE_END = -7,
-    };
-
     // Editing operations (reset history if requested)
-    if(key == LE_BACKSPACE || key == 127 || key == LE_CTRL_H){
-        if(reset_history) le_history_reset(le);
-        le_backspace(le);
-        return 1;
+    switch(key){
+        case LE_BACKSPACE:
+        case LE_CTRL_H:
+            if(reset_history) le_history_reset(le);
+            le_backspace(le);
+            return 1;
+        case LE_DELETE:
+        case LE_CTRL_D:
+            if(reset_history) le_history_reset(le);
+            le_delete(le);
+            return 1;
+        case LE_CTRL_K:
+            if(reset_history) le_history_reset(le);
+            le_kill_line(le);
+            return 1;
+        case LE_CTRL_U:
+            if(reset_history) le_history_reset(le);
+            le_kill_whole_line(le);
+            return 1;
+        case LE_CTRL_W:
+            if(reset_history) le_history_reset(le);
+            le_delete_word_backward(le);
+            return 1;
+        // Cursor movement operations (don't reset history)
+        case LE_LEFT:
+        case LE_CTRL_B:
+            le_move_left(le);
+            return 1;
+        case LE_RIGHT:
+        case LE_CTRL_F:
+            le_move_right(le);
+            return 1;
+        case LE_HOME:
+        case LE_CTRL_A:
+            le_move_home(le);
+            return 1;
+        case LE_END:
+        case LE_CTRL_E:
+            le_move_end(le);
+            return 1;
+        default:
+            return 0; // Key not handled
     }
-    else if(key == LE_DELETE || key == LE_CTRL_D){
-        if(reset_history) le_history_reset(le);
-        le_delete(le);
-        return 1;
-    }
-    else if(key == LE_CTRL_K){
-        if(reset_history) le_history_reset(le);
-        le_kill_line(le);
-        return 1;
-    }
-    else if(key == LE_CTRL_U){
-        if(reset_history) le_history_reset(le);
-        le_kill_whole_line(le);
-        return 1;
-    }
-    else if(key == LE_CTRL_W){
-        if(reset_history) le_history_reset(le);
-        le_delete_word_backward(le);
-        return 1;
-    }
-    // Cursor movement operations (don't reset history)
-    else if(key == LE_LEFT || key == LE_CTRL_B){
-        le_move_left(le);
-        return 1;
-    }
-    else if(key == LE_RIGHT || key == LE_CTRL_F){
-        le_move_right(le);
-        return 1;
-    }
-    else if(key == LE_HOME || key == LE_CTRL_A){
-        le_move_home(le);
-        return 1;
-    }
-    else if(key == LE_END || key == LE_CTRL_E){
-        le_move_end(le);
-        return 1;
-    }
-
-    return 0; // Key not handled
 }
 
 #endif

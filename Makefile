@@ -62,7 +62,7 @@ Bin/test_tui$(EXE): DrJson/test_drjson_tui.c | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_tui.dep -fvisibility=hidden -I. -g
 
 Bin/test_tui_san$(EXE): DrJson/test_drjson_tui.c | Bin Deps
-	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_tui.dep -fvisibility=hidden -I. -g -fsanitize=address,undefined
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_tui_san.dep -fvisibility=hidden -I. -g -fsanitize=address,undefined
 
 README.html: README.md README.css
 	pandoc README.md README.css -f markdown -o $@ -s --toc
