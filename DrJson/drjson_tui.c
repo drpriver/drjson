@@ -2168,14 +2168,14 @@ static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 static const Command commands[] = {
     {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
     {SV("h"),     SV(":h"), SV("  Show help"),         cmd_help},
-    {SV("open"),  SV(":open <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("o"),     SV(":o <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("edit"),  SV(":edit <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("e"),     SV(":e <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("reload"), SV(":reload"), SV("  Reload file from disk"), cmd_reload},
-    {SV("e!"),    SV(":e!"), SV("  Reload file from disk"), cmd_reload},
-    {SV("save"),  SV(":save <file>"), SV("  Save JSON to <file>"), cmd_write},
-    {SV("w"),     SV(":w <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("open"),  SV(":open [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("o"),     SV(":o [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("edit"),  SV(":edit [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("e"),     SV(":e [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("reload"), SV(":reload"), SV("  Reload file from disk (preserves braceless)"), cmd_reload},
+    {SV("e!"),    SV(":e!"), SV("  Reload file from disk (preserves braceless)"), cmd_reload},
+    {SV("save"),  SV(":save [--braceless|--no-braceless] <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("w"),     SV(":w [--braceless|--no-braceless] <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("quit"),  SV(":quit"), SV("  Quit"),              cmd_quit},
     {SV("q"),     SV(":q"), SV("  Quit"),              cmd_quit},
     {SV("exit"),  SV(":exit"), SV("  Quit"),              cmd_quit},
@@ -2211,7 +2211,7 @@ enum {
 
 static
 int
-nav_load_file(JsonNav* nav, const char* filepath){
+nav_load_file(JsonNav* nav, const char* filepath, _Bool use_braceless){
     LongString file_content = {0};
     if(read_file(filepath, &file_content) != 0){
         nav_set_messagef(nav, "Error: Could not read file '%s'", filepath);
@@ -2225,21 +2225,23 @@ nav_load_file(JsonNav* nav, const char* filepath){
         .end = file_content.text + file_content.length,
         .depth = 0,
     };
-    unsigned parse_flags = 0;
+    unsigned parse_flags = DRJSON_PARSE_FLAG_ERROR_ON_TRAILING;
     if(globals.intern) parse_flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
+    if(use_braceless) parse_flags |= DRJSON_PARSE_FLAG_BRACELESS_OBJECT;
     DrJsonValue new_root = drjson_parse(&pctx, parse_flags);
-
-    free((void*)file_content.text); // done with this now
 
     if(new_root.kind == DRJSON_ERROR){
         size_t line=0, col=0;
         drjson_get_line_column(&pctx, &line, &col);
         nav_set_messagef(nav, "Error parsing '%s': %s at line %zu col %zu", filepath, new_root.err_mess, line, col);
+        free((void*)file_content.text);
         drjson_gc(nav->jctx, &nav->root, 1);
         return CMD_ERROR;
     }
+
+    free((void*)file_content.text); // done with this now
     nav->root = new_root;
-    nav->was_opened_with_braceless = false;  // Files opened with :open are not braceless
+    nav->was_opened_with_braceless = use_braceless;
     nav_reinit(nav);
     nav->focus_stack_count = 0;
     drjson_gc(nav->jctx, &nav->root, 1); // Free the old root and other garbage
@@ -2255,14 +2257,44 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
+    // Parse optional --braceless flag
+    _Bool use_braceless = 0;
+    const char* filename_start = args;
+    size_t filename_len = args_len;
+
+    // Check for --braceless flag
+    const char* part = args;
+    const char* end = args + args_len;
+    while(part < end && *part == ' ') part++;
+
+    if(part < end){
+        const char* word_start = part;
+        while(part < end && *part != ' ') part++;
+        size_t word_len = part - word_start;
+
+        StringView first_word = {.text = word_start, .length = word_len};
+        if(SV_equals(first_word, SV("--braceless"))){
+            use_braceless = 1;
+            // Skip to filename
+            while(part < end && *part == ' ') part++;
+            filename_start = part;
+            filename_len = end - part;
+
+            if(filename_len == 0){
+                nav_set_messagef(nav, "Error: No filename provided after --braceless");
+                return CMD_ERROR;
+            }
+        }
+    }
+
     // Expand ~ and copy filename to null-terminated buffer
     char filepath[1024];
-    if(expand_tilde_to_buffer(args, args_len, filepath, sizeof(filepath)) != 0){
+    if(expand_tilde_to_buffer(filename_start, filename_len, filepath, sizeof(filepath)) != 0){
         nav_set_messagef(nav, "Error: Could not expand path");
         return CMD_ERROR;
     }
 
-    if(nav_load_file(nav, filepath) != CMD_OK){
+    if(nav_load_file(nav, filepath, use_braceless) != CMD_OK){
         return CMD_ERROR; // nav_load_file already set the message
     }
 
@@ -2272,7 +2304,7 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
     memcpy(nav->filename, filepath, expanded_len);
     nav->filename[expanded_len] = '\0';
 
-    nav_set_messagef(nav, "Opened '%s'", filepath);
+    nav_set_messagef(nav, "Opened '%s'%s", filepath, use_braceless ? " (braceless)" : "");
     return CMD_OK;
 }
 
@@ -2284,9 +2316,49 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
+    // Parse optional --braceless or --no-braceless flags
+    _Bool use_braceless = nav->was_opened_with_braceless; // Default to current setting
+    _Bool braceless_specified = 0;
+    const char* filename_start = args;
+    size_t filename_len = args_len;
+
+    const char* part = args;
+    const char* end = args + args_len;
+
+    // Parse all flags at the beginning
+    while(part < end){
+        while(part < end && *part == ' ') part++;
+        if(part >= end) break;
+
+        const char* word_start = part;
+        while(part < end && *part != ' ') part++;
+        size_t word_len = part - word_start;
+
+        StringView word = {.text = word_start, .length = word_len};
+        if(SV_equals(word, SV("--braceless"))){
+            use_braceless = 1;
+            braceless_specified = 1;
+        }
+        else if(SV_equals(word, SV("--no-braceless"))){
+            use_braceless = 0;
+            braceless_specified = 1;
+        }
+        else {
+            // This must be the filename
+            filename_start = word_start;
+            filename_len = end - word_start;
+            break;
+        }
+    }
+
+    if(filename_len == 0){
+        nav_set_messagef(nav, "Error: No filename provided");
+        return CMD_ERROR;
+    }
+
     // Expand ~ and copy filename to null-terminated buffer
     char filepath[1024];
-    if(expand_tilde_to_buffer(args, args_len, filepath, sizeof(filepath)) != 0){
+    if(expand_tilde_to_buffer(filename_start, filename_len, filepath, sizeof(filepath)) != 0){
         nav_set_messagef(nav, "Error: Could not expand path");
         return CMD_ERROR;
     }
@@ -2298,7 +2370,7 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
-    int print_err = drjson_print_value_fp(nav->jctx, fp, nav->root, 0, DRJSON_PRETTY_PRINT | (nav->was_opened_with_braceless ? DRJSON_PRINT_BRACELESS : 0));
+    int print_err = drjson_print_value_fp(nav->jctx, fp, nav->root, 0, DRJSON_PRETTY_PRINT | (use_braceless ? DRJSON_PRINT_BRACELESS : 0));
     int close_err = fclose(fp);
 
     if(print_err || close_err){
@@ -2306,7 +2378,7 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
-    nav_set_messagef(nav, "Wrote to '%s'", filepath);
+    nav_set_messagef(nav, "Wrote to '%s'%s", filepath, braceless_specified ? (use_braceless ? " (braceless)" : " (with braces)") : "");
     return CMD_OK;
 }
 
@@ -2978,6 +3050,7 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
 
         // If doesn't start with '{', use braceless parsing
         unsigned parse_flags = (len > 0 && *txt != '{') ? DRJSON_PARSE_FLAG_BRACELESS_OBJECT : 0;
+        parse_flags |= DRJSON_PARSE_FLAG_ERROR_ON_TRAILING;
         paste_value = drjson_parse_string(nav->jctx, txt, len, parse_flags);
         free((void*)clipboard_text.text);
 
@@ -3237,7 +3310,9 @@ cmd_reload(JsonNav* nav, const char* args, size_t args_len){
         nav_set_messagef(nav, "Error: No file is currently open to reload.");
         return CMD_ERROR;
     }
-    int err = nav_load_file(nav, nav->filename);
+    // Remember the braceless flag so reload preserves it
+    _Bool was_braceless = nav->was_opened_with_braceless;
+    int err = nav_load_file(nav, nav->filename, was_braceless);
     if(err != CMD_OK)
         return CMD_ERROR;
     return CMD_OK;
@@ -3621,7 +3696,7 @@ parse_literal(DrJsonContext* ctx, const char* p, const char* end, DrJsonValue* v
         .end = end,
         .depth = 0,
     };
-    *val = drjson_parse(&pctx, DRJSON_PARSE_FLAG_NO_COPY_STRINGS);
+    *val = drjson_parse(&pctx, DRJSON_PARSE_FLAG_NO_COPY_STRINGS|DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
     if(val->kind == DRJSON_ERROR){
         return NULL;
     }
@@ -6083,7 +6158,7 @@ parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJsonValue* ou
     if(new_value.kind == DRJSON_ERROR)
         return 1;
     if(pctx.cursor != pctx.end){
-        if(len && (*txt != '"' && *txt != '\\') && new_value.kind == DRJSON_STRING){
+        if(len && (*txt != '"' && *txt != '\'') && new_value.kind == DRJSON_STRING){
             DrJsonAtom at;
             int err = drjson_atomize(jctx, txt, len, &at);
             if(err) return err;
@@ -6224,10 +6299,9 @@ main(int argc, const char* const* argv){
         .end = jsonstr.text+jsonstr.length,
         .depth = 0,
     };
-    unsigned flags = DRJSON_PARSE_FLAG_NONE;
+    unsigned flags = DRJSON_PARSE_FLAG_NO_COPY_STRINGS | DRJSON_PARSE_FLAG_ERROR_ON_TRAILING;
     if(braceless) flags |= DRJSON_PARSE_FLAG_BRACELESS_OBJECT;
     if(globals.intern) flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
-    flags |= DRJSON_PARSE_FLAG_NO_COPY_STRINGS;
     DrJsonValue document = drjson_parse(&ctx, flags);
     if(document.kind == DRJSON_ERROR){
         size_t l, c;

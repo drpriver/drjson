@@ -30,6 +30,7 @@ static TestFunc TestDoubleParsing;
 static TestFunc TestSerialization;
 static TestFunc TestPrettyPrint;
 static TestFunc TestBracelessPrint;
+static TestFunc TestTrailingContent;
 static TestFunc TestEscape;
 static TestFunc TestObject;
 static TestFunc TestPathParse;
@@ -54,6 +55,7 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSerialization);
     RegisterTest(TestPrettyPrint);
     RegisterTest(TestBracelessPrint);
+    RegisterTest(TestTrailingContent);
     RegisterTest(TestEscape);
     RegisterTest(TestObject);
     RegisterTest(TestPathParse);
@@ -390,6 +392,53 @@ TestFunction(TestBracelessPrint){
     TestExpectEquals2(SV_equals, actual_pretty, SV("\"name\": \"Alice\",\n\"age\": 30"));
 
     drjson_gc(ctx, 0, 0);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestTrailingContent){
+    TESTBEGIN();
+
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test 1: Parse with trailing content without flag should succeed
+    {
+        const char* json = "\"hello\" \"world\"";
+        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), 0);
+        TestAssertEquals((int)result.kind, DRJSON_STRING);
+    }
+
+    // Test 2: Parse with trailing content with flag should error
+    {
+        const char* json = "\"hello\" \"world\"";
+        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
+        TestAssertEquals((int)result.kind, DRJSON_ERROR);
+        TestAssertEquals(result.error_code, DRJSON_ERROR_TRAILING_CONTENT);
+    }
+
+    // Test 3: Parse without trailing content with flag should succeed
+    {
+        const char* json = "{\"name\": \"Alice\"}";
+        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
+        TestAssertEquals((int)result.kind, DRJSON_OBJECT);
+    }
+
+    // Test 4: Parse with trailing whitespace with flag should succeed
+    {
+        const char* json = "{\"name\": \"Alice\"}   \n  ";
+        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
+        TestAssertEquals((int)result.kind, DRJSON_OBJECT);
+    }
+
+    // Test 5: Array with trailing comma/content should error
+    {
+        const char* json = "[1, 2, 3], 4";
+        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
+        TestAssertEquals((int)result.kind, DRJSON_ERROR);
+        TestAssertEquals(result.error_code, DRJSON_ERROR_TRAILING_CONTENT);
+    }
+
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();

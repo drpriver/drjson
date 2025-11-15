@@ -97,7 +97,10 @@
     X(TestMoveCommand) \
     X(TestMoveEdgeCases) \
     X(TestMoveRelative) \
-    X(TestBraceless)
+    X(TestBraceless) \
+    X(TestBracelessReload) \
+    X(TestBracelessWriteFlags) \
+    X(TestBracelessOpen)
 
 // Forward declarations of test functions
 #define X(name) static TestFunc name;
@@ -4047,6 +4050,218 @@ TestFunction(TestBraceless){
 
         nav_free(&nav);
     }
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+#endif // _WIN32
+    TESTEND();
+}
+
+// Test that :reload preserves braceless flag
+TestFunction(TestBracelessReload){
+    TESTBEGIN();
+#ifndef _WIN32
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+
+    // Create a test file
+    char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    TestExpectTrue(fd >= 0);
+
+    const char* content = "name: \"test\"\nvalue: 42\n";
+    write(fd, content, strlen(content));
+    close(fd);
+
+    // Load file with braceless
+    JsonNav nav;
+    nav_init(&nav, ctx, drjson_make_null(), tmpfile, a);
+    int err = nav_load_file(&nav, tmpfile, true);
+    TestExpectEquals(err, CMD_OK);
+    TestExpectTrue(nav.was_opened_with_braceless);
+
+    // Modify the content by writing back
+    FILE* fp = fopen(tmpfile, "w");
+    fprintf(fp, "name: \"modified\"\nvalue: 99\n");
+    fclose(fp);
+
+    // Reload should preserve braceless flag
+    err = cmd_reload(&nav, "", 0);
+    TestExpectEquals(err, CMD_OK);
+    TestExpectTrue(nav.was_opened_with_braceless);
+
+    // Verify new content was loaded
+    DrJsonAtom name_atom;
+    int atomize_err = drjson_atomize(ctx, "name", 4, &name_atom);
+    TestAssert(atomize_err == 0);
+    DrJsonValue name_val = drjson_object_get_item_atom(ctx, nav.root, name_atom);
+    TestExpectEquals((int)name_val.kind, DRJSON_STRING);
+    const char* str;
+    size_t str_len;
+    int get_err = drjson_get_str_and_len(ctx, name_val, &str, &str_len);
+    TestAssert(get_err == 0);
+    StringView actual_name = {.text = str, .length = str_len};
+    TestExpectEquals2(SV_equals, actual_name, SV("modified"));
+
+    nav_free(&nav);
+    unlink(tmpfile);
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+#endif // _WIN32
+    TESTEND();
+}
+
+// Test :write with --braceless and --no-braceless flags
+TestFunction(TestBracelessWriteFlags){
+    TESTBEGIN();
+#ifndef _WIN32
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+
+    const char* json = "{\"name\": \"test\", \"version\": 1}";
+    DrJsonValue root = drjson_parse_string(ctx, json, strlen(json), 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav;
+    nav_init(&nav, ctx, root, "test.json", a);
+    nav.was_opened_with_braceless = false;  // Opened with braces
+    nav_rebuild(&nav);
+
+    // Test 1: Write with --braceless flag (override to braceless)
+    {
+        char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
+        int fd = mkstemp(tmpfile);
+        TestExpectTrue(fd >= 0);
+        close(fd);
+
+        char args[256];
+        snprintf(args, sizeof(args), "--braceless %s", tmpfile);
+        int result = cmd_write(&nav, args, strlen(args));
+        TestExpectEquals(result, CMD_OK);
+
+        // Read back and verify braceless
+        FILE* fp = fopen(tmpfile, "r");
+        TestExpectTrue(fp != NULL);
+        char buffer[1024];
+        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        buffer[bytes_read] = '\0';
+        fclose(fp);
+        unlink(tmpfile);
+
+        StringView actual = {.length = bytes_read, .text = buffer};
+        TestExpectEquals2(SV_equals, actual, SV("\"name\": \"test\",\n\"version\": 1"));
+    }
+
+    // Test 2: Write with --no-braceless flag when opened with braceless
+    {
+        nav.was_opened_with_braceless = true;  // Now opened with braceless
+
+        char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
+        int fd = mkstemp(tmpfile);
+        TestExpectTrue(fd >= 0);
+        close(fd);
+
+        char args[256];
+        snprintf(args, sizeof(args), "--no-braceless %s", tmpfile);
+        int result = cmd_write(&nav, args, strlen(args));
+        TestExpectEquals(result, CMD_OK);
+
+        // Read back and verify has braces
+        FILE* fp = fopen(tmpfile, "r");
+        TestExpectTrue(fp != NULL);
+        char buffer[1024];
+        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        buffer[bytes_read] = '\0';
+        fclose(fp);
+        unlink(tmpfile);
+
+        StringView actual = {.length = bytes_read, .text = buffer};
+        TestExpectEquals2(SV_equals, actual, SV("{\n  \"name\": \"test\",\n  \"version\": 1\n}"));
+    }
+
+    // Test 3: Write without flags defaults to current setting
+    {
+        nav.was_opened_with_braceless = true;
+
+        char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
+        int fd = mkstemp(tmpfile);
+        TestExpectTrue(fd >= 0);
+        close(fd);
+
+        int result = cmd_write(&nav, tmpfile, strlen(tmpfile));
+        TestExpectEquals(result, CMD_OK);
+
+        // Read back and verify braceless (default behavior)
+        FILE* fp = fopen(tmpfile, "r");
+        TestExpectTrue(fp != NULL);
+        char buffer[1024];
+        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        buffer[bytes_read] = '\0';
+        fclose(fp);
+        unlink(tmpfile);
+
+        StringView actual = {.length = bytes_read, .text = buffer};
+        TestExpectEquals2(SV_equals, actual, SV("\"name\": \"test\",\n\"version\": 1"));
+    }
+
+    nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+#endif // _WIN32
+    TESTEND();
+}
+
+// Test :open with --braceless flag
+TestFunction(TestBracelessOpen){
+    TESTBEGIN();
+#ifndef _WIN32
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+
+    // Create a braceless test file
+    char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    TestExpectTrue(fd >= 0);
+
+    const char* content = "name: \"test\"\nvalue: 42\n";
+    write(fd, content, strlen(content));
+    close(fd);
+
+    // Test 1: Open with --braceless flag
+    {
+        JsonNav nav;
+        nav_init(&nav, ctx, drjson_make_null(), "dummy.json", a);
+
+        char args[256];
+        snprintf(args, sizeof(args), "--braceless %s", tmpfile);
+        int result = cmd_open(&nav, args, strlen(args));
+        TestExpectEquals(result, CMD_OK);
+        TestExpectTrue(nav.was_opened_with_braceless);
+
+        // Verify content was parsed correctly
+        DrJsonAtom name_atom;
+        int atomize_err = drjson_atomize(ctx, "name", 4, &name_atom);
+        TestAssert(atomize_err == 0);
+        DrJsonValue name_val = drjson_object_get_item_atom(ctx, nav.root, name_atom);
+        TestExpectEquals((int)name_val.kind, DRJSON_STRING);
+
+        nav_free(&nav);
+    }
+
+    // Test 2: Open without --braceless flag on braceless file should fail
+    {
+        JsonNav nav;
+        nav_init(&nav, ctx, drjson_make_null(), "dummy.json", a);
+
+        int result = cmd_open(&nav, tmpfile, strlen(tmpfile));
+        TestExpectEquals(result, CMD_ERROR);  // Should fail due to trailing content
+        TestExpectFalse(nav.was_opened_with_braceless);
+
+        nav_free(&nav);
+    }
+
+    unlink(tmpfile);
 
     drjson_ctx_free_all(ctx);
     assert_all_freed();

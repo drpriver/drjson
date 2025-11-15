@@ -1064,9 +1064,20 @@ drjson_parse(DrJsonParseContext* ctx, unsigned flags){
         ctx->_copy_strings = 1;
     if(flags & DRJSON_PARSE_FLAG_INTERN_OBJECTS)
         ctx->_read_only_objects = 1;
+    DrJsonValue result;
     if(flags & DRJSON_PARSE_FLAG_BRACELESS_OBJECT)
-        return drjson_parse_braceless_object(ctx);
-    return drj_parse(ctx);
+        result = drjson_parse_braceless_object(ctx);
+    else
+        result = drj_parse(ctx);
+
+    // Check for trailing content if requested
+    if((flags & DRJSON_PARSE_FLAG_ERROR_ON_TRAILING) && result.kind != DRJSON_ERROR){
+        drj_skip_whitespace(ctx);
+        if(ctx->cursor != ctx->end){
+            return drjson_make_error(DRJSON_ERROR_TRAILING_CONTENT, "Unexpected content after JSON value");
+        }
+    }
+    return result;
 }
 
 static
@@ -3035,6 +3046,7 @@ static const char*_Nonnull const DrJsonErrorNames[] = {
     [DRJSON_ERROR_TOO_DEEP]       = "Too Many Levels of Nesting",
     [DRJSON_ERROR_TYPE_ERROR]     = "Invalid type for operation",
     [DRJSON_ERROR_INVALID_ERROR]  = "Error is Invalid",
+    [DRJSON_ERROR_TRAILING_CONTENT] = "Trailing Content After Value",
 };
 
 static const size_t DrJsonErrorNameLengths[] = {
@@ -3048,6 +3060,7 @@ static const size_t DrJsonErrorNameLengths[] = {
     [DRJSON_ERROR_TOO_DEEP]       = sizeof("Too Many Levels of Nesting")-1,
     [DRJSON_ERROR_TYPE_ERROR]     = sizeof("Invalid type for operation")-1,
     [DRJSON_ERROR_INVALID_ERROR]  = sizeof("Error is Invalid")-1,
+    [DRJSON_ERROR_TRAILING_CONTENT] = sizeof("Trailing Content After Value")-1,
 };
 
 static inline
