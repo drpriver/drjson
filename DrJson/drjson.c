@@ -2318,16 +2318,12 @@ drjson_print_value(const DrJsonContext* ctx, const DrJsonTextWriter* restrict wr
         DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
 
         if(flags & DRJSON_PRETTY_PRINT){
-            for(int i = 0; i < indent; i++)
-                drjson_buff_putc(&buffer, ' ');
-
-            int newlined = 0;
             for(size_t i = 0; i < object->count; i++){
                 DrJsonObjectPair* o = &pairs[i];
-                if(newlined)
+                if(i != 0){
                     drjson_buff_putc(&buffer, ',');
-                drjson_buff_putc(&buffer, '\n');
-                newlined = 1;
+                    drjson_buff_putc(&buffer, '\n');
+                }
                 for(int ind = 0; ind < indent; ind++)
                     drjson_buff_putc(&buffer, ' ');
 

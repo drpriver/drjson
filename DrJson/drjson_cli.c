@@ -433,7 +433,7 @@ main(int argc, const char* const* argv){
             return 1;
         }
     }
-    int err = drjson_print_value_fp(jctx, outfp, result, indent, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0));
+    int err = drjson_print_value_fp(jctx, outfp, result, indent, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0)|(braceless?DRJSON_PRINT_BRACELESS:0));
     if(err){
         fprintf(stderr, "err when writing: %d\n", err);
     }

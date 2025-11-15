@@ -12,6 +12,7 @@
 #include "drjson.h"
 #include "testing.h"
 #include "test_allocator.h"
+#include "../compiler_warnings.h"
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -340,7 +341,7 @@ TestFunction(TestBracelessPrint){
     err = drjson_object_set_item_atom(ctx, obj, age, drjson_make_int(30));
     TestAssertFalse(err);
 
-    // Test braceless printing
+    // Test braceless printing (compact)
     char buff[512];
     size_t printed;
     err = drjson_print_value_mem(ctx, buff, sizeof buff, obj, 0, DRJSON_PRINT_BRACELESS | DRJSON_APPEND_ZERO, &printed);
@@ -349,9 +350,9 @@ TestFunction(TestBracelessPrint){
     TestAssert(printed);
     TestAssertEquals(buff[printed-1], '\0');
 
-    // Should not have braces
-    TestAssert(buff[0] != '{');
-    TestAssert(buff[printed-2] != '}'); // -2 because -1 is the null terminator
+    // Check exact output
+    StringView actual = {.length = printed - 1, .text = buff};
+    TestExpectEquals2(SV_equals, actual, SV("\"name\":\"Alice\",\"age\":30"));
 
     // Test round-trip: parse braceless and reserialize normally
     DrJsonValue reparsed = drjson_parse_string(ctx, buff, printed - 1, DRJSON_PARSE_FLAG_BRACELESS_OBJECT);
@@ -375,6 +376,18 @@ TestFunction(TestBracelessPrint){
     TestAssertFalse(err);
     TestAssertEquals(buff2[0], '{');
     TestAssertEquals(buff2[printed-2], '}');
+
+    // Test braceless with pretty print
+    char buff3[512];
+    err = drjson_print_value_mem(ctx, buff3, sizeof buff3, obj, 0, DRJSON_PRINT_BRACELESS | DRJSON_PRETTY_PRINT | DRJSON_APPEND_ZERO, &printed);
+    TestAssertFalse(err);
+    TestAssert(printed <= sizeof buff3);
+    TestAssert(printed);
+    TestAssertEquals(buff3[printed-1], '\0');
+
+    // Check exact output
+    StringView actual_pretty = {.length = printed - 1, .text = buff3};
+    TestExpectEquals2(SV_equals, actual_pretty, SV("\"name\": \"Alice\",\n\"age\": 30"));
 
     drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);

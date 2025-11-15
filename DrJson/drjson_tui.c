@@ -171,6 +171,7 @@ struct JsonNav {
     size_t help_lines_count;
     int help_page;            // Current help page (0-based)
     _Bool command_mode;       // In command mode (:w, :save, etc.)
+    _Bool was_opened_with_braceless;  // Whether this file was opened with --braceless
 
     // Message display
     char message[512];        // Message to display to user
@@ -2238,6 +2239,7 @@ nav_load_file(JsonNav* nav, const char* filepath){
         return CMD_ERROR;
     }
     nav->root = new_root;
+    nav->was_opened_with_braceless = false;  // Files opened with :open are not braceless
     nav_reinit(nav);
     nav->focus_stack_count = 0;
     drjson_gc(nav->jctx, &nav->root, 1); // Free the old root and other garbage
@@ -2296,7 +2298,7 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
         return CMD_ERROR;
     }
 
-    int print_err = drjson_print_value_fp(nav->jctx, fp, nav->root, 0, DRJSON_PRETTY_PRINT);
+    int print_err = drjson_print_value_fp(nav->jctx, fp, nav->root, 0, DRJSON_PRETTY_PRINT | (nav->was_opened_with_braceless ? DRJSON_PRINT_BRACELESS : 0));
     int close_err = fclose(fp);
 
     if(print_err || close_err){
@@ -5134,8 +5136,8 @@ static const StringView HELP_LINES[] = {
     SV("  dd          Delete current item"),
     SV("  o           Insert after cursor (arrays/objects)"),
     SV("  O           Insert before cursor (arrays/objects)"),
-    SV("  mj/m↓       Move item down (swap with next sibling)"),
-    SV("  mk/m↑       Move item up (swap with previous sibling)"),
+    SV("  mj/m↓/Ctrl-↓  Move item down (swap with next sibling)"),
+    SV("  mk/m↑/Ctrl-↑  Move item up (swap with previous sibling)"),
     SV(""),
     SV("Expand/Collapse:"),
     SV("  Space       Toggle expand/collapse"),
@@ -6236,6 +6238,7 @@ main(int argc, const char* const* argv){
     // Initialize navigation
     JsonNav nav;
     nav_init(&nav, jctx, document, jsonpath.text, allocator);
+    nav.was_opened_with_braceless = braceless;  // Track initial file's braceless state
 
     // Count buffer for vim-style numeric prefixes
     LineEditor count_buffer;

@@ -9,6 +9,7 @@
 //
 
 #include "testing.h"
+#include "../compiler_warnings.h"
 #include <string.h>
 
 // Include the TUI as a unity build to get access to static functions
@@ -95,7 +96,8 @@
     X(TestQuerySearchLandsOnElement) \
     X(TestMoveCommand) \
     X(TestMoveEdgeCases) \
-    X(TestMoveRelative)
+    X(TestMoveRelative) \
+    X(TestBraceless)
 
 // Forward declarations of test functions
 #define X(name) static TestFunc name;
@@ -1103,12 +1105,14 @@ TestFunction(TestMessageHandling){
     // Set a message
     nav_set_messagef(&nav, "Test message: %d", 42);
     TestExpectTrue(nav.message_length > 0);
-    TestExpectTrue(strstr(nav.message, "42") != NULL);
+    StringView mess = {.length = nav.message_length, .text = nav.message};
+    TestExpectEquals2(SV_equals, mess, SV("Test message: 42"));
 
     // Set another message (overwrites)
     nav_set_messagef(&nav, "New message");
     TestExpectTrue(nav.message_length > 0);
-    TestExpectTrue(strstr(nav.message, "New") != NULL);
+    mess = (StringView){.length = nav.message_length, .text = nav.message};
+    TestExpectEquals2(SV_equals, mess, SV("New message"));
 
     // Very long message (test truncation)
     char long_msg[1000];
@@ -3959,6 +3963,94 @@ TestFunction(TestMoveRelative){
 
     drjson_ctx_free_all(ctx);
     assert_all_freed();
+    TESTEND();
+}
+
+// Test braceless format preservation
+// mkstemp() is POSIX-only, so skip this test on Windows
+TestFunction(TestBraceless){
+    TESTBEGIN();
+#ifndef _WIN32
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+
+    // Test 1: File opened with braceless should write with braceless
+    {
+        const char* json = "{\n\"name\": \"test\",\n\"version\": 1\n}";
+        DrJsonValue root = drjson_parse_string(ctx, json, strlen(json), 0);
+        TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "test.json", a);
+        nav.was_opened_with_braceless = true;  // Mark as opened with --braceless
+        nav_rebuild(&nav);
+
+        // Write to temporary file
+        char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
+        int fd = mkstemp(tmpfile);
+        TestExpectTrue(fd >= 0);
+        close(fd);
+
+        int result = cmd_write(&nav, tmpfile, strlen(tmpfile));
+        TestExpectEquals(result, CMD_OK);
+
+        // Read back and verify it's braceless (no outer braces)
+        FILE* fp = fopen(tmpfile, "r");
+        TestExpectTrue(fp != NULL);
+
+        char buffer[1024];
+        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        buffer[bytes_read] = '\0';
+        fclose(fp);
+        unlink(tmpfile);
+
+        // Check exact braceless output (pretty-printed)
+        StringView actual = {.length = bytes_read, .text = buffer};
+        TestExpectEquals2(SV_equals, actual, SV("\"name\": \"test\",\n\"version\": 1"));
+
+        nav_free(&nav);
+    }
+
+    // Test 2: File opened without braceless should write with braces
+    {
+        const char* json = "{\n\"name\": \"test\",\n\"version\": 1\n}";
+        DrJsonValue root = drjson_parse_string(ctx, json, strlen(json), 0);
+        TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "test.json", a);
+        nav.was_opened_with_braceless = false;  // Not opened with --braceless
+        nav_rebuild(&nav);
+
+        // Write to temporary file
+        char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
+        int fd = mkstemp(tmpfile);
+        TestExpectTrue(fd >= 0);
+        close(fd);
+
+        int result = cmd_write(&nav, tmpfile, strlen(tmpfile));
+        TestExpectEquals(result, CMD_OK);
+
+        // Read back and verify it has braces
+        FILE* fp = fopen(tmpfile, "r");
+        TestExpectTrue(fp != NULL);
+
+        char buffer[1024];
+        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        buffer[bytes_read] = '\0';
+        fclose(fp);
+        unlink(tmpfile);
+
+        // Check exact output with braces (pretty-printed)
+        StringView actual_with_braces = {.length = bytes_read, .text = buffer};
+        TestExpectEquals2(SV_equals, actual_with_braces, SV("{\n  \"name\": \"test\",\n  \"version\": 1\n}"));
+
+        nav_free(&nav);
+    }
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+#endif // _WIN32
     TESTEND();
 }
 
