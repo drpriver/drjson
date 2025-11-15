@@ -596,8 +596,6 @@ alloc_array(DrJsonContext* ctx){
     return result;
 }
 
-
-
 DRJSON_API
 DrJsonValue
 drjson_make_object(DrJsonContext* ctx){
@@ -605,36 +603,6 @@ drjson_make_object(DrJsonContext* ctx){
     if(idx < 0) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom");
     return (DrJsonValue){.kind=DRJSON_OBJECT, .object_idx=idx};
 }
-
-static inline
-DrJsonValue
-drjson_make_obj_keys(DrJsonValue o){
-    o.kind = DRJSON_OBJECT_KEYS;
-    return o;
-}
-
-static inline
-DrJsonValue
-drjson_make_obj_values(DrJsonValue o){
-    o.kind = DRJSON_OBJECT_VALUES;
-    return o;
-}
-
-static inline
-DrJsonValue
-drjson_make_obj_items(DrJsonValue o){
-    o.kind = DRJSON_OBJECT_ITEMS;
-    return o;
-}
-
-#if 0
-static inline
-DrJsonValue
-drjson_make_array_view(DrJsonValue o){
-    o.kind = DRJSON_ARRAY_VIEW;
-    return o;
-}
-#endif
 
 DRJSON_API
 DrJsonValue
@@ -1283,7 +1251,13 @@ drjson_clear(const DrJsonContext* ctx, DrJsonValue v){
             DrJsonObject* odata = ctx->objects.data;
             DrJsonObject* object = &odata[v.object_idx];
             if(object->read_only) return 1;
-            drj_memset(object->object_items, 0, drjson_size_for_object_of_length(object->capacity));
+            if(object->capacity){
+                DrJsonHashIndex* idxes; DrJsonObjectPair* pairs;
+                drj_get_obj_ptrs(object->object_items, object->capacity, &idxes, &pairs);
+                (void)pairs;
+                drj_memset(idxes, 0xff, 2 * sizeof *idxes * object->capacity);
+            }
+            object->count = 0;
             return 0;
         }
         default:

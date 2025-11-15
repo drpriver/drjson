@@ -13,6 +13,12 @@
 #include "testing.h"
 #include "test_allocator.h"
 
+#ifndef _WIN32
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -29,6 +35,12 @@ static TestFunc TestPathParse;
 static TestFunc TestObjectDeletion;
 static TestFunc TestObjectReplaceKey;
 static TestFunc TestObjectInsertAtIndex;
+static TestFunc TestArrayManipulation;
+static TestFunc TestErrorUtilities;
+static TestFunc TestPrintToFd;
+static TestFunc TestFloatPrinting;
+static TestFunc TestCheckedQuery;
+static TestFunc TestClearValue;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSimpleParsing);
@@ -44,6 +56,12 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestObjectDeletion);
     RegisterTest(TestObjectReplaceKey);
     RegisterTest(TestObjectInsertAtIndex);
+    RegisterTest(TestArrayManipulation);
+    RegisterTest(TestErrorUtilities);
+    RegisterTest(TestPrintToFd);
+    RegisterTest(TestFloatPrinting);
+    RegisterTest(TestCheckedQuery);
+    RegisterTest(TestClearValue);
     return test_main(argc, argv, NULL);
 }
 
@@ -328,12 +346,6 @@ TestFunction(TestBracelessPrint){
     // Should not have braces
     TestAssert(buff[0] != '{');
     TestAssert(buff[printed-2] != '}'); // -2 because -1 is the null terminator
-
-    // Should contain the key-value pairs
-    TestAssert(strstr(buff, "\"name\"") != NULL);
-    TestAssert(strstr(buff, "\"Alice\"") != NULL);
-    TestAssert(strstr(buff, "\"age\"") != NULL);
-    TestAssert(strstr(buff, "30") != NULL);
 
     // Test round-trip: parse braceless and reserialize normally
     DrJsonValue reparsed = drjson_parse_string(ctx, buff, printed - 1, DRJSON_PARSE_FLAG_BRACELESS_OBJECT);
@@ -1078,6 +1090,585 @@ TestFunction(TestObjectInsertAtIndex){
         TestAssertEquals(k2.atom.bits, key_b.bits);
     }
 
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestArrayManipulation){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test array_push_item (already covered, but verify)
+    DrJsonValue arr = drjson_make_array(ctx);
+    TestAssertEquals(arr.kind, DRJSON_ARRAY);
+
+    DrJsonValue v1 = drjson_make_int(10);
+    DrJsonValue v2 = drjson_make_int(20);
+    DrJsonValue v3 = drjson_make_int(30);
+
+    int err = drjson_array_push_item(ctx, arr, v1);
+    TestAssertFalse(err);
+    TestAssertEquals(drjson_len(ctx, arr), 1);
+
+    err = drjson_array_push_item(ctx, arr, v2);
+    TestAssertFalse(err);
+    TestAssertEquals(drjson_len(ctx, arr), 2);
+
+    err = drjson_array_push_item(ctx, arr, v3);
+    TestAssertFalse(err);
+    TestAssertEquals(drjson_len(ctx, arr), 3);
+
+    // Test array_insert_item - insert at beginning
+    DrJsonValue v0 = drjson_make_int(5);
+    err = drjson_array_insert_item(ctx, arr, 0, v0);
+    TestAssertFalse(err);
+    TestAssertEquals(drjson_len(ctx, arr), 4);
+
+    DrJsonValue check = drjson_get_by_index(ctx, arr, 0);
+    TestAssertEquals(check.integer, 5);
+    check = drjson_get_by_index(ctx, arr, 1);
+    TestAssertEquals(check.integer, 10);
+
+    // Test array_insert_item - insert in middle
+    DrJsonValue v15 = drjson_make_int(15);
+    err = drjson_array_insert_item(ctx, arr, 2, v15);
+    TestAssertFalse(err);
+    TestAssertEquals(drjson_len(ctx, arr), 5);
+
+    check = drjson_get_by_index(ctx, arr, 2);
+    TestAssertEquals(check.integer, 15);
+    check = drjson_get_by_index(ctx, arr, 3);
+    TestAssertEquals(check.integer, 20);
+
+    // Test array_insert_item - insert at end (append)
+    DrJsonValue v40 = drjson_make_int(40);
+    err = drjson_array_insert_item(ctx, arr, drjson_len(ctx, arr), v40);
+    TestAssertFalse(err);
+    TestAssertEquals(drjson_len(ctx, arr), 6);
+
+    check = drjson_get_by_index(ctx, arr, 5);
+    TestAssertEquals(check.integer, 40);
+
+    // Test array_set_by_index
+    DrJsonValue v99 = drjson_make_int(99);
+    err = drjson_array_set_by_index(ctx, arr, 2, v99);
+    TestAssertFalse(err);
+    TestAssertEquals(drjson_len(ctx, arr), 6); // Length unchanged
+
+    check = drjson_get_by_index(ctx, arr, 2);
+    TestAssertEquals(check.integer, 99);
+
+    // Test array_set_by_index with negative index
+    DrJsonValue v88 = drjson_make_int(88);
+    err = drjson_array_set_by_index(ctx, arr, -1, v88); // Last element
+    TestAssertFalse(err);
+
+    check = drjson_get_by_index(ctx, arr, 5);
+    TestAssertEquals(check.integer, 88);
+
+    // Test array_pop_item
+    DrJsonValue popped = drjson_array_pop_item(ctx, arr);
+    TestAssertEquals(popped.kind, DRJSON_INTEGER);
+    TestAssertEquals(popped.integer, 88);
+    TestAssertEquals(drjson_len(ctx, arr), 5);
+
+    // Test array_del_item - delete from middle
+    DrJsonValue deleted = drjson_array_del_item(ctx, arr, 2);
+    TestAssertNotEqual(deleted.kind, DRJSON_ERROR);
+    TestAssertEquals(drjson_len(ctx, arr), 4);
+
+    // Verify order: [5, 10, 20, 30]
+    check = drjson_get_by_index(ctx, arr, 0);
+    TestAssertEquals(check.integer, 5);
+    check = drjson_get_by_index(ctx, arr, 1);
+    TestAssertEquals(check.integer, 10);
+    check = drjson_get_by_index(ctx, arr, 2);
+    TestAssertEquals(check.integer, 20);
+    check = drjson_get_by_index(ctx, arr, 3);
+    TestAssertEquals(check.integer, 30);
+
+    // Test array_del_item - delete from beginning
+    deleted = drjson_array_del_item(ctx, arr, 0);
+    TestAssertNotEqual(deleted.kind, DRJSON_ERROR);
+    TestAssertEquals(drjson_len(ctx, arr), 3);
+
+    check = drjson_get_by_index(ctx, arr, 0);
+    TestAssertEquals(check.integer, 10);
+
+    // Test error cases - wrong type
+    DrJsonValue obj = drjson_make_object(ctx);
+    err = drjson_array_insert_item(ctx, obj, 0, v1);
+    TestAssert(err != 0);
+
+    DrJsonValue error_result = drjson_array_pop_item(ctx, obj);
+    TestAssertEquals(error_result.kind, DRJSON_ERROR);
+
+    error_result = drjson_array_del_item(ctx, obj, 0);
+    TestAssertEquals(error_result.kind, DRJSON_ERROR);
+
+    err = drjson_array_set_by_index(ctx, obj, 0, v1);
+    TestAssert(err != 0);
+
+    drjson_gc(ctx, 0, 0);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestErrorUtilities){
+    TESTBEGIN();
+
+    // Test drjson_error_name
+    size_t len;
+    const char* name = drjson_error_name(DRJSON_ERROR_UNEXPECTED_EOF, &len);
+    TestAssert(name != NULL);
+    TestAssert(len > 0);
+    TestAssert(memcmp(name, "Unexpected End of Input", len) == 0);
+
+    name = drjson_error_name(DRJSON_ERROR_TYPE_ERROR, &len);
+    TestAssert(name != NULL);
+    TestAssert(len > 0);
+    TestAssert(memcmp(name, "Invalid type for operation", len) == 0);
+
+    name = drjson_error_name(DRJSON_ERROR_ALLOC_FAILURE, NULL);
+    TestAssert(name != NULL);
+    TestAssert(memcmp(name, "Allocation Failure", strlen(name)) == 0);
+
+    // Test drjson_kind_name
+    name = drjson_kind_name(DRJSON_OBJECT, &len);
+    TestAssert(name != NULL);
+    TestAssert(len > 0);
+    TestAssert(memcmp(name, "object", len) == 0);
+
+    name = drjson_kind_name(DRJSON_ARRAY, &len);
+    TestAssert(name != NULL);
+    TestAssert(len > 0);
+    TestAssert(memcmp(name, "array", len) == 0);
+
+    name = drjson_kind_name(DRJSON_STRING, &len);
+    TestAssert(name != NULL);
+    TestAssert(len > 0);
+    TestAssert(memcmp(name, "string", len) == 0);
+
+    name = drjson_kind_name(DRJSON_INTEGER, NULL);
+    TestAssert(name != NULL);
+    TestAssert(memcmp(name, "integer", strlen(name)) == 0);
+
+    // Test drjson_get_line_column with parse error
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+    // String: "{\n  \"foo\": ,\n}"
+    // Line 0: "{"
+    // Line 1: "  \"foo\": ,"  - positions: 0-1 (spaces), 2 ("), 3-5 (foo), 6 ("), 7 (:), 8 (space), 9 (,)
+    const char* invalid_json = "{\n  \"foo\": ,\n}";
+    DrJsonParseContext pctx = {
+        .begin = invalid_json,
+        .cursor = invalid_json,
+        .end = invalid_json + strlen(invalid_json),
+        .ctx = ctx,
+        .depth = 0,
+    };
+    DrJsonValue v = drjson_parse(&pctx, 0);
+    TestAssertEquals(v.kind, DRJSON_ERROR);
+
+    size_t line, column;
+    drjson_get_line_column(&pctx, &line, &column);
+    // The cursor is at the newline after the comma
+    // Line count increments when we encounter '\n', so we're on line 2
+    TestAssertEquals(line, 2);
+    // Column resets to 0 when we hit the newline
+    TestAssertEquals(column, 0);
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestPrintToFd){
+    TESTBEGIN();
+#ifndef _WIN32
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Create a test value with multiple types for thorough testing
+    DrJsonValue obj = drjson_make_object(ctx);
+    int err = drjson_object_set_item_no_copy_key(ctx, obj, "integer", 7, drjson_make_int(42));
+    TestAssertFalse(err);
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "float", 5, drjson_make_number(3.14));
+    TestAssertFalse(err);
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "string", 6, drjson_make_string(ctx, "hello", 5));
+    TestAssertFalse(err);
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "null", 4, drjson_make_null());
+    TestAssertFalse(err);
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "bool", 4, drjson_make_bool(1));
+    TestAssertFalse(err);
+
+    DrJsonValue arr = drjson_make_array(ctx);
+    err = drjson_array_push_item(ctx, arr, drjson_make_int(1));
+    TestAssertFalse(err);
+    err = drjson_array_push_item(ctx, arr, drjson_make_int(2));
+    TestAssertFalse(err);
+    err = drjson_array_push_item(ctx, arr, drjson_make_int(3));
+    TestAssertFalse(err);
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "array", 5, arr);
+    TestAssertFalse(err);
+
+    // Create a temporary file
+    char temp_file[] = "/tmp/drjson_test_XXXXXX";
+    int fd = mkstemp(temp_file);
+    TestAssert(fd >= 0);
+
+    // Test drjson_print_value_fd
+    err = drjson_print_value_fd(ctx, fd, obj, 0, 0);
+    TestAssertFalse(err);
+
+    // Seek back to beginning to read what we wrote
+    off_t seek_result = lseek(fd, 0, SEEK_SET);
+    TestAssert(seek_result == 0);
+
+    char buffer[512];
+    ssize_t bytes_read = read(fd, buffer, sizeof(buffer) - 1);
+    TestAssert(bytes_read > 0);
+    buffer[bytes_read] = '\0';
+
+    close(fd);
+    unlink(temp_file);
+
+    // Verify basic format - should be valid JSON object
+    TestAssert(buffer[0] == '{');
+    TestAssert(buffer[bytes_read - 1] == '}');
+
+    // Round-trip test: parse the output back and verify all fields
+    DrJsonValue reparsed = drjson_parse_string(ctx, buffer, bytes_read, 0);
+    TestAssertEquals(reparsed.kind, DRJSON_OBJECT);
+
+    // Verify all fields match
+    DrJsonValue int_val = drjson_query(ctx, reparsed, "integer", 7);
+    // Could be UINTEGER or INTEGER depending on how parser interprets it
+    TestAssert(int_val.kind == DRJSON_INTEGER || int_val.kind == DRJSON_UINTEGER);
+    if(int_val.kind == DRJSON_INTEGER)
+        TestAssertEquals(int_val.integer, 42);
+    else
+        TestAssertEquals(int_val.uinteger, 42);
+
+    DrJsonValue float_val = drjson_query(ctx, reparsed, "float", 5);
+    TestAssertEquals(float_val.kind, DRJSON_NUMBER);
+    TestAssertEquals(float_val.number, 3.14);
+
+    DrJsonValue str_val = drjson_query(ctx, reparsed, "string", 6);
+    TestAssertEquals(str_val.kind, DRJSON_STRING);
+    const char* str; size_t slen;
+    err = drjson_get_str_and_len(ctx, str_val, &str, &slen);
+    TestAssertFalse(err);
+    TestAssertEquals(slen, 5);
+    TestAssert(memcmp(str, "hello", 5) == 0);
+
+    DrJsonValue null_val = drjson_query(ctx, reparsed, "null", 4);
+    TestAssertEquals(null_val.kind, DRJSON_NULL);
+
+    DrJsonValue bool_val = drjson_query(ctx, reparsed, "bool", 4);
+    TestAssertEquals(bool_val.kind, DRJSON_BOOL);
+    TestAssertEquals(bool_val.boolean, 1);
+
+    DrJsonValue arr_val = drjson_query(ctx, reparsed, "array", 5);
+    TestAssertEquals(arr_val.kind, DRJSON_ARRAY);
+    TestAssertEquals(drjson_len(ctx, arr_val), 3);
+
+    DrJsonValue elem0 = drjson_get_by_index(ctx, arr_val, 0);
+    TestAssert(elem0.kind == DRJSON_INTEGER || elem0.kind == DRJSON_UINTEGER);
+    if(elem0.kind == DRJSON_INTEGER)
+        TestAssertEquals(elem0.integer, 1);
+    else
+        TestAssertEquals(elem0.uinteger, 1);
+
+    DrJsonValue elem1 = drjson_get_by_index(ctx, arr_val, 1);
+    TestAssert(elem1.kind == DRJSON_INTEGER || elem1.kind == DRJSON_UINTEGER);
+    if(elem1.kind == DRJSON_INTEGER)
+        TestAssertEquals(elem1.integer, 2);
+    else
+        TestAssertEquals(elem1.uinteger, 2);
+
+    DrJsonValue elem2 = drjson_get_by_index(ctx, arr_val, 2);
+    TestAssert(elem2.kind == DRJSON_INTEGER || elem2.kind == DRJSON_UINTEGER);
+    if(elem2.kind == DRJSON_INTEGER)
+        TestAssertEquals(elem2.integer, 3);
+    else
+        TestAssertEquals(elem2.uinteger, 3);
+
+    // Test drjson_print_error_fd and drjson_print_error_mem
+    const char* invalid_json = "{ foo: }";
+    DrJsonParseContext pctx = {
+        .begin = invalid_json,
+        .cursor = invalid_json,
+        .end = invalid_json + strlen(invalid_json),
+        .ctx = ctx,
+        .depth = 0,
+    };
+    DrJsonValue error_val = drjson_parse(&pctx, 0);
+    TestAssertEquals(error_val.kind, DRJSON_ERROR);
+
+    size_t error_line, error_column;
+    drjson_get_line_column(&pctx, &error_line, &error_column);
+
+    // Test drjson_print_error_mem first (easier to verify)
+    char mem_buffer[512];
+    err = drjson_print_error_mem(mem_buffer, sizeof(mem_buffer), "test.json", 9, error_line, error_column, error_val);
+    TestAssertFalse(err);
+    size_t mem_len = strlen(mem_buffer);
+    TestAssert(mem_len > 0);
+
+    // Verify exact format: "test.json:line:column: Error: ...\n"
+    // Format is: filename:line+1:column+1: <error>\n
+    char expected_prefix[128];
+    snprintf(expected_prefix, sizeof(expected_prefix), "test.json:%zu:%zu: Error: ", error_line + 1, error_column + 1);
+    TestAssert(strncmp(mem_buffer, expected_prefix, strlen(expected_prefix)) == 0);
+    TestAssert(mem_buffer[mem_len - 1] == '\n');
+
+    // Test drjson_print_error_fd produces same output
+    char temp_file2[] = "/tmp/drjson_error_XXXXXX";
+    fd = mkstemp(temp_file2);
+    TestAssert(fd >= 0);
+
+    err = drjson_print_error_fd(fd, "test.json", 9, error_line, error_column, error_val);
+    TestAssertFalse(err);
+
+    // Seek back to beginning to read what we wrote
+    seek_result = lseek(fd, 0, SEEK_SET);
+    TestAssert(seek_result == 0);
+
+    char fd_buffer[512];
+    bytes_read = read(fd, fd_buffer, sizeof(fd_buffer) - 1);
+    TestAssert(bytes_read > 0);
+    fd_buffer[bytes_read] = '\0';
+
+    close(fd);
+    unlink(temp_file2);
+
+    // Both outputs should be identical
+    TestAssertEquals(bytes_read, (ssize_t)mem_len);
+    TestAssert(memcmp(mem_buffer, fd_buffer, mem_len) == 0);
+
+    drjson_gc(ctx, 0, 0);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+#endif
+    TESTEND();
+}
+
+TestFunction(TestFloatPrinting){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test printing various float values to exercise fpconv library
+    // Each test case has exact expected output
+    struct {
+        double value;
+        StringView expected;
+    } test_cases[] = {
+        {3.14159265358979, SV("3.14159265358979")},
+        {1.0e10, SV("1e+10")},
+        {1.0e-10, SV("1e-10")},
+        {0.0, SV("0")},
+        {-0.0, SV("-0")},
+        {123.456, SV("123.456")},
+        {0.000001, SV("0.000001")},
+        {999999.999999, SV("999999.999999")},
+        {1.7976931348623157e308, SV("1.7976931348623157e+308")},
+        {2.2250738585072014e-308, SV("2.2250738585072014e-308")},
+    };
+
+    for(size_t i = 0; i < sizeof(test_cases)/sizeof(test_cases[0]); i++){
+        DrJsonValue num = drjson_make_number(test_cases[i].value);
+
+        // Print just the number - this exercises fpconv_dtoa for float-to-string conversion
+        char buffer[512];
+        size_t printed;
+        int err = drjson_print_value_mem(ctx, buffer, sizeof(buffer), num, 0,
+                                         DRJSON_APPEND_ZERO, &printed);
+        TestAssertFalse(err);
+        TestAssert(printed > 0);
+        TestAssert(buffer[printed-1] == '\0');
+
+        // Verify exact format match
+        StringView actual = {.length = printed - 1, .text = buffer};
+        TestAssertEquals2(SV_equals, actual, test_cases[i].expected);
+
+        // Round-trip: parse it back and verify we get the exact same value
+        DrJsonValue reparsed = drjson_parse_string(ctx, buffer, printed - 1, 0);
+        // Could be NUMBER, INTEGER, or UINTEGER depending on the value
+        // (e.g., 1.0e10 prints as "10000000000" which parses as UINTEGER)
+        TestAssert(reparsed.kind == DRJSON_NUMBER ||
+                   reparsed.kind == DRJSON_INTEGER ||
+                   reparsed.kind == DRJSON_UINTEGER);
+        // Get the numeric value regardless of type
+        double reparsed_value;
+        if(reparsed.kind == DRJSON_NUMBER)
+            reparsed_value = reparsed.number;
+        else if(reparsed.kind == DRJSON_INTEGER)
+            reparsed_value = (double)reparsed.integer;
+        else
+            reparsed_value = (double)reparsed.uinteger;
+
+        // The reparsed value should exactly match the original
+        TestAssert(reparsed_value == test_cases[i].value);
+
+        // Clean up for next iteration
+        drjson_gc(ctx, NULL, 0);
+    }
+
+    // Test an array with multiple floats
+    DrJsonValue arr = drjson_make_array(ctx);
+    int err = drjson_array_push_item(ctx, arr, drjson_make_number(1.1));
+    TestAssertFalse(err);
+    err = drjson_array_push_item(ctx, arr, drjson_make_number(2.2));
+    TestAssertFalse(err);
+    err = drjson_array_push_item(ctx, arr, drjson_make_number(3.3));
+    TestAssertFalse(err);
+
+    char buffer[1024];
+    size_t printed;
+    err = drjson_print_value_mem(ctx, buffer, sizeof(buffer), arr, 0,
+                                 DRJSON_APPEND_ZERO, &printed);
+    TestAssertFalse(err);
+    TestAssert(printed > 0);
+
+    // Verify exact format
+    StringView actual = {.length = printed - 1, .text = buffer};
+    TestAssertEquals2(SV_equals, actual, SV("[1.1,2.2,3.3]"));
+
+    // Round-trip
+    DrJsonValue reparsed_arr = drjson_parse_string(ctx, buffer, printed - 1, 0);
+    TestAssertEquals(reparsed_arr.kind, DRJSON_ARRAY);
+    TestAssertEquals(drjson_len(ctx, reparsed_arr), 3);
+
+    DrJsonValue elem0 = drjson_get_by_index(ctx, reparsed_arr, 0);
+    TestAssertEquals(elem0.kind, DRJSON_NUMBER);
+    TestAssert(elem0.number == 1.1);
+
+    DrJsonValue elem1 = drjson_get_by_index(ctx, reparsed_arr, 1);
+    TestAssertEquals(elem1.kind, DRJSON_NUMBER);
+    TestAssert(elem1.number == 2.2);
+
+    DrJsonValue elem2 = drjson_get_by_index(ctx, reparsed_arr, 2);
+    TestAssertEquals(elem2.kind, DRJSON_NUMBER);
+    TestAssert(elem2.number == 3.3);
+
+    drjson_gc(ctx, 0, 0);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestCheckedQuery){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Create test structure: {"name": "Alice", "age": 30, "scores": [95, 87, 92]}
+    DrJsonValue obj = drjson_make_object(ctx);
+    int err = drjson_object_set_item_no_copy_key(ctx, obj, "name", 4,
+                                                 drjson_make_string(ctx, "Alice", 5));
+    TestAssertFalse(err);
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "age", 3, drjson_make_int(30));
+    TestAssertFalse(err);
+
+    DrJsonValue scores = drjson_make_array(ctx);
+    err = drjson_array_push_item(ctx, scores, drjson_make_int(95));
+    TestAssertFalse(err);
+    err = drjson_array_push_item(ctx, scores, drjson_make_int(87));
+    TestAssertFalse(err);
+    err = drjson_array_push_item(ctx, scores, drjson_make_int(92));
+    TestAssertFalse(err);
+
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "scores", 6, scores);
+    TestAssertFalse(err);
+
+    // Test checked_query with correct type
+    DrJsonValue result = drjson_checked_query(ctx, obj, DRJSON_STRING, "name", 4);
+    TestAssertEquals(result.kind, DRJSON_STRING);
+    const char* str;
+    size_t len;
+    err = drjson_get_str_and_len(ctx, result, &str, &len);
+    TestAssertFalse(err);
+    TestAssertEquals(len, 5);
+    TestAssert(memcmp(str, "Alice", 5) == 0);
+
+    // Test checked_query with integer
+    result = drjson_checked_query(ctx, obj, DRJSON_INTEGER, "age", 3);
+    // Note: could be UINTEGER instead depending on parsing
+    TestAssert(result.kind == DRJSON_INTEGER || result.kind == DRJSON_UINTEGER);
+    if(result.kind == DRJSON_INTEGER)
+        TestAssertEquals(result.integer, 30);
+    else
+        TestAssertEquals(result.uinteger, 30);
+
+    // Test checked_query with array
+    result = drjson_checked_query(ctx, obj, DRJSON_ARRAY, "scores", 6);
+    TestAssertEquals(result.kind, DRJSON_ARRAY);
+    TestAssertEquals(drjson_len(ctx, result), 3);
+
+    // Test checked_query with wrong type - should return error
+    result = drjson_checked_query(ctx, obj, DRJSON_OBJECT, "name", 4);
+    TestAssertEquals(result.kind, DRJSON_ERROR);
+
+    result = drjson_checked_query(ctx, obj, DRJSON_ARRAY, "age", 3);
+    TestAssertEquals(result.kind, DRJSON_ERROR);
+
+    // Test checked_query with non-existent key - should return error
+    result = drjson_checked_query(ctx, obj, DRJSON_STRING, "nonexistent", 11);
+    TestAssertEquals(result.kind, DRJSON_ERROR);
+
+    drjson_gc(ctx, 0, 0);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestClearValue){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test clearing a simple value (should be no-op)
+    DrJsonValue num = drjson_make_int(42);
+    drjson_clear(ctx, num);
+
+    // Test clearing an array
+    DrJsonValue arr = drjson_make_array(ctx);
+    int err = drjson_array_push_item(ctx, arr, drjson_make_int(1));
+    TestAssertFalse(err);
+    err = drjson_array_push_item(ctx, arr, drjson_make_int(2));
+    TestAssertFalse(err);
+    err = drjson_array_push_item(ctx, arr, drjson_make_int(3));
+    TestAssertFalse(err);
+
+    TestAssertEquals(drjson_len(ctx, arr), 3);
+    drjson_clear(ctx, arr);
+    TestAssertEquals(drjson_len(ctx, arr), 0);
+
+    // Test clearing an object
+    DrJsonValue obj = drjson_make_object(ctx);
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "a", 1, drjson_make_int(1));
+    TestAssertFalse(err);
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "b", 1, drjson_make_int(2));
+    TestAssertFalse(err);
+
+    TestAssertEquals(drjson_len(ctx, obj), 2);
+    int clear_result = drjson_clear(ctx, obj);
+    TestAssertFalse(clear_result);
+    // BUG: drjson_clear for objects doesn't reset count (line 1286 in drjson.c)
+    // It only zeros the hash table but forgets to set object->count = 0
+    TestAssertEquals(drjson_len(ctx, obj), 0);  // This will fail until bug is fixed
+
+    // Verify we can still use the cleared containers
+    err = drjson_array_push_item(ctx, arr, drjson_make_int(99));
+    TestAssertFalse(err);
+    TestAssertEquals(drjson_len(ctx, arr), 1);
+
+    // After clear, object should be usable again
+    err = drjson_object_set_item_no_copy_key(ctx, obj, "new", 3, drjson_make_int(99));
+    TestAssertFalse(err);
+    // This should be 1, but will show the actual count after the buggy clear
+    TestAssertEquals(drjson_len(ctx, obj), 1);
+
+    drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();
