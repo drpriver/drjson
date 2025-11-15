@@ -11,65 +11,162 @@ int
 cmd_param_parse_signature(StringView sig, CmdParams* params){
     params->count = 0;
     _Bool optional = 0;
-    _Bool in_string = 0;
+    _Bool in_angle = 0;
     const char* p = sig.text;
     const char* end = sig.text + sig.length;
-    const char* current = NULL;
-    // Skip leading command
-    for(;p!=end;p++){
-        if(*p == ' ')
-            break;
-    }
-    for(;p!=end;){
-        // skip leading whitespace
-        if(*p == ' '){
+    const char* token_start = NULL;
+    _Bool expecting_alt = 0;  // We just saw | and are expecting an alternative name
+
+    // Skip command name (first token before space)
+    for(; p != end && *p != ' '; p++);
+    // Skip spaces after command
+    for(; p != end && *p == ' '; p++);
+
+    enum {MAX_PARAMS = sizeof params->params / sizeof params->params[0]};
+
+    while(p < end){
+        char c = *p;
+
+        if(c == ' '){
+            if(token_start && !in_angle){
+                // Complete the current token as a flag
+                size_t len = p - token_start;
+                if(params->count >= MAX_PARAMS) return 1;
+
+                if(expecting_alt && params->count > 0){
+                    // This is the second name for the previous param
+                    params->params[params->count - 1].names[1] =
+                        (StringView){.length = len, .text = token_start};
+                    expecting_alt = 0;
+                } else {
+                    CmdParam* param = &params->params[params->count++];
+                    param->names[0] = (StringView){.length = len, .text = token_start};
+                    param->names[1] = (StringView){0, NULL};
+                    param->kind = CMD_PARAM_FLAG;
+                    param->optional = optional;
+                }
+                token_start = NULL;
+            }
             p++;
             continue;
         }
-        if(*p == '['){
-            if(optional) return 1; // TODO: better error reporting
+
+        if(c == '['){
+            if(optional || in_angle) return 1;
             optional = 1;
             p++;
             continue;
         }
-        if(*p == '<'){
-            if(in_string) return 1;
-            in_string = 1;
-            p++;
-            current = p;
-            continue;
-        }
-        if(*p == ']'){
+
+        if(c == ']'){
             if(!optional) return 1;
+
+            if(token_start && !in_angle){
+                // Complete pending token
+                size_t len = p - token_start;
+                if(params->count >= MAX_PARAMS) return 1;
+
+                if(expecting_alt && params->count > 0){
+                    params->params[params->count - 1].names[1] =
+                        (StringView){.length = len, .text = token_start};
+                    expecting_alt = 0;
+                } else {
+                    CmdParam* param = &params->params[params->count++];
+                    param->names[0] = (StringView){.length = len, .text = token_start};
+                    param->names[1] = (StringView){0, NULL};
+                    param->kind = CMD_PARAM_FLAG;
+                    param->optional = optional;
+                }
+                token_start = NULL;
+            }
+
             optional = 0;
             p++;
-            if(current){
-                // TODO
-                current = NULL;
+            continue;
+        }
+
+        if(c == '<'){
+            if(in_angle) return 1;
+            in_angle = 1;
+            p++;
+            token_start = p;
+            continue;
+        }
+
+        if(c == '>'){
+            if(!in_angle || !token_start) return 1;
+
+            size_t len = p - token_start;
+            if(params->count >= MAX_PARAMS) return 1;
+
+            CmdParam* param = &params->params[params->count++];
+            param->names[0] = (StringView){.length = len, .text = token_start};
+            param->names[1] = (StringView){0, NULL};
+
+            // Determine kind based on name (exact match for "file" or "dir")
+            StringView name = param->names[0];
+            if(SV_equals(name, SV("file")) || SV_equals(name, SV("dir"))){
+                param->kind = CMD_PARAM_PATH;
+            } else {
+                param->kind = CMD_PARAM_STRING;
+            }
+            param->optional = optional;
+
+            in_angle = 0;
+            token_start = NULL;
+            p++;
+            continue;
+        }
+
+        if(c == '|'){
+            if(!token_start || in_angle) return 1;
+
+            // Complete first name and expect alternative
+            size_t len = p - token_start;
+            if(params->count >= MAX_PARAMS) return 1;
+
+            CmdParam* param = &params->params[params->count++];
+            param->names[0] = (StringView){.length = len, .text = token_start};
+            param->names[1] = (StringView){0, NULL};
+            param->kind = CMD_PARAM_FLAG;
+            param->optional = optional;
+
+            expecting_alt = 1;
+            token_start = NULL;
+            p++;
+            // Next non-space char starts the alternative
+            if(p < end && *p != ' '){
+                token_start = p;
             }
             continue;
         }
-        if(*p == '>'){
-            if(!in_string) return 1;
-            if(!current) return 1;
-            in_string = 0;
-            // TODO
-            current = NULL;
-            p++;
-            continue;
-        }
-        if(*p == '|'){
-            // TODO
-            current = NULL;
-            p++;
-            continue;
-        }
-        if(!current){
-            current = p;
+
+        if(!token_start && c != ' '){
+            token_start = p;
         }
         p++;
-        continue;
     }
+
+    // Handle trailing token
+    if(token_start && !in_angle){
+        size_t len = end - token_start;
+        if(params->count >= MAX_PARAMS) return 1;
+
+        if(expecting_alt && params->count > 0){
+            params->params[params->count - 1].names[1] =
+                (StringView){.length = len, .text = token_start};
+        } else {
+            CmdParam* param = &params->params[params->count++];
+            param->names[0] = (StringView){.length = len, .text = token_start};
+            param->names[1] = (StringView){0, NULL};
+            param->kind = CMD_PARAM_FLAG;
+            param->optional = optional;
+        }
+    }
+
+    // Check for unterminated constructs
+    if(optional || in_angle) return 1;
+
     return 0;
 }
 
@@ -78,11 +175,89 @@ static
 int
 cmd_param_parse_args(StringView cmd_line, const CmdParams* params, CmdArgs* args){
     args->count = 0;
-    // TODO
-    return 1;
-    __builtin_debugtrap();
-    (void)cmd_line;
-    (void)params;
+
+    // Initialize args from params
+    for(size_t i = 0; i < params->count; i++){
+        args->args[i].param = &params->params[i];
+        args->args[i].present = 0;
+        args->args[i].consumed = 0;
+        args->args[i].content = (StringView){0, NULL};
+    }
+    args->count = params->count;
+
+    enum {MAX_NON_FLAGS=16};
+    // Collect non-flag tokens for string/path args
+    const char* non_flag_tokens[MAX_NON_FLAGS];
+    size_t non_flag_lengths[MAX_NON_FLAGS];
+    size_t non_flag_count = 0;
+
+    // Tokenize and match
+    const char* p = cmd_line.text;
+    const char* end = cmd_line.text + cmd_line.length;
+
+    while(p < end){
+        // Skip whitespace
+        while(p < end && *p == ' ') p++;
+        if(p >= end) break;
+
+        // Find token end
+        const char* token_start = p;
+        while(p < end && *p != ' ') p++;
+        size_t token_len = p - token_start;
+        StringView token = {.length = token_len, .text = token_start};
+
+        // Check if this token matches any flag param
+        _Bool matched_flag = 0;
+        for(size_t i = 0; i < params->count; i++){
+            const CmdParam* param = &params->params[i];
+            if(param->kind != CMD_PARAM_FLAG) continue;
+
+            if(SV_equals(token, param->names[0]) ||
+               (param->names[1].text && SV_equals(token, param->names[1]))){
+                // Matched this flag
+                args->args[i].present = 1;
+                args->args[i].content = token;
+                matched_flag = 1;
+                break;
+            }
+        }
+
+        if(!matched_flag){
+            // This is a non-flag token, save it for string/path args
+            if(non_flag_count < MAX_NON_FLAGS){
+                non_flag_tokens[non_flag_count] = token_start;
+                non_flag_lengths[non_flag_count] = token_len;
+                non_flag_count++;
+            }
+        }
+    }
+
+    // Build string/path arg content by concatenating non-flag tokens
+    // Preserve spaces between tokens by using the range from first to last
+    if(non_flag_count > 0){
+        const char* first = non_flag_tokens[0];
+        const char* last = non_flag_tokens[non_flag_count - 1];
+        size_t total_len = (last + non_flag_lengths[non_flag_count - 1]) - first;
+        StringView concatenated = {.length = total_len, .text = first};
+
+        // Assign to string/path param(s)
+        for(size_t i = 0; i < params->count; i++){
+            const CmdParam* param = &params->params[i];
+            if(param->kind == CMD_PARAM_STRING || param->kind == CMD_PARAM_PATH){
+                args->args[i].present = 1;
+                args->args[i].content = concatenated;
+            }
+        }
+    }
+
+    // Check for missing mandatory args
+    for(size_t i = 0; i < params->count; i++){
+        const CmdParam* param = &params->params[i];
+        if(!param->optional && !args->args[i].present){
+            return 1;  // Missing mandatory argument
+        }
+    }
+
     return 0;
 }
 

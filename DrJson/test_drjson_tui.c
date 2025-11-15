@@ -116,6 +116,21 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     return test_main(argc, argv, NULL);
 }
 
+// Helper to execute commands with printf-style formatting
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 2, 3)))
+#endif
+static int
+test_execute_commandf(JsonNav* nav, const char* fmt, ...){
+    char cmdline[1024];
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(cmdline, sizeof cmdline, fmt, args);
+    va_end(args);
+    if(len < 0 || len >= (int)sizeof cmdline) return CMD_ERROR;
+    return nav_execute_command(nav, cmdline, len);
+}
+
 // Test that number parsing works correctly for search patterns
 TestFunction(TestNumericParsing){
     TESTBEGIN();
@@ -598,7 +613,7 @@ TestFunction(TestPathBuilding){
 
     // Now test path building
     char path_buf[1024];
-    size_t len = nav_build_json_path(&nav, path_buf, sizeof(path_buf));
+    size_t len = nav_build_json_path(&nav, path_buf, sizeof path_buf);
 
     // Should produce something (even if just empty or root)
     TestExpectTrue(len >= 0);
@@ -849,7 +864,7 @@ TestFunction(TestCommandLookup){
     const Command* cmd = NULL;
 
     // Look for "help" command
-    for(size_t i = 0; i < sizeof(commands)/sizeof(commands[0]); i++){
+    for(size_t i = 0; i < sizeof commands /sizeof commands[0]; i++){
         if(SV_equals(commands[i].name, SV("help"))){
             cmd = &commands[i];
             break;
@@ -862,7 +877,7 @@ TestFunction(TestCommandLookup){
 
     // Look for "quit" command
     cmd = NULL;
-    for(size_t i = 0; i < sizeof(commands)/sizeof(commands[0]); i++){
+    for(size_t i = 0; i < sizeof commands/sizeof commands[0]; i++){
         if(SV_equals(commands[i].name, SV("quit")) || SV_equals(commands[i].name, SV("q"))){
             cmd = &commands[i];
             break;
@@ -872,7 +887,7 @@ TestFunction(TestCommandLookup){
 
     // Look for "yank" command
     cmd = NULL;
-    for(size_t i = 0; i < sizeof(commands)/sizeof(commands[0]); i++){
+    for(size_t i = 0; i < sizeof commands/sizeof commands[0]; i++){
         if(SV_equals(commands[i].name, SV("yank")) || SV_equals(commands[i].name, SV("y"))){
             cmd = &commands[i];
             break;
@@ -882,7 +897,7 @@ TestFunction(TestCommandLookup){
 
     // Look for "filter" command
     cmd = NULL;
-    for(size_t i = 0; i < sizeof(commands)/sizeof(commands[0]); i++){
+    for(size_t i = 0; i < sizeof commands/sizeof commands[0]; i++){
         if(SV_equals(commands[i].name, SV("filter")) || SV_equals(commands[i].name, SV("f"))){
             cmd = &commands[i];
             break;
@@ -1121,12 +1136,12 @@ TestFunction(TestMessageHandling){
 
     // Very long message (test truncation)
     char long_msg[1000];
-    memset(long_msg, 'A', sizeof(long_msg) - 1);
-    long_msg[sizeof(long_msg) - 1] = '\0';
+    memset(long_msg, 'A', sizeof long_msg - 1);
+    long_msg[sizeof long_msg - 1] = '\0';
     nav_set_messagef(&nav, "%s", long_msg);
     TestExpectTrue(nav.message_length > 0);
     // Should be truncated to fit in message buffer (512 bytes)
-    TestExpectTrue(nav.message_length < sizeof(nav.message));
+    TestExpectTrue(nav.message_length < sizeof nav.message);
 
     drjson_ctx_free_all(ctx);
     assert_all_freed();
@@ -1199,7 +1214,7 @@ TestFunction(TestLargeJSONStructures){
     large_arr[pos++] = '[';
     for(int i = 0; i < 100; i++){
         char buf[32];
-        int n = snprintf(buf, sizeof(buf), "%d,", i);
+        int n = snprintf(buf, sizeof buf, "%d,", i);
         memcpy(large_arr + pos, buf, n);
         pos += n;
     }
@@ -1653,7 +1668,7 @@ TestFunction(TestFlatViewMode){
     json[json_pos++] = '[';
     for(int i = 0; i < 25; i++){
         char buf[16];
-        int n = snprintf(buf, sizeof(buf), "%d%s", i, (i < 24) ? "," : "");
+        int n = snprintf(buf, sizeof buf, "%d%s", i, (i < 24) ? "," : "");
         memcpy(json + json_pos, buf, n);
         json_pos += n;
     }
@@ -1719,7 +1734,7 @@ TestFunction(TestSortingArrays){
     nav.cursor_pos = 0;
 
     // Sort ascending (default)
-    int result = cmd_sort(&nav, "", 0);
+    int result = nav_execute_command(&nav, "sort", 4);
     TestExpectEquals(result, CMD_OK);
 
     // Verify array is sorted
@@ -1734,7 +1749,7 @@ TestFunction(TestSortingArrays){
     TestExpectTrue(compare_values(elem0, elem5, ctx) < 0);
 
     // Test descending sort
-    result = cmd_sort(&nav, "desc", 4);
+    result = nav_execute_command(&nav, "sort desc", 9);
     TestExpectEquals(result, CMD_OK);
 
     sorted = nav.items[0].value;
@@ -1774,7 +1789,7 @@ TestFunction(TestSortingObjects){
     nav.cursor_pos = 0;
 
     // Sort by values ascending
-    int result = cmd_sort(&nav, "values asc", 10);
+    int result = nav_execute_command(&nav, "sort values asc", 15);
     TestExpectEquals(result, CMD_OK);
 
     // Verify object exists and has 3 items
@@ -1813,7 +1828,7 @@ TestFunction(TestFilteringArrays){
     nav.cursor_pos = 0;
 
     // Filter: keep truthy items using simple path "."
-    int result = cmd_filter(&nav, ".", 1);
+    int result = nav_execute_command(&nav, "filter .", 8);
     // Filter might fail if expression parsing isn't available, that's ok
     if(result == CMD_OK){
         // Verify filtered array
@@ -1856,7 +1871,7 @@ TestFunction(TestFilteringObjects){
     nav.cursor_pos = 0;
 
     // Filter: keep truthy values
-    int result = cmd_filter(&nav, ".", 1);
+    int result = nav_execute_command(&nav, "filter .", 8);
     // Filter might fail if expression parsing isn't available, that's ok
     if(result == CMD_OK){
         // Verify filtered object
@@ -2101,22 +2116,22 @@ TestFunction(TestQueryCommand){
     nav.cursor_pos = 0;
 
     // Query to user (single level)
-    int result = cmd_query(&nav, "user", 4);
+    int result = nav_execute_command(&nav, "query user", 10);
     if(result == CMD_OK){
         // Cursor should have moved
         TestExpectTrue(nav.cursor_pos >= 0);
     }
 
     // Query to array element
-    result = cmd_query(&nav, "items", 5);
+    result = nav_execute_command(&nav, "query items", 11);
     // May succeed or fail depending on visibility
 
     // Query with invalid path should fail
-    result = cmd_query(&nav, "nonexistent", 11);
+    result = nav_execute_command(&nav, "query nonexistent", 17);
     TestExpectEquals(result, CMD_ERROR);
 
     // Empty query should fail
-    result = cmd_query(&nav, "", 0);
+    result = nav_execute_command(&nav, "query", 5);
     TestExpectEquals(result, CMD_ERROR);
 
     // Cleanup
@@ -2157,7 +2172,7 @@ TestFunction(TestFocusUnfocusCommands){
     // Ensure we're on a container
     if(nav_is_container(nav.items[nav.cursor_pos].value)){
         // Focus on it
-        int result = cmd_focus(&nav, "", 0);
+        int result = nav_execute_command(&nav, "focus", 5);
         TestExpectEquals(result, CMD_OK);
 
         // Focus stack should have one item
@@ -2167,7 +2182,7 @@ TestFunction(TestFocusUnfocusCommands){
         TestExpectEquals((int)nav.root.kind, DRJSON_OBJECT);
 
         // Unfocus should go back
-        result = cmd_unfocus(&nav, "", 0);
+        result = nav_execute_command(&nav, "unfocus", 7);
         TestExpectEquals(result, CMD_OK);
 
         // Focus stack should be empty
@@ -2178,7 +2193,7 @@ TestFunction(TestFocusUnfocusCommands){
     }
 
     // Unfocus when already at top should fail
-    int result = cmd_unfocus(&nav, "", 0);
+    int result = nav_execute_command(&nav, "unfocus", 7);
     TestExpectEquals(result, CMD_ERROR);
 
     // Cleanup
@@ -2610,7 +2625,7 @@ TestFunction(TestSortingWithQuery){
     nav.cursor_pos = 0;
 
     // Sort by age query
-    int result = cmd_sort(&nav, "age", 3);
+    int result = nav_execute_command(&nav, "sort age", 8);
     if(result == CMD_OK){
         // Verify array is sorted
         DrJsonValue sorted = nav.items[0].value;
@@ -3996,7 +4011,7 @@ TestFunction(TestBraceless){
         TestExpectTrue(fd >= 0);
         close(fd);
 
-        int result = cmd_write(&nav, tmpfile, strlen(tmpfile));
+        int result = test_execute_commandf(&nav, "w %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify it's braceless (no outer braces)
@@ -4004,7 +4019,7 @@ TestFunction(TestBraceless){
         TestExpectTrue(fp != NULL);
 
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
         buffer[bytes_read] = '\0';
         fclose(fp);
         unlink(tmpfile);
@@ -4033,7 +4048,7 @@ TestFunction(TestBraceless){
         TestExpectTrue(fd >= 0);
         close(fd);
 
-        int result = cmd_write(&nav, tmpfile, strlen(tmpfile));
+        int result = test_execute_commandf(&nav, "w %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify it has braces
@@ -4041,7 +4056,7 @@ TestFunction(TestBraceless){
         TestExpectTrue(fp != NULL);
 
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
         buffer[bytes_read] = '\0';
         fclose(fp);
         unlink(tmpfile);
@@ -4088,7 +4103,7 @@ TestFunction(TestBracelessReload){
     fclose(fp);
 
     // Reload should preserve braceless flag
-    err = cmd_reload(&nav, "", 0);
+    err = nav_execute_command(&nav, "reload", 6);
     TestExpectEquals(err, CMD_OK);
     TestExpectTrue(nav.was_opened_with_braceless);
 
@@ -4137,16 +4152,14 @@ TestFunction(TestBracelessWriteFlags){
         TestExpectTrue(fd >= 0);
         close(fd);
 
-        char args[256];
-        snprintf(args, sizeof(args), "--braceless %s", tmpfile);
-        int result = cmd_write(&nav, args, strlen(args));
+        int result = test_execute_commandf(&nav, "w --braceless %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify braceless
         FILE* fp = fopen(tmpfile, "r");
         TestExpectTrue(fp != NULL);
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
         buffer[bytes_read] = '\0';
         fclose(fp);
         unlink(tmpfile);
@@ -4164,16 +4177,14 @@ TestFunction(TestBracelessWriteFlags){
         TestExpectTrue(fd >= 0);
         close(fd);
 
-        char args[256];
-        snprintf(args, sizeof(args), "--no-braceless %s", tmpfile);
-        int result = cmd_write(&nav, args, strlen(args));
+        int result = test_execute_commandf(&nav, "w --no-braceless %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify has braces
         FILE* fp = fopen(tmpfile, "r");
         TestExpectTrue(fp != NULL);
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
         buffer[bytes_read] = '\0';
         fclose(fp);
         unlink(tmpfile);
@@ -4191,14 +4202,14 @@ TestFunction(TestBracelessWriteFlags){
         TestExpectTrue(fd >= 0);
         close(fd);
 
-        int result = cmd_write(&nav, tmpfile, strlen(tmpfile));
+        int result = test_execute_commandf(&nav, "w %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify braceless (default behavior)
         FILE* fp = fopen(tmpfile, "r");
         TestExpectTrue(fp != NULL);
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof(buffer)-1, fp);
+        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
         buffer[bytes_read] = '\0';
         fclose(fp);
         unlink(tmpfile);
@@ -4235,9 +4246,7 @@ TestFunction(TestBracelessOpen){
         JsonNav nav;
         nav_init(&nav, ctx, drjson_make_null(), "dummy.json", a);
 
-        char args[256];
-        snprintf(args, sizeof(args), "--braceless %s", tmpfile);
-        int result = cmd_open(&nav, args, strlen(args));
+        int result = test_execute_commandf(&nav, "open --braceless %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
         TestExpectTrue(nav.was_opened_with_braceless);
 
@@ -4256,7 +4265,7 @@ TestFunction(TestBracelessOpen){
         JsonNav nav;
         nav_init(&nav, ctx, drjson_make_null(), "dummy.json", a);
 
-        int result = cmd_open(&nav, tmpfile, strlen(tmpfile));
+        int result = test_execute_commandf(&nav, "open %s", tmpfile);
         TestExpectEquals(result, CMD_ERROR);  // Should fail due to trailing content
         TestExpectFalse(nav.was_opened_with_braceless);
 

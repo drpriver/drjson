@@ -387,12 +387,12 @@ bs_ensure_capacity(BitSet* set, size_t id, DrJsonAllocator* allocator){
         new_capacity |= new_capacity >> 32;
         new_capacity++;
 
-        size_t old_size = set->capacity * sizeof(uint64_t);
-        size_t new_size = new_capacity * sizeof(uint64_t);
+        size_t old_size = set->capacity * sizeof *set->ids;
+        size_t new_size = new_capacity * sizeof *set->ids;
         uint64_t* new_ids = allocator->realloc(allocator->user_pointer, set->ids, old_size, new_size);
         if(!new_ids) __builtin_debugtrap();
         // Zero out the new portion
-        memset(new_ids + set->capacity, 0, (new_capacity - set->capacity) * sizeof(*new_ids));
+        memset(new_ids + set->capacity, 0, (new_capacity - set->capacity) * sizeof *new_ids);
         set->ids = new_ids;
         set->capacity = new_capacity;
     }
@@ -486,8 +486,8 @@ void
 nav_append_item(JsonNav* nav, NavItem item){
     if(nav->item_count >= nav->item_capacity){
         size_t new_cap = nav->item_capacity ? nav->item_capacity * 2 : 256;
-        size_t old_size = nav->item_capacity * sizeof(NavItem);
-        size_t new_size = new_cap * sizeof(NavItem);
+        size_t old_size = nav->item_capacity * sizeof *nav->items;
+        size_t new_size = new_cap * sizeof *nav->items;
         NavItem* new_items = nav->allocator.realloc(nav->allocator.user_pointer, nav->items, old_size, new_size);
         if(!new_items) return; // allocation failed
         nav->items = new_items;
@@ -621,7 +621,7 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filena
     // Copy filename
     if(filename){
         size_t len = strlen(filename);
-        if(len >= sizeof(nav->filename)) len = sizeof(nav->filename) - 1;
+        if(len >= sizeof nav->filename) len = sizeof nav->filename - 1;
         memcpy(nav->filename, filename, len);
         nav->filename[len] = '\0';
     }
@@ -688,13 +688,13 @@ static inline
 void
 nav_free(JsonNav* nav){
     if(nav->items)
-        nav->allocator.free(nav->allocator.user_pointer, nav->items, nav->item_capacity * sizeof(NavItem));
+        nav->allocator.free(nav->allocator.user_pointer, nav->items, nav->item_capacity * sizeof *nav->items);
     bs_free(&nav->expanded, &nav->allocator);
     le_free(&nav->search_buffer);
     le_history_free(&nav->search_history);
     le_free(&nav->command_buffer);
     if(nav->focus_stack)
-        nav->allocator.free(nav->allocator.user_pointer, nav->focus_stack, nav->focus_stack_capacity * sizeof(DrJsonValue));
+        nav->allocator.free(nav->allocator.user_pointer, nav->focus_stack, nav->focus_stack_capacity * sizeof *nav->focus_stack);
     *nav = (JsonNav){0};
 }
 
@@ -1994,8 +1994,8 @@ nav_setup_search(JsonNav* nav, const char* search_str, size_t search_len, enum S
 
             // Rest is the pattern
             nav->search_pattern_len = (search_str + search_len) - remainder;
-            if(nav->search_pattern_len > sizeof(nav->search_pattern) - 1){
-                nav->search_pattern_len = sizeof(nav->search_pattern) - 1;
+            if(nav->search_pattern_len > sizeof nav->search_pattern - 1){
+                nav->search_pattern_len = sizeof nav->search_pattern - 1;
             }
             if(nav->search_pattern_len > 0){
                 memcpy(nav->search_pattern, remainder, nav->search_pattern_len);
@@ -2123,13 +2123,13 @@ void
 nav_set_messagef(JsonNav* nav, const char* fmt, ...){
     va_list args;
     va_start(args, fmt);
-    int len = vsnprintf(nav->message, sizeof(nav->message), fmt, args);
+    int len = vsnprintf(nav->message, sizeof nav->message, fmt, args);
     va_end(args);
     if(len < 0){
         nav->message_length = 0;
     }
-    else if((size_t)len >= sizeof(nav->message)){
-        nav->message_length = sizeof(nav->message) - 1;
+    else if((size_t)len >= sizeof nav->message){
+        nav->message_length = sizeof nav->message - 1;
     }
     else{
         nav->message_length = (size_t)len;
@@ -2154,7 +2154,7 @@ static int parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJs
 
 // Command handler function type
 // Returns: 0 = success, -1 = error, 1 = quit requested
-typedef int (CommandHandler)(JsonNav* nav, const char* args, size_t args_len);
+typedef int (CommandHandler)(JsonNav* nav, CmdArgs* args);
 
 typedef struct Command Command;
 struct Command {
@@ -2253,45 +2253,30 @@ nav_load_file(JsonNav* nav, const char* filepath, _Bool use_braceless){
 
 static
 int
-cmd_open(JsonNav* nav, const char* args, size_t args_len){
-    if(args_len == 0){
-        nav_set_messagef(nav, "Error: No filename provided");
+cmd_open(JsonNav* nav, CmdArgs* args){
+    // Get optional --braceless flag
+    _Bool use_braceless = 0;
+    int err = cmd_get_arg_bool(args, SV("--braceless"), &use_braceless);
+    if(err != CMD_ARG_ERROR_NONE && err != CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+        nav_set_messagef(nav, "Error parsing --braceless flag");
         return CMD_ERROR;
     }
 
-    // Parse optional --braceless flag
-    _Bool use_braceless = 0;
-    const char* filename_start = args;
-    size_t filename_len = args_len;
-
-    // Check for --braceless flag
-    const char* part = args;
-    const char* end = args + args_len;
-    while(part < end && *part == ' ') part++;
-
-    if(part < end){
-        const char* word_start = part;
-        while(part < end && *part != ' ') part++;
-        size_t word_len = part - word_start;
-
-        StringView first_word = {.text = word_start, .length = word_len};
-        if(SV_equals(first_word, SV("--braceless"))){
-            use_braceless = 1;
-            // Skip to filename
-            while(part < end && *part == ' ') part++;
-            filename_start = part;
-            filename_len = end - part;
-
-            if(filename_len == 0){
-                nav_set_messagef(nav, "Error: No filename provided after --braceless");
-                return CMD_ERROR;
-            }
-        }
+    // Get required file argument
+    StringView filepath_sv = {0};
+    err = cmd_get_arg_string(args, SV("file"), &filepath_sv);
+    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+        nav_set_messagef(nav, "Error: No filename provided");
+        return CMD_ERROR;
+    }
+    if(err != CMD_ARG_ERROR_NONE){
+        nav_set_messagef(nav, "Error parsing filename");
+        return CMD_ERROR;
     }
 
     // Expand ~ and copy filename to null-terminated buffer
     char filepath[1024];
-    if(expand_tilde_to_buffer(filename_start, filename_len, filepath, sizeof(filepath)) != 0){
+    if(expand_tilde_to_buffer(filepath_sv.text, filepath_sv.length, filepath, sizeof filepath) != 0){
         nav_set_messagef(nav, "Error: Could not expand path");
         return CMD_ERROR;
     }
@@ -2302,7 +2287,7 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
 
     // Update filename on successful load
     size_t expanded_len = strlen(filepath);
-    if(expanded_len >= sizeof(nav->filename)) expanded_len = sizeof(nav->filename) - 1;
+    if(expanded_len >= sizeof nav->filename) expanded_len = sizeof nav->filename - 1;
     memcpy(nav->filename, filepath, expanded_len);
     nav->filename[expanded_len] = '\0';
 
@@ -2312,55 +2297,40 @@ cmd_open(JsonNav* nav, const char* args, size_t args_len){
 
 static
 int
-cmd_write(JsonNav* nav, const char* args, size_t args_len){
-    if(args_len == 0){
+cmd_write(JsonNav* nav, CmdArgs* args){
+    // Check for --braceless or --no-braceless flags (they're alternatives)
+    _Bool use_braceless = nav->was_opened_with_braceless; // Default to current setting
+    _Bool braceless_specified = 0;
+
+    _Bool flag_braceless = 0;
+    int err = cmd_get_arg_bool(args, SV("--braceless"), &flag_braceless);
+    if(err == CMD_ARG_ERROR_NONE && flag_braceless){
+        use_braceless = 1;
+        braceless_specified = 1;
+    }
+
+    _Bool flag_no_braceless = 0;
+    err = cmd_get_arg_bool(args, SV("--no-braceless"), &flag_no_braceless);
+    if(err == CMD_ARG_ERROR_NONE && flag_no_braceless){
+        use_braceless = 0;
+        braceless_specified = 1;
+    }
+
+    // Get required file argument
+    StringView filepath_sv = {0};
+    err = cmd_get_arg_string(args, SV("file"), &filepath_sv);
+    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
         nav_set_messagef(nav, "Error: No filename provided");
         return CMD_ERROR;
     }
-
-    // Parse optional --braceless or --no-braceless flags
-    _Bool use_braceless = nav->was_opened_with_braceless; // Default to current setting
-    _Bool braceless_specified = 0;
-    const char* filename_start = args;
-    size_t filename_len = args_len;
-
-    const char* part = args;
-    const char* end = args + args_len;
-
-    // Parse all flags at the beginning
-    while(part < end){
-        while(part < end && *part == ' ') part++;
-        if(part >= end) break;
-
-        const char* word_start = part;
-        while(part < end && *part != ' ') part++;
-        size_t word_len = part - word_start;
-
-        StringView word = {.text = word_start, .length = word_len};
-        if(SV_equals(word, SV("--braceless"))){
-            use_braceless = 1;
-            braceless_specified = 1;
-        }
-        else if(SV_equals(word, SV("--no-braceless"))){
-            use_braceless = 0;
-            braceless_specified = 1;
-        }
-        else {
-            // This must be the filename
-            filename_start = word_start;
-            filename_len = end - word_start;
-            break;
-        }
-    }
-
-    if(filename_len == 0){
-        nav_set_messagef(nav, "Error: No filename provided");
+    if(err != CMD_ARG_ERROR_NONE){
+        nav_set_messagef(nav, "Error parsing filename");
         return CMD_ERROR;
     }
 
     // Expand ~ and copy filename to null-terminated buffer
     char filepath[1024];
-    if(expand_tilde_to_buffer(filename_start, filename_len, filepath, sizeof(filepath)) != 0){
+    if(expand_tilde_to_buffer(filepath_sv.text, filepath_sv.length, filepath, sizeof filepath) != 0){
         nav_set_messagef(nav, "Error: Could not expand path");
         return CMD_ERROR;
     }
@@ -2386,18 +2356,16 @@ cmd_write(JsonNav* nav, const char* args, size_t args_len){
 
 static
 int
-cmd_quit(JsonNav* nav, const char* args, size_t args_len){
+cmd_quit(JsonNav* nav, CmdArgs* args){
     (void)nav;
     (void)args;
-    (void)args_len;
     return CMD_QUIT; // Signal quit
 }
 
 static
 int
-cmd_help(JsonNav* nav, const char* args, size_t args_len){
+cmd_help(JsonNav* nav, CmdArgs* args){
     (void)args;
-    (void)args_len;
     build_command_helps();
     if(cmd_helps){
         nav->show_help = 1;
@@ -2410,19 +2378,18 @@ cmd_help(JsonNav* nav, const char* args, size_t args_len){
 
 static
 int
-cmd_pwd(JsonNav* nav, const char* args, size_t args_len){
+cmd_pwd(JsonNav* nav, CmdArgs* args){
     (void)args;
-    (void)args_len;
 
     char cwd[1024];
     #ifdef _WIN32
-    DWORD len = GetCurrentDirectoryA(sizeof(cwd), cwd);
-    if(len == 0 || len >= sizeof(cwd)){
+    DWORD len = GetCurrentDirectoryA(sizeof cwd, cwd);
+    if(len == 0 || len >= sizeof cwd){
         nav_set_messagef(nav, "Error: Could not get current directory");
         return CMD_ERROR;
     }
     #else
-    if(getcwd(cwd, sizeof(cwd)) == NULL){
+    if(getcwd(cwd, sizeof cwd) == NULL){
         nav_set_messagef(nav, "Error: Could not get current directory: %s", strerror(errno));
         return CMD_ERROR;
     }
@@ -2434,17 +2401,23 @@ cmd_pwd(JsonNav* nav, const char* args, size_t args_len){
 
 static
 int
-cmd_cd(JsonNav* nav, const char* args, size_t args_len){
+cmd_cd(JsonNav* nav, CmdArgs* args){
     char dirpath[1024];
 
-    if(args_len == 0){
-        // No argument - change to home directory (same as "~")
-        args = "~";
-        args_len = 1;
+    // Get dir argument (defaults to "~" if not provided)
+    StringView dir_sv = {0};
+    int err = cmd_get_arg_string(args, SV("dir"), &dir_sv);
+    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+        // No argument - change to home directory
+        dir_sv = SV("~");
+    }
+    else if(err != CMD_ARG_ERROR_NONE){
+        nav_set_messagef(nav, "Error parsing directory");
+        return CMD_ERROR;
     }
 
     // Expand ~ and copy directory path to null-terminated buffer
-    if(expand_tilde_to_buffer(args, args_len, dirpath, sizeof(dirpath)) != 0){
+    if(expand_tilde_to_buffer(dir_sv.text, dir_sv.length, dirpath, sizeof dirpath) != 0){
         nav_set_messagef(nav, "Error: Could not expand path");
         return CMD_ERROR;
     }
@@ -2872,9 +2845,8 @@ read_from_clipboard(LongString* out){
 
 static
 int
-cmd_yank(JsonNav* nav, const char* args, size_t args_len){
+cmd_yank(JsonNav* nav, CmdArgs* args){
     (void)args;
-    (void)args_len;
 
     if(nav->item_count == 0){
         nav_set_messagef(nav, "Error: Nothing to yank");
@@ -3103,9 +3075,8 @@ do_paste(JsonNav* nav, size_t cursor_pos, _Bool after){
 
 static
 int
-cmd_paste(JsonNav* nav, const char* args, size_t args_len){
+cmd_paste(JsonNav* nav, CmdArgs* args){
     (void)args;
-    (void)args_len;
 
     if(nav->item_count == 0){
         nav_set_messagef(nav, "Error: Nothing to paste into");
@@ -3116,9 +3087,16 @@ cmd_paste(JsonNav* nav, const char* args, size_t args_len){
 
 static
 int
-cmd_query(JsonNav* nav, const char* args, size_t args_len){
-    if(args_len == 0){
+cmd_query(JsonNav* nav, CmdArgs* args){
+    // Get required path argument
+    StringView path_sv = {0};
+    int err = cmd_get_arg_string(args, SV("path"), &path_sv);
+    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
         nav_set_messagef(nav, "Error: No query path provided");
+        return CMD_ERROR;
+    }
+    if(err != CMD_ARG_ERROR_NONE){
+        nav_set_messagef(nav, "Error parsing query path");
         return CMD_ERROR;
     }
 
@@ -3129,9 +3107,9 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
 
     // Parse the path into components
     DrJsonPath path;
-    int parse_err = drjson_path_parse(nav->jctx, args, args_len, &path);
+    int parse_err = drjson_path_parse(nav->jctx, path_sv.text, path_sv.length, &path);
     if(parse_err){
-        nav_set_messagef(nav, "Error: Invalid path syntax: %.*s", (int)args_len, args);
+        nav_set_messagef(nav, "Error: Invalid path syntax: %.*s", (int)path_sv.length, path_sv.text);
         return CMD_ERROR;
     }
 
@@ -3199,7 +3177,7 @@ cmd_query(JsonNav* nav, const char* args, size_t args_len){
     for(size_t i = 0; i < nav->item_count; i++){
         if(drjson_eq(nav->items[i].value, current)){
             nav->cursor_pos = i;
-            nav_set_messagef(nav, "Navigated to: %.*s", (int)args_len, args);
+            nav_set_messagef(nav, "Navigated to: %.*s", (int)path_sv.length, path_sv.text);
             return CMD_OK;
         }
     }
@@ -3235,9 +3213,8 @@ nav_focus_stack_pop(JsonNav* nav){
 
 static
 int
-cmd_focus(JsonNav* nav, const char* args, size_t args_len){
+cmd_focus(JsonNav* nav, CmdArgs* args){
     (void)args;
-    (void)args_len;
 
     if(nav->item_count == 0){
         nav_set_messagef(nav, "Error: Nothing to focus on");
@@ -3265,9 +3242,8 @@ cmd_focus(JsonNav* nav, const char* args, size_t args_len){
 
 static
 int
-cmd_unfocus(JsonNav* nav, const char* args, size_t args_len){
+cmd_unfocus(JsonNav* nav, CmdArgs* args){
     (void)args;
-    (void)args_len;
     if(0) LOG("nav->focus_stack_count: %zu\n", nav->focus_stack_count);
 
     if(nav->focus_stack_count == 0){
@@ -3291,22 +3267,21 @@ cmd_unfocus(JsonNav* nav, const char* args, size_t args_len){
 
 static
 int
-cmd_wq(JsonNav* nav, const char* args, size_t args_len){
+cmd_wq(JsonNav* nav, CmdArgs* args){
     // First, try to write the file
-    int write_result = cmd_write(nav, args, args_len);
+    int write_result = cmd_write(nav, args);
     if(write_result != CMD_OK){
         // If write failed, don't quit, just report the error
         return write_result;
     }
     // If write succeeded, then quit
-    return cmd_quit(nav, args, args_len);
+    return cmd_quit(nav, args);
 }
 
 static
 int
-cmd_reload(JsonNav* nav, const char* args, size_t args_len){
+cmd_reload(JsonNav* nav, CmdArgs* args){
     (void)args;
-    (void)args_len;
 
     if(nav->filename[0] == '\0'){
         nav_set_messagef(nav, "Error: No file is currently open to reload.");
@@ -3396,7 +3371,7 @@ qsort_compare_pairs_by_query(const void* a, const void* b){
 
 static
 int
-cmd_sort(JsonNav* nav, const char* args, size_t args_len){
+cmd_sort(JsonNav* nav, CmdArgs* args){
     if(nav->item_count == 0){
         nav_set_messagef(nav, "Error: Nothing to sort.");
         return CMD_ERROR;
@@ -3408,38 +3383,38 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
     const char* query_str = NULL;
     size_t query_len = 0;
 
-    const char* part = args;
-    const char* end = args + args_len;
+    // Get optional query
+    StringView query_sv = {0};
+    int err = cmd_get_arg_string(args, SV("query"), &query_sv);
+    if(err == CMD_ARG_ERROR_NONE){
+        query_str = query_sv.text;
+        query_len = query_sv.length;
+    }
 
-    while(part < end){
-        while(part < end && *part == ' ') part++;
-        const char* word_start = part;
-        while(part < end && *part != ' ') part++;
-        size_t part_len = part - word_start;
+    // Check keys|values alternatives
+    _Bool flag_keys = 0;
+    err = cmd_get_arg_bool(args, SV("keys"), &flag_keys);
+    if(err == CMD_ARG_ERROR_NONE && flag_keys){
+        sort_by_values = 0;
+    }
 
-        if(part_len == 0) continue;
+    _Bool flag_values = 0;
+    err = cmd_get_arg_bool(args, SV("values"), &flag_values);
+    if(err == CMD_ARG_ERROR_NONE && flag_values){
+        sort_by_values = 1;
+    }
 
-        StringView part_sv = {.text = word_start, .length = part_len};
-        if(SV_equals(part_sv, SV("keys"))){
-            sort_by_values = 0;
-        }
-        else if(SV_equals(part_sv, SV("values"))){
-            sort_by_values = 1;
-        }
-        else if(SV_equals(part_sv, SV("asc"))){
-            direction = 1;
-        }
-        else if(SV_equals(part_sv, SV("desc"))){
-            direction = -1;
-        }
-        else {
-            if(query_str){
-                nav_set_messagef(nav, "Error: Invalid argument '%.*s'. Query must be a single word.", (int)part_len, word_start);
-                return CMD_ERROR;
-            }
-            query_str = word_start;
-            query_len = part_len;
-        }
+    // Check asc|desc alternatives
+    _Bool flag_asc = 0;
+    err = cmd_get_arg_bool(args, SV("asc"), &flag_asc);
+    if(err == CMD_ARG_ERROR_NONE && flag_asc){
+        direction = 1;
+    }
+
+    _Bool flag_desc = 0;
+    err = cmd_get_arg_bool(args, SV("desc"), &flag_desc);
+    if(err == CMD_ARG_ERROR_NONE && flag_desc){
+        direction = -1;
     }
 
     NavItem* item = &nav->items[nav->cursor_pos];
@@ -3469,14 +3444,14 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
             g_sort_context.sort_query = query_str;
             g_sort_context.sort_query_len = query_len;
             g_sort_context.direction = direction;
-            qsort(arr->array_items, len, sizeof(DrJsonValue), qsort_compare_array_by_query);
+            qsort(arr->array_items, len, sizeof *arr->array_items, qsort_compare_array_by_query);
             nav_set_messagef(nav, "Array sorted by query '%.*s'.", (int)query_len, query_str);
         }
         else {
             // --- Sort simple array by value ---
             g_sort_context.jctx = nav->jctx;
             g_sort_context.direction = direction;
-            qsort(arr->array_items, len, sizeof(DrJsonValue), qsort_compare_values_wrapper);
+            qsort(arr->array_items, len, sizeof *arr->array_items, qsort_compare_values_wrapper);
             nav_set_messagef(nav, "Array sorted successfully.");
         }
     }
@@ -3521,14 +3496,14 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
                 g_sort_context.sort_query = query_str;
                 g_sort_context.sort_query_len = query_len;
                 g_sort_context.direction = direction;
-                qsort(pairs, len, sizeof(KeyValuePair), qsort_compare_pairs_by_query);
+                qsort(pairs, len, sizeof *pairs, qsort_compare_pairs_by_query);
                 nav_set_messagef(nav, "Object sorted by query '%.*s'.", (int)query_len, query_str);
             }
             else {
                 // --- Sort object by value ---
                 g_sort_context.jctx = nav->jctx;
                 g_sort_context.direction = direction;
-                qsort(pairs, len, sizeof(KeyValuePair), qsort_compare_pairs_by_value);
+                qsort(pairs, len, sizeof *pairs, qsort_compare_pairs_by_value);
                 nav_set_messagef(nav, "Object sorted by value.");
             }
 
@@ -3552,7 +3527,7 @@ cmd_sort(JsonNav* nav, const char* args, size_t args_len){
             DrJsonArray* keys_arr = &nav->jctx->arrays.data[keys_copy.array_idx];
             g_sort_context.jctx = nav->jctx;
             g_sort_context.direction = direction;
-            qsort(keys_arr->array_items, len, sizeof(DrJsonValue), qsort_compare_values_wrapper);
+            qsort(keys_arr->array_items, len, sizeof *keys_arr->array_items, qsort_compare_values_wrapper);
 
             for(int64_t i = 0; i < len; i++){
                 DrJsonValue key_val = keys_arr->array_items[i];
@@ -3835,9 +3810,16 @@ tui_eval_expression(JsonNav* nav, DrJsonValue v, const TuiParsedExpression* expr
 
 static
 int
-cmd_filter(JsonNav* nav, const char* args, size_t args_len){
-    if(args_len == 0){
+cmd_filter(JsonNav* nav, CmdArgs* args){
+    // Get required query argument
+    StringView query_sv = {0};
+    int err = cmd_get_arg_string(args, SV("query"), &query_sv);
+    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
         nav_set_messagef(nav, "Error: :filter requires a query.");
+        return CMD_ERROR;
+    }
+    if(err != CMD_ARG_ERROR_NONE){
+        nav_set_messagef(nav, "Error parsing query");
         return CMD_ERROR;
     }
 
@@ -3848,7 +3830,7 @@ cmd_filter(JsonNav* nav, const char* args, size_t args_len){
 
     // Parse the expression once before the loop
     TuiParsedExpression expr;
-    if(tui_parse_expression(nav, args, args_len, &expr) != 0){
+    if(tui_parse_expression(nav, query_sv.text, query_sv.length, &expr) != 0){
         nav_set_messagef(nav, "Error: Invalid filter expression.");
         return CMD_ERROR;
     }
@@ -4008,14 +3990,21 @@ nav_move_item_relative(JsonNav* nav, int64_t delta){
 
 static
 int
-cmd_move(JsonNav* nav, const char* args, size_t args_len){
-    if(args_len == 0){
+cmd_move(JsonNav* nav, CmdArgs* args){
+    // Get required index argument
+    StringView index_sv = {0};
+    int err = cmd_get_arg_string(args, SV("index"), &index_sv);
+    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
         nav_set_messagef(nav, "Error: :move requires an index.");
+        return CMD_ERROR;
+    }
+    if(err != CMD_ARG_ERROR_NONE){
+        nav_set_messagef(nav, "Error parsing index");
         return CMD_ERROR;
     }
 
     // Parse the target index
-    Int64Result parse_result = parse_int64(args, args_len);
+    Int64Result parse_result = parse_int64(index_sv.text, index_sv.length);
     if(parse_result.errored){
         nav_set_messagef(nav, "Error: Invalid index.");
         return CMD_ERROR;
@@ -4030,9 +4019,8 @@ cmd_move(JsonNav* nav, const char* args, size_t args_len){
 
 static
 int
-cmd_path(JsonNav* nav, const char* args, size_t args_len){
+cmd_path(JsonNav* nav, CmdArgs* args){
     (void)args;
-    (void)args_len;
 
     if(nav->item_count == 0){
         nav_set_messagef(nav, "Error: Nothing selected");
@@ -4040,7 +4028,7 @@ cmd_path(JsonNav* nav, const char* args, size_t args_len){
     }
 
     char path_buf[1024];
-    size_t path_len = nav_build_json_path(nav, path_buf, sizeof(path_buf));
+    size_t path_len = nav_build_json_path(nav, path_buf, sizeof path_buf);
 
     if(path_len == 0){
         nav_set_messagef(nav, "Error: Could not generate path");
@@ -4092,7 +4080,7 @@ nav_complete_command(JsonNav* nav){
 
     // Save original command on first tab
     if(!nav->in_completion_menu){
-        nav->saved_command_len = le->length < sizeof(nav->saved_command) ? le->length : sizeof(nav->saved_command) - 1;
+        nav->saved_command_len = le->length < sizeof nav->saved_command ? le->length : sizeof nav->saved_command - 1;
         memcpy(nav->saved_command, le->data, nav->saved_command_len);
         nav->saved_command[nav->saved_command_len] = '\0';
     }
@@ -4178,16 +4166,16 @@ nav_complete_command(JsonNav* nav){
         // Extract the path prefix from the original saved command
         size_t path_len = source_len - path_start;
         char path_prefix[1024];
-        if(path_len >= sizeof(path_prefix)) path_len = sizeof(path_prefix) - 1;
+        if(path_len >= sizeof path_prefix) path_len = sizeof path_prefix - 1;
         memcpy(path_prefix, source + path_start, path_len);
         path_prefix[path_len] = '\0';
 
         // Expand ~ in the path prefix
         char expanded_path[1024];
-        if(expand_tilde_to_buffer(path_prefix, path_len, expanded_path, sizeof(expanded_path)) == 0){
+        if(expand_tilde_to_buffer(path_prefix, path_len, expanded_path, sizeof expanded_path) == 0){
             // Use expanded path
             size_t expanded_len = strlen(expanded_path);
-            if(expanded_len < sizeof(path_prefix)){
+            if(expanded_len < sizeof path_prefix){
                 memcpy(path_prefix, expanded_path, expanded_len);
                 path_prefix[expanded_len] = '\0';
                 path_len = expanded_len;
@@ -4204,13 +4192,13 @@ nav_complete_command(JsonNav* nav){
             if(path_prefix[i-1] == '/' || path_prefix[i-1] == '\\'){
                 // Copy directory part
                 size_t dir_len = i;
-                if(dir_len >= sizeof(dir_path)) dir_len = sizeof(dir_path) - 1;
+                if(dir_len >= sizeof dir_path) dir_len = sizeof dir_path - 1;
                 memcpy(dir_path, path_prefix, dir_len);
                 dir_path[dir_len] = '\0';
 
                 // Copy filename prefix
                 file_prefix_len = path_len - i;
-                if(file_prefix_len >= sizeof(file_prefix)) file_prefix_len = sizeof(file_prefix) - 1;
+                if(file_prefix_len >= sizeof file_prefix) file_prefix_len = sizeof file_prefix - 1;
                 memcpy(file_prefix, path_prefix + i, file_prefix_len);
                 file_prefix[file_prefix_len] = '\0';
                 break;
@@ -4224,7 +4212,7 @@ nav_complete_command(JsonNav* nav){
         else {
             // No directory separator found, use whole path as filename prefix
             file_prefix_len = path_len;
-            if(file_prefix_len >= sizeof(file_prefix)) file_prefix_len = sizeof(file_prefix) - 1;
+            if(file_prefix_len >= sizeof file_prefix) file_prefix_len = sizeof file_prefix - 1;
             memcpy(file_prefix, path_prefix, file_prefix_len);
             file_prefix[file_prefix_len] = '\0';
         }
@@ -4252,7 +4240,7 @@ nav_complete_command(JsonNav* nav){
 
                 // Copy command part from saved original
                 for(size_t i = 0; i < path_start; i++){
-                    if(completed_len < sizeof(completed) - 1){
+                    if(completed_len < sizeof completed - 1){
                         completed[completed_len++] = source[i];
                     }
                 }
@@ -4260,13 +4248,13 @@ nav_complete_command(JsonNav* nav){
                 // Copy directory part if present
                 if(dir_path[0] != '.' || dir_path[1] != '\0'){
                     size_t dir_len = strlen(dir_path);
-                    for(size_t i = 0; i < dir_len && completed_len < sizeof(completed) - 1; i++){
+                    for(size_t i = 0; i < dir_len && completed_len < sizeof completed - 1; i++){
                         completed[completed_len++] = dir_path[i];
                     }
                 }
 
                 // Copy matched filename
-                for(size_t i = 0; i < entry_len && completed_len < sizeof(completed) - 1; i++){
+                for(size_t i = 0; i < entry_len && completed_len < sizeof completed - 1; i++){
                     completed[completed_len++] = entry->d_name[i];
                 }
 
@@ -4305,7 +4293,7 @@ nav_complete_command(JsonNav* nav){
         // Build search pattern: dir_path + "*"
         // dir_path is either "." or "path/to/dir/" (includes trailing separator)
         size_t dir_len = strlen(dir_path);
-        for(size_t i = 0; i < dir_len && pattern_len < sizeof(search_pattern) - 2; i++){
+        for(size_t i = 0; i < dir_len && pattern_len < sizeof search_pattern - 2; i++){
             search_pattern[pattern_len++] = dir_path[i];
         }
         // If dir_path is ".", append "\*", otherwise just append "*"
@@ -4336,7 +4324,7 @@ nav_complete_command(JsonNav* nav){
 
                 // Copy command part from saved original
                 for(size_t i = 0; i < path_start; i++){
-                    if(completed_len < sizeof(completed) - 1){
+                    if(completed_len < sizeof completed - 1){
                         completed[completed_len++] = source[i];
                     }
                 }
@@ -4344,13 +4332,13 @@ nav_complete_command(JsonNav* nav){
                 // Copy directory part if present
                 if(dir_path[0] != '.' || dir_path[1] != '\0'){
                     size_t dir_len2 = strlen(dir_path);
-                    for(size_t i = 0; i < dir_len2 && completed_len < sizeof(completed) - 1; i++){
+                    for(size_t i = 0; i < dir_len2 && completed_len < sizeof completed - 1; i++){
                         completed[completed_len++] = dir_path[i];
                     }
                 }
 
                 // Copy matched filename
-                for(size_t i = 0; i < entry_len && completed_len < sizeof(completed) - 1; i++){
+                for(size_t i = 0; i < entry_len && completed_len < sizeof completed - 1; i++){
                     completed[completed_len++] = find_data.cFileName[i];
                 }
 
@@ -4511,17 +4499,25 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
             const char* args = arg_start ? arg_start : "";
             size_t args_len = arg_start ? arg_len : 0;
             strip_whitespace(&args, &args_len);
+
+            // Parse command signature
             CmdParams params = {0};
             int err = cmd_param_parse_signature(commands[i].help_name, &params);
-            if(!err){
-                CmdArgs cmdargs = {0};
-                err = cmd_param_parse_args((StringView){args_len, args}, &params, &cmdargs);
-                if(!err){
-                    // todo
-                    // return commands[i].handler(nav, &cmdargs);
-                }
+            if(err){
+                nav_set_messagef(nav, "Internal error: invalid command signature");
+                return CMD_ERROR;
             }
-            return commands[i].handler(nav, args, args_len);
+
+            // Parse command line arguments
+            CmdArgs cmdargs = {0};
+            err = cmd_param_parse_args((StringView){.length = args_len, .text = args}, &params, &cmdargs);
+            if(err){
+                nav_set_messagef(nav, "Error: Invalid arguments for command");
+                return CMD_ERROR;
+            }
+
+            // Call command handler
+            return commands[i].handler(nav, &cmdargs);
         }
     }
 
@@ -5559,7 +5555,7 @@ nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
         if(components[i].is_array_index){
             // Array index: [123]
             char index_buf[32];
-            int len = snprintf(index_buf, sizeof(index_buf), "[%lld]", (long long)components[i].index);
+            int len = snprintf(index_buf, sizeof index_buf, "[%lld]", (long long)components[i].index);
             if(len > 0 && written + (size_t)len < buf_size){
                 memcpy(buf + written, index_buf, len);
                 written += len;
@@ -5623,13 +5619,13 @@ nav_render_flat_array_row(Drt* drt, DrJsonContext* jctx, DrJsonValue val, int ro
         char buf[64];
         int num_len = 0;
         if(item.kind == DRJSON_NUMBER){
-            num_len = snprintf(buf, sizeof(buf), "%g", item.number);
+            num_len = snprintf(buf, sizeof buf, "%g", item.number);
         }
         else if(item.kind == DRJSON_INTEGER){
-            num_len = snprintf(buf, sizeof(buf), "%lld", (unsigned long long)item.integer);
+            num_len = snprintf(buf, sizeof buf, "%lld", (unsigned long long)item.integer);
         }
         else if(item.kind == DRJSON_UINTEGER){
-            num_len = snprintf(buf, sizeof(buf), "%lld", (unsigned long long)item.uinteger);
+            num_len = snprintf(buf, sizeof buf, "%lld", (unsigned long long)item.uinteger);
         }
 
         if(i > start_idx){
@@ -6043,7 +6039,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     else if(nav->item_count > 0){
         // Show breadcrumb (JSON path)
         char path_buf[512];
-        size_t path_len = nav_build_json_path(nav, path_buf, sizeof(path_buf));
+        size_t path_len = nav_build_json_path(nav, path_buf, sizeof path_buf);
         if(path_len > 0){
             drt_putc(drt, ' ');
             drt_puts(drt, path_buf, path_len);
@@ -6420,7 +6416,7 @@ main(int argc, const char* const* argv){
 
                     // Save search string before setup (since setup modifies the buffer)
                     char search_str[256];
-                    size_t search_len = nav.search_buffer.length < sizeof(search_str) ? nav.search_buffer.length : sizeof(search_str) - 1;
+                    size_t search_len = nav.search_buffer.length < sizeof search_str ? nav.search_buffer.length : sizeof search_str - 1;
                     memcpy(search_str, nav.search_buffer.data, search_len);
                     search_str[search_len] = '\0';
 
@@ -6838,16 +6834,20 @@ main(int argc, const char* const* argv){
             else if(c == 'y'){
                 switch(c2){
                     case 'p':
-                    case 'P':
+                    case 'P':{
                         // yp - yank path
-                        cmd_path(&nav, NULL, 0);
+                        CmdArgs empty_args = {0};
+                        cmd_path(&nav, &empty_args);
                         continue;
+                    }
 
                     case 'y':
-                    case 'Y':
+                    case 'Y':{
                         // yy - yank value
-                        cmd_yank(&nav, NULL, 0);
+                        CmdArgs empty_args = {0};
+                        cmd_yank(&nav, &empty_args);
                         continue;
+                    }
                     default:
                         le_clear(&count_buffer);
                         continue;
@@ -6903,13 +6903,17 @@ main(int argc, const char* const* argv){
                 #endif
                 break;
 
-            case 'f':
-                cmd_focus(&nav, NULL, 0);
+            case 'f':{
+                CmdArgs empty_args = {0};
+                cmd_focus(&nav, &empty_args);
                 break;
+            }
 
-            case 'F':
-                cmd_unfocus(&nav, NULL, 0);
+            case 'F':{
+                CmdArgs empty_args = {0};
+                cmd_unfocus(&nav, &empty_args);
                 break;
+            }
 
             case UP:
             case 'k':
@@ -6981,7 +6985,7 @@ main(int argc, const char* const* argv){
                     // Use drjson_print_value_mem to serialize the value
                     char temp_buf[1024];
                     size_t printed = 0;
-                    drjson_print_value_mem(nav.jctx, temp_buf, sizeof(temp_buf), item->value, -1, 0, &printed);
+                    drjson_print_value_mem(nav.jctx, temp_buf, sizeof temp_buf, item->value, -1, 0, &printed);
 
                     // Copy to edit buffer
                     for(size_t i = 0; i < printed && i < nav.edit_buffer.capacity - 1; i++){
@@ -7015,7 +7019,8 @@ main(int argc, const char* const* argv){
             case LEFT:
             case 'h':
                 if(nav.cursor_pos == 0){
-                    cmd_unfocus(&nav, NULL, 0);
+                    CmdArgs empty_args = {0};
+                    cmd_unfocus(&nav, &empty_args);
                     break;
                 }
                 // Jump to parent container and collapse it
@@ -7131,13 +7136,13 @@ main(int argc, const char* const* argv){
                     else if(item->value.kind == DRJSON_INTEGER || item->value.kind == DRJSON_UINTEGER || item->value.kind == DRJSON_NUMBER){
                         static char number_buf[64];
                         if(item->value.kind == DRJSON_INTEGER){
-                            search_len = (size_t)snprintf(number_buf, sizeof(number_buf), "%lld", (long long)item->value.integer);
+                            search_len = (size_t)snprintf(number_buf, sizeof number_buf, "%lld", (long long)item->value.integer);
                         }
                         else if(item->value.kind == DRJSON_UINTEGER){
-                            search_len = (size_t)snprintf(number_buf, sizeof(number_buf), "%llu", (unsigned long long)item->value.uinteger);
+                            search_len = (size_t)snprintf(number_buf, sizeof number_buf, "%llu", (unsigned long long)item->value.uinteger);
                         }
                         else {
-                            search_len = (size_t)snprintf(number_buf, sizeof(number_buf), "%g", item->value.number);
+                            search_len = (size_t)snprintf(number_buf, sizeof number_buf, "%g", item->value.number);
                         }
                         search_text = number_buf;
                     }
@@ -7196,10 +7201,12 @@ main(int argc, const char* const* argv){
                 nav_center_cursor(&nav, globals.screenh);
                 break;
 
-            case 'Y':
+            case 'Y':{
                 // Yank (copy) current value to clipboard
-                cmd_yank(&nav, NULL, 0);
+                CmdArgs empty_args = {0};
+                cmd_yank(&nav, &empty_args);
                 break;
+            }
 
             case 'p':
             case 'P':
