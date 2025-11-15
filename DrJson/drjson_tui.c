@@ -41,6 +41,8 @@ typedef long long ssize_t;
 #include "TUI/tui_get_input.h"
 #include "TUI/tui_get_input.c"
 #include "TUI/lineedit.h"
+#include "TUI/cmd_parse.h"
+#include "TUI/cmd_parse.c"
 #define DRJSON_API static inline
 #include "drjson.h"
 // Access to private APIs
@@ -4509,6 +4511,16 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
             const char* args = arg_start ? arg_start : "";
             size_t args_len = arg_start ? arg_len : 0;
             strip_whitespace(&args, &args_len);
+            CmdParams params = {0};
+            int err = cmd_param_parse_signature(commands[i].help_name, &params);
+            if(!err){
+                CmdArgs cmdargs = {0};
+                err = cmd_param_parse_args((StringView){args_len, args}, &params, &cmdargs);
+                if(!err){
+                    // todo
+                    // return commands[i].handler(nav, &cmdargs);
+                }
+            }
             return commands[i].handler(nav, args, args_len);
         }
     }

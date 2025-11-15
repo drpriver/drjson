@@ -100,7 +100,9 @@
     X(TestBraceless) \
     X(TestBracelessReload) \
     X(TestBracelessWriteFlags) \
-    X(TestBracelessOpen)
+    X(TestBracelessOpen) \
+    X(TestCmdParsing) \
+
 
 // Forward declarations of test functions
 #define X(name) static TestFunc name;
@@ -4266,6 +4268,18 @@ TestFunction(TestBracelessOpen){
     drjson_ctx_free_all(ctx);
     assert_all_freed();
 #endif // _WIN32
+    TESTEND();
+}
+
+TestFunction(TestCmdParsing){
+    TESTBEGIN();
+    // Test that we're able to parse all of our commands
+    for(size_t i = 0; i < sizeof commands / sizeof commands[0]; i++){
+        const Command* c = &commands[i];
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(c->help_name, &params);
+        TestExpectFalse(err);
+    }
     TESTEND();
 }
 
