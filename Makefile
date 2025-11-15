@@ -1,10 +1,17 @@
 Bin: ; mkdir $@
 Deps: ; mkdir $@
 Fuzz: ; mkdir $@
+Coverage: ; mkdir $@
 DEBUG=-g
 OPT=-O3
 
 DRJSONVERSION=3.3.0
+
+# Detect compiler type
+CC?=cc
+COMPILER_VERSION := $(shell $(CC) --version 2>/dev/null)
+IS_GCC := $(findstring gcc,$(COMPILER_VERSION))
+IS_CLANG := $(findstring clang,$(COMPILER_VERSION))
 
 DEPFILES:= $(wildcard Deps/*.dep)
 include $(DEPFILES)
@@ -19,11 +26,11 @@ EXE=.exe
 Bin/libdrjson.$(DRJSONVERSION).dll: DrJson/drjson.c | Bin Deps
 	clang $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.dll.dep -shared
 clean: | Bin TestResults
-	del /q Bin\* TestResults\*
+	del /q Bin\* TestResults\* Deps\* Coverage\*
 else
 UNAME := $(shell uname)
 clean:
-	rm -rf Bin/* TestResults/*
+	rm -rf Bin/* TestResults/* Coverage/* Deps/*.dep
 
 Bin/libdrjson.a: Bin/drjson.o | Bin
 	ar crs $@ $^
@@ -41,6 +48,21 @@ EXE=
 Bin/libdrjson.$(DRJSONVERSION).so: DrJson/drjson.c | Bin Deps
 	$(CC) $< $(OPT) $(DEBUG) -o $@ -MT $@ -MD -MP -MF Deps/drjson.so.dep -shared
 endif
+endif
+
+# Set coverage flags and tools based on compiler
+ifdef IS_CLANG
+COVERAGE_FLAGS=-fprofile-instr-generate -fcoverage-mapping -O0 -g
+# On macOS, use xcrun to find LLVM tools; elsewhere use them directly
+ifeq ($(UNAME),Darwin)
+LLVM_PROFDATA=xcrun llvm-profdata
+LLVM_COV=xcrun llvm-cov
+else
+LLVM_PROFDATA=llvm-profdata
+LLVM_COV=llvm-cov
+endif
+else ifdef IS_GCC
+COVERAGE_FLAGS=--coverage -O0 -g
 endif
 
 Bin/drjson.o: DrJson/drjson.c | Bin Deps
@@ -64,6 +86,14 @@ Bin/test_tui$(EXE): DrJson/test_drjson_tui.c | Bin Deps
 Bin/test_tui_san$(EXE): DrJson/test_drjson_tui.c | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_tui_san.dep -fvisibility=hidden -I. -g -fsanitize=address,undefined
 
+ifdef COVERAGE_FLAGS
+Bin/test_cov$(EXE): DrJson/test_drjson.c | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_cov.dep -fvisibility=hidden -I. $(COVERAGE_FLAGS) -DDRJSON_UNITY=1
+
+Bin/test_tui_cov$(EXE): DrJson/test_drjson_tui.c | Bin Deps
+	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/test_tui_cov.dep -fvisibility=hidden -I. $(COVERAGE_FLAGS)
+endif
+
 README.html: README.md README.css
 	pandoc README.md README.css -f markdown -o $@ -s --toc
 
@@ -72,7 +102,6 @@ Bin/drjson$(EXE): DrJson/drjson_cli.c | Bin Deps
 
 Bin/drj$(EXE): DrJson/drjson_tui.c | Bin Deps
 	$(CC) $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_tui.dep $(OPT) $(DEBUG) -fvisibility=hidden -I.
-
 
 Bin/drjson_fuzz$(EXE): DrJson/drjson_fuzz.c | Bin Deps
 	clang -O0 -g $< -o $@ -MT $@ -MD -MP -MF Deps/drjson_fuzz.dep -fsanitize=fuzzer,address,undefined
@@ -102,6 +131,64 @@ tests: TestResults/test_static
 tests: TestResults/test_unity
 tests: TestResults/test_tui
 tests: TestResults/test_tui_san
+
+# Coverage targets
+# Usage:
+#   make coverage          - Run all coverage tests and show report
+#   make coverage-html     - Generate HTML coverage reports
+#
+# The Makefile auto-detects your compiler (Clang/GCC) and uses appropriate tools:
+#   Clang (macOS):   Uses xcrun llvm-cov with -fprofile-instr-generate -fcoverage-mapping
+#   Clang (Linux):   Uses llvm-cov directly with -fprofile-instr-generate -fcoverage-mapping
+#   GCC:             Uses gcov with --coverage flag
+#
+.PHONY: coverage coverage-core coverage-tui coverage-report coverage-html
+
+coverage: coverage-core coverage-tui coverage-report
+
+# Clang (LLVM) coverage
+ifdef IS_CLANG
+coverage-core: Bin/test_cov$(EXE) | Coverage
+	LLVM_PROFILE_FILE="Coverage/core-%p.profraw" $<
+	$(LLVM_PROFDATA) merge -sparse Coverage/core-*.profraw -o Coverage/core.profdata
+
+coverage-tui: Bin/test_tui_cov$(EXE) | Coverage
+	LLVM_PROFILE_FILE="Coverage/tui-%p.profraw" $<
+	$(LLVM_PROFDATA) merge -sparse Coverage/tui-*.profraw -o Coverage/tui.profdata
+
+coverage-report: coverage-core coverage-tui
+	@echo "\n=== Core Library Coverage ==="
+	$(LLVM_COV) report Bin/test_cov$(EXE) -instr-profile=Coverage/core.profdata DrJson/drjson.c
+	@echo "\n=== TUI Coverage ==="
+	$(LLVM_COV) report Bin/test_tui_cov$(EXE) -instr-profile=Coverage/tui.profdata DrJson/drjson_tui.c
+
+coverage-html: coverage-core coverage-tui
+	$(LLVM_COV) show Bin/test_cov$(EXE) -instr-profile=Coverage/core.profdata DrJson/drjson.c -format=html -output-dir=Coverage/html-core
+	$(LLVM_COV) show Bin/test_tui_cov$(EXE) -instr-profile=Coverage/tui.profdata DrJson/drjson_tui.c -format=html -output-dir=Coverage/html-tui
+
+# GCC coverage
+else ifdef IS_GCC
+coverage-core: Bin/test_cov$(EXE) | Coverage
+	cd Coverage && ../Bin/test_cov
+	gcov -o Coverage DrJson/drjson.c
+	mv *.gcov Coverage/ 2>/dev/null || true
+
+coverage-tui: Bin/test_tui_cov$(EXE) | Coverage
+	cd Coverage && ../Bin/test_tui_cov
+	gcov -o Coverage DrJson/drjson_tui.c
+	mv *.gcov Coverage/ 2>/dev/null || true
+
+coverage-report: coverage-core coverage-tui
+	@echo "\n=== Core Library Coverage ==="
+	@grep -A 3 "File 'DrJson/drjson.c'" Coverage/drjson.c.gcov || echo "Run coverage-core first"
+	@echo "\n=== TUI Coverage ==="
+	@grep -A 3 "File 'DrJson/drjson_tui.c'" Coverage/drjson_tui.c.gcov || echo "Run coverage-tui first"
+
+coverage-html: coverage-core coverage-tui
+	gcovr -r . --html --html-details -o Coverage/coverage.html \
+		--exclude='.*test.*' --exclude='.*Demo.*'
+
+endif
 
 
 .DEFAULT_GOAL:=all
