@@ -2160,7 +2160,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload, cmd_sort, cmd_filter;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -2192,6 +2192,8 @@ static const Command commands[] = {
     {SV("sort"), SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
     {SV("filter"), SV(":filter <query>"), SV("  Filter array/object based on a query"), cmd_filter},
     {SV("f"), SV(":f <query>"), SV("  Alias for :filter"), cmd_filter},
+    {SV("move"), SV(":move <index>"), SV("  Move current item to <index>"), cmd_move},
+    {SV("m"), SV(":m <index>"), SV("  Move current item to <index>"), cmd_move},
 };
 
 static void build_command_helps(void);
@@ -3820,6 +3822,133 @@ cmd_filter(JsonNav* nav, const char* args, size_t args_len){
     return CMD_OK;
 }
 
+// Helper function to move the current item to a target index within its parent container
+// Returns CMD_OK on success, CMD_ERROR on failure
+static
+int
+nav_move_item_to_index(JsonNav* nav, int64_t target_idx){
+    if(nav->item_count == 0){
+        nav_set_messagef(nav, "Error: Nothing to move.");
+        return CMD_ERROR;
+    }
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+
+    // Cannot move flat view items (synthetic row items)
+    if(item->is_flat_view){
+        nav_set_messagef(nav, "Error: Cannot move flat view items.");
+        return CMD_ERROR;
+    }
+
+    // Find parent container
+    size_t parent_idx = nav_find_parent(nav, nav->cursor_pos);
+    if(parent_idx == SIZE_MAX){
+        nav_set_messagef(nav, "Error: Cannot move root value.");
+        return CMD_ERROR;
+    }
+
+    NavItem* parent = &nav->items[parent_idx];
+
+    int64_t parent_len = drjson_len(nav->jctx, parent->value);
+
+    // Handle negative index (from end)
+    if(target_idx < 0){
+        target_idx = parent_len + target_idx;
+    }
+
+    if(target_idx < 0 || target_idx >= parent_len){
+        nav_set_messagef(nav, "Error: Index %lld out of range (0-%lld).",
+                        (long long)target_idx, (long long)(parent_len - 1));
+        return CMD_ERROR;
+    }
+
+    size_t to_idx = (size_t)target_idx;
+    size_t from_idx = (size_t)item->index;
+
+    int err;
+    if(parent->value.kind == DRJSON_ARRAY){
+        err = drjson_array_move_item(nav->jctx, parent->value, from_idx, to_idx);
+    }
+    else if(parent->value.kind == DRJSON_OBJECT){
+        err = drjson_object_move_item(nav->jctx, parent->value, from_idx, to_idx);
+    }
+    else {
+        nav_set_messagef(nav, "Error: Parent is not a container.");
+        return CMD_ERROR;
+    }
+
+    if(err){
+        nav_set_messagef(nav, "Error: Could not move item.");
+        return CMD_ERROR;
+    }
+
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+
+    // Try to keep cursor on the moved item by finding it at its new position
+    for(size_t i = 0; i < nav->item_count; i++){
+        if(nav->items[i].index == (int64_t)to_idx &&
+           nav_find_parent(nav, i) == parent_idx){
+            nav->cursor_pos = i;
+            break;
+        }
+    }
+    nav_ensure_cursor_visible(nav, globals.screenh);
+
+    return CMD_OK;
+}
+
+static
+int
+nav_move_item_relative(JsonNav* nav, int64_t delta){
+    if(nav->item_count == 0) return CMD_ERROR;
+    NavItem* item = &nav->items[nav->cursor_pos];
+    int64_t from_idx = item->index;
+    if(from_idx < 0){
+        nav_set_messagef(nav, "Cannot move root value");
+        return CMD_ERROR;
+    }
+    int64_t to_idx = from_idx + delta;
+
+    // For relative moves, we need to check bounds ourselves
+    // because nav_move_item_to_index interprets negative indices as "from end"
+    // which doesn't make sense for relative movement
+    size_t parent_idx = nav_find_parent(nav, nav->cursor_pos);
+    if(parent_idx == SIZE_MAX){
+        nav_set_messagef(nav, "Cannot move root value");
+        return CMD_ERROR;
+    }
+    NavItem* parent = &nav->items[parent_idx];
+    int64_t parent_len = drjson_len(nav->jctx, parent->value);
+
+    if(to_idx < 0 || to_idx >= parent_len)
+        return CMD_ERROR;
+
+    return nav_move_item_to_index(nav, to_idx);
+}
+
+static
+int
+cmd_move(JsonNav* nav, const char* args, size_t args_len){
+    if(args_len == 0){
+        nav_set_messagef(nav, "Error: :move requires an index.");
+        return CMD_ERROR;
+    }
+
+    // Parse the target index
+    Int64Result parse_result = parse_int64(args, args_len);
+    if(parse_result.errored){
+        nav_set_messagef(nav, "Error: Invalid index.");
+        return CMD_ERROR;
+    }
+
+    int result = nav_move_item_to_index(nav, parse_result.result);
+    if(result == CMD_OK){
+        nav_set_messagef(nav, "Moved to index %lld.", (long long)parse_result.result);
+    }
+    return result;
+}
+
 static
 int
 cmd_path(JsonNav* nav, const char* args, size_t args_len){
@@ -5005,6 +5134,8 @@ static const StringView HELP_LINES[] = {
     SV("  dd          Delete current item"),
     SV("  o           Insert after cursor (arrays/objects)"),
     SV("  O           Insert before cursor (arrays/objects)"),
+    SV("  mj/m↓       Move item down (swap with next sibling)"),
+    SV("  mk/m↑       Move item up (swap with previous sibling)"),
     SV(""),
     SV("Expand/Collapse:"),
     SV("  Space       Toggle expand/collapse"),
@@ -6135,7 +6266,8 @@ main(int argc, const char* const* argv){
         drt_paint(&globals.drt);
 
         int c = 0, cx = 0, cy = 0, magnitude = 0;
-        int r = get_input(&globals.TS, &globals.needs_rescale, &c, &cx, &cy, &magnitude);
+        int kmod = 0;
+        int r = get_input(&globals.TS, &globals.needs_rescale, &c, &cx, &cy, &magnitude, &kmod);
         if(r == -1) goto finally;
         if(!r) continue;
 
@@ -6149,6 +6281,7 @@ main(int argc, const char* const* argv){
                 nav.help_page = num_pages - 1;
             if(nav.help_page < 0)
                 nav.help_page = 0;
+            if(kmod) continue;
             switch(c){
                 case 'n':
                 case RIGHT:
@@ -6173,6 +6306,7 @@ main(int argc, const char* const* argv){
 
         // Handle search input mode
         if(nav.search_input_active){
+            if(kmod) continue;
             switch(c){
                 case ESC:
                 case CTRL_C:
@@ -6240,6 +6374,7 @@ main(int argc, const char* const* argv){
 
         // Handle command mode
         if(nav.command_mode){
+            if(kmod) continue;
             // Handle completion menu navigation
             if(nav.in_completion_menu){
                 switch(c){
@@ -6321,6 +6456,7 @@ main(int argc, const char* const* argv){
 
         // Handle edit mode
         if(nav.edit_mode){
+            if(kmod) continue;
             switch(c){
                 case ESC:
                 case CTRL_C:
@@ -6466,12 +6602,13 @@ main(int argc, const char* const* argv){
 
         // Handle digit input to build count
         if(c >= '0' && c <= '9'){
+            if(kmod) continue;
             le_append_char(&count_buffer, (char)c);
             continue;
         }
 
         // Handle text editing for count buffer (only when count buffer has content)
-        if(count_buffer.length > 0 && le_handle_key(&count_buffer, c, 0)){
+        if(count_buffer.length > 0 && !kmod && le_handle_key(&count_buffer, c, 0)){
             continue;
         }
 
@@ -6484,6 +6621,7 @@ main(int argc, const char* const* argv){
             int c2 = c;
             int c = nav.pending_key;
             nav.pending_key = 0;  // Clear pending state
+            if(kmod) continue;
 
             if(c == 'z'){
                 switch(c2){
@@ -6626,7 +6764,35 @@ main(int argc, const char* const* argv){
                         continue;
                 }
             }
+            else if(c == 'm'){
+                switch(c2){
+                    case 'j':
+                    case DOWN:
+                        nav_move_item_relative(&nav, +1);
+                        continue;
+                    case 'k':
+                    case UP:
+                        nav_move_item_relative(&nav, -1);
+                        continue;
+                    default:
+                        le_clear(&count_buffer);
+                        continue;
+                }
+            }
         }
+        if(kmod == KMOD_CTRL){
+            switch(c){
+                case UP:
+                    nav_move_item_relative(&nav, -1);
+                    continue;
+                case DOWN:
+                    nav_move_item_relative(&nav, +1);
+                    continue;
+                default:
+                    continue;
+            }
+        }
+        if(kmod) continue;
 
         // Handle input
         switch(c){
@@ -6634,6 +6800,7 @@ main(int argc, const char* const* argv){
             case 'c':
             case 'd':
             case 'y':
+            case 'm':
                 nav.pending_key = c;
                 break;
 

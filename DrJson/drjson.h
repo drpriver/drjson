@@ -541,6 +541,23 @@ DRJSON_API
 int // 0 on success
 drjson_array_set_by_index(const DrJsonContext* ctx, DrJsonValue array, int64_t idx, DrJsonValue value);
 
+// Swap two items in an array. Both indices must be valid.
+DRJSON_API
+int // 0 on success, 1 on error
+drjson_array_swap_items(const DrJsonContext* ctx, DrJsonValue array, size_t idx1, size_t idx2);
+
+// Move an item from one index to another in an array.
+// The item at from_idx is removed and inserted at to_idx.
+DRJSON_API
+int // 0 on success, 1 on error
+drjson_array_move_item(const DrJsonContext* ctx, DrJsonValue array, size_t from_idx, size_t to_idx);
+
+// Move an item from one index to another in an object (changes insertion order).
+// The item at from_idx is removed and inserted at to_idx.
+DRJSON_API
+int // 0 on success, 1 on error
+drjson_object_move_item(const DrJsonContext* ctx, DrJsonValue object, size_t from_idx, size_t to_idx);
+
 //------------------------------------------------------------
 
 ///////////////////////

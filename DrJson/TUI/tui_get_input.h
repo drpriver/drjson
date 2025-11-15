@@ -21,9 +21,16 @@ struct TermState {
 static void disable_raw(TermState*);
 static void enable_raw(TermState*);
 
+enum {
+    KMOD_NONE = 0x0,
+    KMOD_SHIFT = 0x1,
+    KMOD_CTRL = 0x2,
+    KMOD_ALT = 0x4,
+};
+
 static
 int
-get_input(TermState*, int* needs_rescale, int* pc, int* pcx, int* pcy, int* pmagnitude);
+get_input(TermState*, int* needs_rescale, int* pc, int* pcx, int* pcy, int* pmagnitude, int* kmod);
 
 enum {
     CTRL_A = 1,         // Ctrl-a

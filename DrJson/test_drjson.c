@@ -41,6 +41,9 @@ static TestFunc TestPrintToFd;
 static TestFunc TestFloatPrinting;
 static TestFunc TestCheckedQuery;
 static TestFunc TestClearValue;
+static TestFunc TestArraySwap;
+static TestFunc TestArrayMove;
+static TestFunc TestObjectMove;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSimpleParsing);
@@ -62,6 +65,9 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestFloatPrinting);
     RegisterTest(TestCheckedQuery);
     RegisterTest(TestClearValue);
+    RegisterTest(TestArraySwap);
+    RegisterTest(TestArrayMove);
+    RegisterTest(TestObjectMove);
     return test_main(argc, argv, NULL);
 }
 
@@ -1669,6 +1675,165 @@ TestFunction(TestClearValue){
     TestAssertEquals(drjson_len(ctx, obj), 1);
 
     drjson_gc(ctx, 0, 0);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestArraySwap){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Create an array [1, 2, 3, 4, 5]
+    DrJsonValue arr = drjson_make_array(ctx);
+    for(int i = 1; i <= 5; i++){
+        drjson_array_push_item(ctx, arr, drjson_make_int(i));
+    }
+
+    // Swap indices 1 and 3 (values 2 and 4)
+    int err = drjson_array_swap_items(ctx, arr, 1, 3);
+    TestAssertEquals(err, 0);
+
+    // Verify the swap
+    DrJsonValue v1 = drjson_get_by_index(ctx, arr, 1);
+    TestAssertEquals(v1.kind, DRJSON_INTEGER);
+    TestAssertEquals(v1.integer, 4);
+
+    DrJsonValue v3 = drjson_get_by_index(ctx, arr, 3);
+    TestAssertEquals(v3.kind, DRJSON_INTEGER);
+    TestAssertEquals(v3.integer, 2);
+
+    // Test swapping same index (should be no-op)
+    err = drjson_array_swap_items(ctx, arr, 2, 2);
+    TestAssertEquals(err, 0);
+
+    // Test swapping first and last
+    err = drjson_array_swap_items(ctx, arr, 0, 4);
+    TestAssertEquals(err, 0);
+
+    DrJsonValue first = drjson_get_by_index(ctx, arr, 0);
+    TestAssertEquals(first.integer, 5);
+
+    DrJsonValue last = drjson_get_by_index(ctx, arr, 4);
+    TestAssertEquals(last.integer, 1);
+
+    // Test error cases
+    err = drjson_array_swap_items(ctx, arr, 0, 99);  // Out of bounds
+    TestAssertEquals(err, 1);
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestArrayMove){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Create an array ["a", "b", "c", "d", "e"]
+    DrJsonValue arr = drjson_make_array(ctx);
+    const char* letters[] = {"a", "b", "c", "d", "e"};
+    for(int i = 0; i < 5; i++){
+        drjson_array_push_item(ctx, arr, drjson_make_string(ctx, letters[i], 1));
+    }
+
+    // Move "c" (index 2) to index 4 (end)
+    int err = drjson_array_move_item(ctx, arr, 2, 4);
+    TestAssertEquals(err, 0);
+
+    // Verify: ["a", "b", "d", "e", "c"]
+    StringView v0, v1, v2, v3, v4;
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 0), &v0.text, &v0.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 1), &v1.text, &v1.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 2), &v2.text, &v2.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 3), &v3.text, &v3.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 4), &v4.text, &v4.length);
+    TestAssertEquals(err, 0);
+
+    TestAssertEquals2(SV_equals, v0, SV("a"));
+    TestAssertEquals2(SV_equals, v1, SV("b"));
+    TestAssertEquals2(SV_equals, v2, SV("d"));
+    TestAssertEquals2(SV_equals, v3, SV("e"));
+    TestAssertEquals2(SV_equals, v4, SV("c"));
+
+    // Move "a" (index 0) to index 2
+    err = drjson_array_move_item(ctx, arr, 0, 2);
+    TestAssertEquals(err, 0);
+
+    // Verify: ["b", "d", "a", "e", "c"]
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 0), &v0.text, &v0.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 1), &v1.text, &v1.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 2), &v2.text, &v2.length);
+    TestAssertEquals(err, 0);
+
+    TestAssertEquals2(SV_equals, v0, SV("b"));
+    TestAssertEquals2(SV_equals, v1, SV("d"));
+    TestAssertEquals2(SV_equals, v2, SV("a"));
+
+    // Test moving to same index (no-op)
+    err = drjson_array_move_item(ctx, arr, 1, 1);
+    TestAssertEquals(err, 0);
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestObjectMove){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Create object {"a": 1, "b": 2, "c": 3, "d": 4}
+    DrJsonValue obj = drjson_make_object(ctx);
+    drjson_object_set_item_no_copy_key(ctx, obj, "a", 1, drjson_make_int(1));
+    drjson_object_set_item_no_copy_key(ctx, obj, "b", 1, drjson_make_int(2));
+    drjson_object_set_item_no_copy_key(ctx, obj, "c", 1, drjson_make_int(3));
+    drjson_object_set_item_no_copy_key(ctx, obj, "d", 1, drjson_make_int(4));
+
+    // Move item at index 1 ("b": 2) to index 3 (end)
+    int err = drjson_object_move_item(ctx, obj, 1, 3);
+    TestAssertEquals(err, 0);
+
+    // Verify new order: {"a": 1, "c": 3, "d": 4, "b": 2}
+    DrJsonValue keys = drjson_object_keys(obj);
+    StringView k0, k1, k2, k3;
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, keys, 0), &k0.text, &k0.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, keys, 1), &k1.text, &k1.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, keys, 2), &k2.text, &k2.length);
+    TestAssertEquals(err, 0);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, keys, 3), &k3.text, &k3.length);
+    TestAssertEquals(err, 0);
+
+    TestAssertEquals2(SV_equals, k0, SV("a"));
+    TestAssertEquals2(SV_equals, k1, SV("c"));
+    TestAssertEquals2(SV_equals, k2, SV("d"));
+    TestAssertEquals2(SV_equals, k3, SV("b"));
+
+    // Verify values still match keys
+    DrJsonValue values = drjson_object_values(obj);
+    DrJsonValue v0 = drjson_get_by_index(ctx, values, 0);
+    DrJsonValue v1 = drjson_get_by_index(ctx, values, 1);
+    DrJsonValue v2 = drjson_get_by_index(ctx, values, 2);
+    DrJsonValue v3 = drjson_get_by_index(ctx, values, 3);
+
+    TestAssertEquals(v0.integer, 1);
+    TestAssertEquals(v1.integer, 3);
+    TestAssertEquals(v2.integer, 4);
+    TestAssertEquals(v3.integer, 2);
+
+    // Verify lookups still work after moving
+    DrJsonValue val_b = drjson_query(ctx, obj, "b", 1);
+    TestAssertEquals(val_b.kind, DRJSON_INTEGER);
+    TestAssertEquals(val_b.integer, 2);
+
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();

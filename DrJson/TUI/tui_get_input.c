@@ -165,7 +165,7 @@ read_one_b(TermState* TS, int* needs_rescale, char* buff){
 
 static
 int
-get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* pmagnitude){
+get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* pmagnitude, int* kmod){
     char _c;
     char sequence[32] = {0};
     ssize_t nread = read_one_b(TS, needs_rescale, &_c);
@@ -204,6 +204,8 @@ get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* p
     if(c == ESC){
         if(read_one_nb(TS, needs_rescale, sequence) == -1) return -1;
         if(read_one_nb(TS, needs_rescale, sequence+1) == -1) return -1;
+        // LOG("sequence[0] == '%c'\n", sequence[0]);
+        // LOG("sequence[1] == '%c'\n", sequence[1]);
         // LOG("sequence[1]: %d\n", (int)sequence[1]);
         if(sequence[0] == '['){
             if(sequence[1] == '<'){
@@ -248,6 +250,7 @@ get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* p
                 }
             }
             else if(sequence[1] == 'M'){
+                // LOG("sequence[1] == 'M'\n");
                 if(read_one_nb(TS, needs_rescale, sequence+2) == -1) return -1;
                 if(read_one_nb(TS, needs_rescale, sequence+3) == -1) return -1;
                 cx = ((int)(unsigned char)sequence[3]) - 32-1;
@@ -273,7 +276,65 @@ get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* p
                 // LOG("sequence[1]: %d\n", (int)sequence[1]);
                 // Extended escape, read additional byte.
                 if(read_one_nb(TS, needs_rescale, sequence+2) == -1) return -1;
-                if(sequence[2] == '~'){
+                // LOG("sequence[2] == '%c'\n", sequence[2]);
+                if(sequence[1] == '1' && sequence[2] == ';'){
+                    if(read_one_nb(TS, needs_rescale, sequence+3) == -1) return -1;
+                    if(read_one_nb(TS, needs_rescale, sequence+4) == -1) return -1;
+                    // LOG("sequence[3] == '%c'\n", sequence[3]);
+                    // LOG("sequence[4] == '%c'\n", sequence[4]);
+                    int mod = sequence[3] - '0';
+                    switch(mod){
+                        case 2:
+                            *kmod = KMOD_SHIFT;
+                            break;
+                        case 3:
+                            *kmod = KMOD_ALT;
+                            break;
+                        case 4:
+                            *kmod = KMOD_SHIFT|KMOD_ALT;
+                            break;
+                        case 5:
+                            *kmod = KMOD_CTRL;
+                            break;
+                        case 6:
+                            *kmod = KMOD_SHIFT|KMOD_CTRL;
+                            break;
+                        case 7:
+                            *kmod = KMOD_ALT|KMOD_CTRL;
+                            break;
+                        case 8:
+                            *kmod = KMOD_SHIFT|KMOD_ALT|KMOD_CTRL;
+                            break;
+                        default:
+                            *kmod = 0;
+                            // LOG("unknown mod: %d\n", mod);
+                            break;
+                    }
+                    switch(sequence[4]) {
+                    case 'A': // Up
+                        c = UP;
+                        break;
+                    case 'B': // Down
+                        c = DOWN;
+                        break;
+                    case 'C': // Right
+                        c = RIGHT;
+                        break;
+                    case 'D': // Left
+                        c = LEFT;
+                        break;
+                    case 'H': // Home
+                        c = HOME;
+                        break;
+                    case 'F': // End
+                        c = END;
+                        break;
+                    case 'Z': // Shift-tab
+                        c = SHIFT_TAB;
+                        break;
+                    }
+                }
+                else if(sequence[2] == '~'){
                     switch(sequence[1]){
                     case '1':
                         c = HOME;
@@ -345,11 +406,34 @@ get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* p
         }
         else if(sequence[0] == 'O'){
             switch(sequence[1]){
+                case 'a':
+                    *kmod = KMOD_CTRL;
+                    c = UP;
+                    break;
+                case 'b':
+                    *kmod = KMOD_CTRL;
+                    c = DOWN;
+                    break;
+                case 'A':
+                    c = UP;
+                    break;
+                case 'B':
+                    c = DOWN;
+                    break;
+                case 'C':
+                    c = RIGHT;
+                    break;
+                case 'D':
+                    c = LEFT;
+                    break;
                 case 'H': // Home
                     c = HOME;
                     break;
                 case 'F': // End
                     c = END;
+                    break;
+                case 'M':
+                    c = ENTER;
                     break;
                 case 'P': // F1
                     c = F1;
@@ -362,6 +446,39 @@ get_input(TermState* TS, int* needs_rescale, int* pc, int* pcx, int* pcy, int* p
                     break;
                 case 'S': // F4
                     c = F4;
+                    break;
+                case 'j':
+                    c = '*';
+                    break;
+                case 'k':
+                    c = '+';
+                    break;
+                case 'l':
+                    c = ',';
+                    break;
+                case 'm':
+                    c = '-';
+                    break;
+                case 'n':
+                    c = '.';
+                    break;
+                case 'o':
+                    c = '/';
+                    break;
+                case 'X':
+                    c = '=';
+                    break;
+                case 'p':
+                case 'q':
+                case 'r':
+                case 's':
+                case 't':
+                case 'u':
+                case 'v':
+                case 'w':
+                case 'x':
+                case 'y':
+                    c = sequence[1] - 'p';
                     break;
             }
         }

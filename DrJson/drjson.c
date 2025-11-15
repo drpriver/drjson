@@ -1286,6 +1286,103 @@ drjson_array_del_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx){
     return result;
 }
 
+DRJSON_API
+int
+drjson_array_swap_items(const DrJsonContext* ctx, DrJsonValue a, size_t idx1, size_t idx2){
+    if(a.kind != DRJSON_ARRAY) return 1;
+    DrJsonArray* adata = ctx->arrays.data;
+    DrJsonArray* array = &adata[a.array_idx];
+    if(array->read_only) return 1;
+    if(idx1 >= array->count || idx2 >= array->count) return 1;
+    if(idx1 == idx2) return 0; // Nothing to do
+
+    DrJsonValue temp = array->array_items[idx1];
+    array->array_items[idx1] = array->array_items[idx2];
+    array->array_items[idx2] = temp;
+    return 0;
+}
+
+DRJSON_API
+int
+drjson_array_move_item(const DrJsonContext* ctx, DrJsonValue a, size_t from_idx, size_t to_idx){
+    if(a.kind != DRJSON_ARRAY) return 1;
+    DrJsonArray* adata = ctx->arrays.data;
+    DrJsonArray* array = &adata[a.array_idx];
+    if(array->read_only) return 1;
+    if(from_idx >= array->count || to_idx >= array->count) return 1;
+    if(from_idx == to_idx) return 0; // Nothing to do
+
+    // Save the item to move
+    DrJsonValue item = array->array_items[from_idx];
+
+    // Shift items to close the gap
+    if(from_idx < to_idx){
+        // Moving forward: shift items left
+        drj_memmove(array->array_items + from_idx,
+                   array->array_items + from_idx + 1,
+                   (to_idx - from_idx) * sizeof(*array->array_items));
+    }
+    else {
+        // Moving backward: shift items right
+        drj_memmove(array->array_items + to_idx + 1,
+                   array->array_items + to_idx,
+                   (from_idx - to_idx) * sizeof(*array->array_items));
+    }
+
+    // Place item at new position
+    array->array_items[to_idx] = item;
+    return 0;
+}
+
+DRJSON_API
+int
+drjson_object_move_item(const DrJsonContext* ctx, DrJsonValue o, size_t from_idx, size_t to_idx){
+    if(o.kind != DRJSON_OBJECT) return 1;
+    DrJsonObject* object = &ctx->objects.data[o.object_idx];
+    if(object->read_only) return 1;
+    if(from_idx >= object->count || to_idx >= object->count) return 1;
+    if(from_idx == to_idx) return 0; // Nothing to do
+
+    // Get pointers to object data
+    DrJsonHashIndex* idxes;
+    DrJsonObjectPair* pairs;
+    drj_get_obj_ptrs(object->object_items, object->capacity, &idxes, &pairs);
+
+    // Save the pair to move
+    DrJsonObjectPair temp_pair = pairs[from_idx];
+
+    // Shift items to close the gap and make space
+    if(from_idx < to_idx){
+        // Moving forward: shift pairs left
+        drj_memmove(pairs + from_idx,
+                   pairs + from_idx + 1,
+                   (to_idx - from_idx) * sizeof(*pairs));
+    }
+    else {
+        // Moving backward: shift pairs right
+        drj_memmove(pairs + to_idx + 1,
+                   pairs + to_idx,
+                   (from_idx - to_idx) * sizeof(*pairs));
+    }
+
+    // Place pair at new position
+    pairs[to_idx] = temp_pair;
+
+    // Rebuild hash table since indices changed
+    drj_memset(idxes, 0xff, 2 * sizeof(*idxes) * object->capacity);
+    for(size_t i = 0; i < object->count; i++){
+        const DrJsonObjectPair* p = &pairs[i];
+        uint32_t hash = drj_atom_get_hash(p->atom);
+        uint32_t idx = fast_reduce32(hash, (uint32_t)(2*object->capacity));
+        while(idxes[idx].index != UINT32_MAX){
+            idx++;
+            if(idx >= 2*object->capacity) idx = 0;
+        }
+        idxes[idx].index = (uint32_t)i;
+    }
+
+    return 0;
+}
 
 force_inline
 int

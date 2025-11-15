@@ -92,7 +92,10 @@
     X(TestNavCollapseAll) \
     X(TestNumericSearchRecursive) \
     X(TestNumericSearchQueryFlatView) \
-    X(TestQuerySearchLandsOnElement)
+    X(TestQuerySearchLandsOnElement) \
+    X(TestMoveCommand) \
+    X(TestMoveEdgeCases) \
+    X(TestMoveRelative)
 
 // Forward declarations of test functions
 #define X(name) static TestFunc name;
@@ -3380,6 +3383,580 @@ TestFunction(TestQuerySearchLandsOnElement){
 
     // Cleanup
     nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestMoveCommand){
+    TESTBEGIN();
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+
+    // Test 1: Move item in array using :move command
+    // Use strings to avoid flat view rendering
+    LongString json = LS("[\"a\", \"b\", \"c\", \"d\", \"e\"]");
+    DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
+
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
+    // Expand the array so we can see its children
+    bs_add(&nav.expanded, nav_get_container_id(arr), &nav.allocator);
+    nav_rebuild(&nav);
+
+    // Find the nav item for array index 1 (value "b")
+    // nav.items[0] is the array itself, nav.items[1] is first element, etc.
+    TestExpectTrue(nav.item_count == 6); // array + 5 elements
+
+    // Position cursor on element with value "b" (array index 1)
+    // Look for an item that is a child of the array (depth > 0) with index == 1
+    size_t cursor_idx = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav.items[i].depth > 0 && nav.items[i].index == 1){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav.cursor_pos = cursor_idx;
+    TestExpectEquals(nav.items[cursor_idx].index, 1);
+
+    StringView sv_b;
+    int err = drjson_get_str_and_len(ctx, nav.items[cursor_idx].value, &sv_b.text, &sv_b.length);
+    TestExpectFalse(err);
+    TestExpectEquals2(SV_equals, sv_b, SV("b"));
+
+    // Move element from index 1 to index 3 using the helper function
+    int result = nav_move_item_to_index(&nav, 3);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify the array is now ["a", "c", "d", "b", "e"]
+    StringView sv0, sv1, sv2, sv3, sv4;
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, nav.root, 0), &sv0.text, &sv0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, nav.root, 1), &sv1.text, &sv1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, nav.root, 2), &sv2.text, &sv2.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, nav.root, 3), &sv3.text, &sv3.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, nav.root, 4), &sv4.text, &sv4.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, sv0, SV("a"));
+    TestExpectEquals2(SV_equals, sv1, SV("c"));
+    TestExpectEquals2(SV_equals, sv2, SV("d"));
+    TestExpectEquals2(SV_equals, sv3, SV("b"));
+    TestExpectEquals2(SV_equals, sv4, SV("e"));
+
+    nav_free(&nav);
+
+    // Test 2: Move item in object using :move command
+    LongString obj_json = LS("{\"first\": 1, \"second\": 2, \"third\": 3}");
+    DrJsonValue obj = drjson_parse_string(ctx, obj_json.text, obj_json.length, 0);
+    TestExpectEquals((int)obj.kind, DRJSON_OBJECT);
+
+    JsonNav nav2 = {
+        .jctx = ctx,
+        .root = obj,
+        .allocator = a,
+    };
+    // Expand the object so we can see its children
+    bs_add(&nav2.expanded, nav_get_container_id(obj), &nav2.allocator);
+    nav_rebuild(&nav2);
+
+    // Find the nav item for "second" (object index 1)
+    // Look for an item that is a child (depth > 0) with index == 1
+    cursor_idx = 0;
+    for(size_t i = 0; i < nav2.item_count; i++){
+        if(nav2.items[i].depth > 0 && nav2.items[i].index == 1){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav2.cursor_pos = cursor_idx;
+    TestExpectEquals(nav2.items[cursor_idx].index, 1);
+    // Verify it's the "second" key
+    StringView key_sv;
+    int err2 = drjson_get_atom_str_and_length(ctx, nav2.items[cursor_idx].key, &key_sv.text, &key_sv.length);
+    TestExpectFalse(err2);
+    TestExpectEquals2(SV_equals, key_sv, SV("second"));
+
+    // Move "second" from index 1 to index 0 (beginning) using the helper function
+    result = nav_move_item_to_index(&nav2, 0);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify order is now "second", "first", "third"
+    DrJsonValue keys = drjson_object_keys(nav2.root);
+    StringView k0, k1, k2;
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, keys, 0), &k0.text, &k0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, keys, 1), &k1.text, &k1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, keys, 2), &k2.text, &k2.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, k0, SV("second"));
+    TestExpectEquals2(SV_equals, k1, SV("first"));
+    TestExpectEquals2(SV_equals, k2, SV("third"));
+
+    // Cleanup
+    nav_free(&nav2);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestMoveEdgeCases){
+    TESTBEGIN();
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+
+    // Test 1: Cannot move flat view items
+    // Arrays of all numbers are rendered as flat view
+    LongString num_json = LS("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]");
+    DrJsonValue num_arr = drjson_parse_string(ctx, num_json.text, num_json.length, 0);
+    TestExpectEquals((int)num_arr.kind, DRJSON_ARRAY);
+
+    JsonNav nav1 = {
+        .jctx = ctx,
+        .root = num_arr,
+        .allocator = a,
+    };
+    bs_add(&nav1.expanded, nav_get_container_id(num_arr), &nav1.allocator);
+    nav_rebuild(&nav1);
+
+    // The children should be flat view items
+    TestExpectTrue(nav1.item_count > 1);
+    if(nav1.item_count > 1){
+        TestExpectTrue(nav1.items[1].is_flat_view); // First child should be flat view
+
+        // Try to move a flat view item
+        nav1.cursor_pos = 1;
+        int result = nav_move_item_to_index(&nav1, 0);
+        TestExpectEquals(result, CMD_ERROR);
+    }
+
+    nav_free(&nav1);
+
+    // Test 2: Cannot move root value
+    LongString simple_json = LS("{\"key\": \"value\"}");
+    DrJsonValue simple_obj = drjson_parse_string(ctx, simple_json.text, simple_json.length, 0);
+
+    JsonNav nav2 = {
+        .jctx = ctx,
+        .root = simple_obj,
+        .allocator = a,
+    };
+    nav_rebuild(&nav2);
+
+    nav2.cursor_pos = 0; // Root
+    int result = nav_move_item_to_index(&nav2, 0);
+    TestExpectEquals(result, CMD_ERROR);
+
+    nav_free(&nav2);
+
+    // Test 3: Out of bounds indices
+    LongString arr_json = LS("[\"a\", \"b\", \"c\"]");
+    DrJsonValue arr = drjson_parse_string(ctx, arr_json.text, arr_json.length, 0);
+
+    JsonNav nav3 = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
+    bs_add(&nav3.expanded, nav_get_container_id(arr), &nav3.allocator);
+    nav_rebuild(&nav3);
+
+    // Find first child (non-flat view)
+    TestExpectTrue(nav3.item_count >= 2);
+    nav3.cursor_pos = 1; // First element
+
+    // Try to move to out of bounds index
+    result = nav_move_item_to_index(&nav3, 100);
+    TestExpectEquals(result, CMD_ERROR);
+
+    // Try to move to negative out of bounds
+    result = nav_move_item_to_index(&nav3, -10);
+    TestExpectEquals(result, CMD_ERROR);
+
+    nav_free(&nav3);
+
+    // Test 4: Negative indices (from end)
+    LongString arr_json2 = LS("[\"x\", \"y\", \"z\"]");
+    DrJsonValue arr2 = drjson_parse_string(ctx, arr_json2.text, arr_json2.length, 0);
+
+    JsonNav nav4 = {
+        .jctx = ctx,
+        .root = arr2,
+        .allocator = a,
+    };
+    bs_add(&nav4.expanded, nav_get_container_id(arr2), &nav4.allocator);
+    nav_rebuild(&nav4);
+
+    // Find first child
+    nav4.cursor_pos = 1; // "x" at index 0
+
+    // Move to -1 (last position, index 2)
+    result = nav_move_item_to_index(&nav4, -1);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify order is now ["y", "z", "x"]
+    StringView sv0, sv1, sv2;
+    int err;
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr2, 0), &sv0.text, &sv0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr2, 1), &sv1.text, &sv1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr2, 2), &sv2.text, &sv2.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, sv0, SV("y"));
+    TestExpectEquals2(SV_equals, sv1, SV("z"));
+    TestExpectEquals2(SV_equals, sv2, SV("x"));
+
+    nav_free(&nav4);
+
+    // Test 5: Move to same position (no-op)
+    LongString arr_json3 = LS("[\"a\", \"b\", \"c\"]");
+    DrJsonValue arr3 = drjson_parse_string(ctx, arr_json3.text, arr_json3.length, 0);
+
+    JsonNav nav5 = {
+        .jctx = ctx,
+        .root = arr3,
+        .allocator = a,
+    };
+    bs_add(&nav5.expanded, nav_get_container_id(arr3), &nav5.allocator);
+    nav_rebuild(&nav5);
+
+    // Position on second element ("b" at index 1)
+    size_t cursor_idx = 0;
+    for(size_t i = 0; i < nav5.item_count; i++){
+        if(nav5.items[i].depth > 0 && nav5.items[i].index == 1){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav5.cursor_pos = cursor_idx;
+
+    // Move to same position
+    result = nav_move_item_to_index(&nav5, 1);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify order unchanged
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr3, 0), &sv0.text, &sv0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr3, 1), &sv1.text, &sv1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr3, 2), &sv2.text, &sv2.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, sv0, SV("a"));
+    TestExpectEquals2(SV_equals, sv1, SV("b"));
+    TestExpectEquals2(SV_equals, sv2, SV("c"));
+
+    nav_free(&nav5);
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestMoveRelative){
+    TESTBEGIN();
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+
+    // Test 1: Basic relative moves (+1, -1)
+    LongString json = LS("[\"a\", \"b\", \"c\", \"d\", \"e\"]");
+    DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
+
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = arr,
+        .allocator = a,
+    };
+    bs_add(&nav.expanded, nav_get_container_id(arr), &nav.allocator);
+    nav_rebuild(&nav);
+
+    // Find "b" (index 1)
+    size_t cursor_idx = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav.items[i].depth > 0 && nav.items[i].index == 1){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav.cursor_pos = cursor_idx;
+
+    // Move down by 1 (b moves from index 1 to 2)
+    int result = nav_move_item_relative(&nav, 1);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify order: ["a", "c", "b", "d", "e"]
+    StringView sv0, sv1, sv2;
+    int err;
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 0), &sv0.text, &sv0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 1), &sv1.text, &sv1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 2), &sv2.text, &sv2.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, sv0, SV("a"));
+    TestExpectEquals2(SV_equals, sv1, SV("c"));
+    TestExpectEquals2(SV_equals, sv2, SV("b"));
+
+    // Now move back up by 1 (b moves from index 2 to 1)
+    result = nav_move_item_relative(&nav, -1);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify back to original: ["a", "b", "c", "d", "e"]
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 0), &sv0.text, &sv0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 1), &sv1.text, &sv1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr, 2), &sv2.text, &sv2.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, sv0, SV("a"));
+    TestExpectEquals2(SV_equals, sv1, SV("b"));
+    TestExpectEquals2(SV_equals, sv2, SV("c"));
+
+    nav_free(&nav);
+
+    // Test 2: Delta of 0 (no-op)
+    LongString json2 = LS("[\"x\", \"y\", \"z\"]");
+    DrJsonValue arr2 = drjson_parse_string(ctx, json2.text, json2.length, 0);
+
+    JsonNav nav2 = {
+        .jctx = ctx,
+        .root = arr2,
+        .allocator = a,
+    };
+    bs_add(&nav2.expanded, nav_get_container_id(arr2), &nav2.allocator);
+    nav_rebuild(&nav2);
+
+    // Position on "y" (index 1)
+    cursor_idx = 0;
+    for(size_t i = 0; i < nav2.item_count; i++){
+        if(nav2.items[i].depth > 0 && nav2.items[i].index == 1){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav2.cursor_pos = cursor_idx;
+
+    // Move by 0
+    result = nav_move_item_relative(&nav2, 0);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify order unchanged
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr2, 0), &sv0.text, &sv0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr2, 1), &sv1.text, &sv1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr2, 2), &sv2.text, &sv2.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, sv0, SV("x"));
+    TestExpectEquals2(SV_equals, sv1, SV("y"));
+    TestExpectEquals2(SV_equals, sv2, SV("z"));
+
+    nav_free(&nav2);
+
+    // Test 3: Out of bounds - move from first position with delta -1
+    LongString json3 = LS("[\"p\", \"q\", \"r\"]");
+    DrJsonValue arr3 = drjson_parse_string(ctx, json3.text, json3.length, 0);
+
+    JsonNav nav3 = {
+        .jctx = ctx,
+        .root = arr3,
+        .allocator = a,
+    };
+    bs_add(&nav3.expanded, nav_get_container_id(arr3), &nav3.allocator);
+    nav_rebuild(&nav3);
+
+    // Position on first element (index 0)
+    cursor_idx = 0;
+    for(size_t i = 0; i < nav3.item_count; i++){
+        if(nav3.items[i].depth > 0 && nav3.items[i].index == 0){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav3.cursor_pos = cursor_idx;
+
+    // Try to move up from first position
+    result = nav_move_item_relative(&nav3, -1);
+    TestExpectEquals(result, CMD_ERROR);
+
+    nav_free(&nav3);
+
+    // Test 4: Out of bounds - move from last position with delta +1
+    LongString json4 = LS("[\"m\", \"n\", \"o\"]");
+    DrJsonValue arr4 = drjson_parse_string(ctx, json4.text, json4.length, 0);
+
+    JsonNav nav4 = {
+        .jctx = ctx,
+        .root = arr4,
+        .allocator = a,
+    };
+    bs_add(&nav4.expanded, nav_get_container_id(arr4), &nav4.allocator);
+    nav_rebuild(&nav4);
+
+    // Position on last element (index 2)
+    cursor_idx = 0;
+    for(size_t i = 0; i < nav4.item_count; i++){
+        if(nav4.items[i].depth > 0 && nav4.items[i].index == 2){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav4.cursor_pos = cursor_idx;
+
+    // Try to move down from last position
+    result = nav_move_item_relative(&nav4, 1);
+    TestExpectEquals(result, CMD_ERROR);
+
+    nav_free(&nav4);
+
+    // Test 5: Large delta
+    LongString json5 = LS("[\"1\", \"2\", \"3\", \"4\", \"5\"]");
+    DrJsonValue arr5 = drjson_parse_string(ctx, json5.text, json5.length, 0);
+
+    JsonNav nav5 = {
+        .jctx = ctx,
+        .root = arr5,
+        .allocator = a,
+    };
+    bs_add(&nav5.expanded, nav_get_container_id(arr5), &nav5.allocator);
+    nav_rebuild(&nav5);
+
+    // Position on first element (index 0)
+    cursor_idx = 0;
+    for(size_t i = 0; i < nav5.item_count; i++){
+        if(nav5.items[i].depth > 0 && nav5.items[i].index == 0){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav5.cursor_pos = cursor_idx;
+
+    // Move by +4 (from index 0 to 4, last position)
+    result = nav_move_item_relative(&nav5, 4);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify order: ["2", "3", "4", "5", "1"]
+    StringView sv3, sv4;
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr5, 0), &sv0.text, &sv0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr5, 1), &sv1.text, &sv1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr5, 2), &sv2.text, &sv2.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr5, 3), &sv3.text, &sv3.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr5, 4), &sv4.text, &sv4.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, sv0, SV("2"));
+    TestExpectEquals2(SV_equals, sv1, SV("3"));
+    TestExpectEquals2(SV_equals, sv2, SV("4"));
+    TestExpectEquals2(SV_equals, sv3, SV("5"));
+    TestExpectEquals2(SV_equals, sv4, SV("1"));
+
+    nav_free(&nav5);
+
+    // Test 6: Flat view items (should error)
+    LongString num_json = LS("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]");
+    DrJsonValue num_arr = drjson_parse_string(ctx, num_json.text, num_json.length, 0);
+
+    JsonNav nav6 = {
+        .jctx = ctx,
+        .root = num_arr,
+        .allocator = a,
+    };
+    bs_add(&nav6.expanded, nav_get_container_id(num_arr), &nav6.allocator);
+    nav_rebuild(&nav6);
+
+    // Position on flat view item
+    if(nav6.item_count > 1 && nav6.items[1].is_flat_view){
+        nav6.cursor_pos = 1;
+        result = nav_move_item_relative(&nav6, 1);
+        TestExpectEquals(result, CMD_ERROR);
+    }
+
+    nav_free(&nav6);
+
+    // Test 7: Root value (should error)
+    LongString simple_json = LS("[\"single\"]");
+    DrJsonValue simple = drjson_parse_string(ctx, simple_json.text, simple_json.length, 0);
+
+    JsonNav nav7 = {
+        .jctx = ctx,
+        .root = simple,
+        .allocator = a,
+    };
+    nav_rebuild(&nav7);
+
+    nav7.cursor_pos = 0; // Root
+    result = nav_move_item_relative(&nav7, 1);
+    TestExpectEquals(result, CMD_ERROR);
+
+    nav_free(&nav7);
+
+    // Test 8: Multiple sequential moves
+    LongString json8 = LS("[\"A\", \"B\", \"C\", \"D\"]");
+    DrJsonValue arr8 = drjson_parse_string(ctx, json8.text, json8.length, 0);
+
+    JsonNav nav8 = {
+        .jctx = ctx,
+        .root = arr8,
+        .allocator = a,
+    };
+    bs_add(&nav8.expanded, nav_get_container_id(arr8), &nav8.allocator);
+    nav_rebuild(&nav8);
+
+    // Position on "A" (index 0)
+    cursor_idx = 0;
+    for(size_t i = 0; i < nav8.item_count; i++){
+        if(nav8.items[i].depth > 0 && nav8.items[i].index == 0){
+            cursor_idx = i;
+            break;
+        }
+    }
+    nav8.cursor_pos = cursor_idx;
+
+    // Move down 3 times
+    result = nav_move_item_relative(&nav8, 1);
+    TestExpectEquals(result, CMD_OK);
+    result = nav_move_item_relative(&nav8, 1);
+    TestExpectEquals(result, CMD_OK);
+    result = nav_move_item_relative(&nav8, 1);
+    TestExpectEquals(result, CMD_OK);
+
+    // Verify "A" is now at the end: ["B", "C", "D", "A"]
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr8, 0), &sv0.text, &sv0.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr8, 1), &sv1.text, &sv1.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr8, 2), &sv2.text, &sv2.length);
+    TestExpectFalse(err);
+    err = drjson_get_str_and_len(ctx, drjson_get_by_index(ctx, arr8, 3), &sv3.text, &sv3.length);
+    TestExpectFalse(err);
+
+    TestExpectEquals2(SV_equals, sv0, SV("B"));
+    TestExpectEquals2(SV_equals, sv1, SV("C"));
+    TestExpectEquals2(SV_equals, sv2, SV("D"));
+    TestExpectEquals2(SV_equals, sv3, SV("A"));
+
+    nav_free(&nav8);
+
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();

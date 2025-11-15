@@ -7,6 +7,9 @@
 #define DRJ_DONT_FREE_CTX 1
 #include "drjson.c"
 #include "long_string.h"
+#ifdef __clang__
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
 
 static PyModuleDef drjson;
 static PyMethodDef drjson_methods[];
