@@ -102,6 +102,9 @@
     X(TestBracelessWriteFlags) \
     X(TestBracelessOpen) \
     X(TestCmdParsing) \
+    X(TestCmdParamParseSignature) \
+    X(TestCmdParamParseArgs) \
+    X(TestCmdParamQuoting) \
 
 
 // Forward declarations of test functions
@@ -4289,6 +4292,601 @@ TestFunction(TestCmdParsing){
         int err = cmd_param_parse_signature(c->help_name, &params);
         TestExpectFalse(err);
     }
+    TESTEND();
+}
+
+TestFunction(TestCmdParamParseSignature){
+    TESTBEGIN();
+
+    // Test 1: Simple command with no params
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":quit"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, 0);
+    }
+
+    // Test 2: Command with required path argument
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":open <file>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, 1);
+        TestExpectTrue(SV_equals(params.params[0].names[0], SV("file")));
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_PATH);
+        TestExpectFalse(params.params[0].optional);
+    }
+
+    // Test 3: Command with optional flag
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":open [--braceless] <file>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, 2);
+
+        TestExpectTrue(SV_equals(params.params[0].names[0], SV("--braceless")));
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_FLAG);
+        TestExpectTrue(params.params[0].optional);
+
+        TestExpectTrue(SV_equals(params.params[1].names[0], SV("file")));
+        TestExpectEquals(params.params[1].kind, CMD_PARAM_PATH);
+        TestExpectFalse(params.params[1].optional);
+    }
+
+    // Test 4: Alternative flags (mutually exclusive)
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":sort [keys|values]"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, 1);
+
+        TestExpectTrue(SV_equals(params.params[0].names[0], SV("keys")));
+        TestExpectTrue(SV_equals(params.params[0].names[1], SV("values")));
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_FLAG);
+        TestExpectTrue(params.params[0].optional);
+    }
+
+    // Test 5: Multiple optional flags and string argument
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":sort [<query>] [keys|values] [asc|desc]"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, 3);
+
+        // First param: optional query string
+        TestExpectTrue(SV_equals(params.params[0].names[0], SV("query")));
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_STRING);
+        TestExpectTrue(params.params[0].optional);
+
+        // Second param: keys|values
+        TestExpectTrue(SV_equals(params.params[1].names[0], SV("keys")));
+        TestExpectTrue(SV_equals(params.params[1].names[1], SV("values")));
+        TestExpectEquals(params.params[1].kind, CMD_PARAM_FLAG);
+        TestExpectTrue(params.params[1].optional);
+
+        // Third param: asc|desc
+        TestExpectTrue(SV_equals(params.params[2].names[0], SV("asc")));
+        TestExpectTrue(SV_equals(params.params[2].names[1], SV("desc")));
+        TestExpectEquals(params.params[2].kind, CMD_PARAM_FLAG);
+        TestExpectTrue(params.params[2].optional);
+    }
+
+    // Test 6: Alternative flags in required position
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":w [--braceless|--no-braceless] <file>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, 2);
+
+        TestExpectTrue(SV_equals(params.params[0].names[0], SV("--braceless")));
+        TestExpectTrue(SV_equals(params.params[0].names[1], SV("--no-braceless")));
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_FLAG);
+        TestExpectTrue(params.params[0].optional);
+
+        TestExpectTrue(SV_equals(params.params[1].names[0], SV("file")));
+        TestExpectEquals(params.params[1].kind, CMD_PARAM_PATH);
+        TestExpectFalse(params.params[1].optional);
+    }
+
+    // Test 7: Directory argument (should be CMD_PARAM_PATH)
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":cd <dir>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, 1);
+
+        TestExpectTrue(SV_equals(params.params[0].names[0], SV("dir")));
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_PATH);
+        TestExpectFalse(params.params[0].optional);
+    }
+
+    // Test 8: Non-file/dir string argument
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":query <path>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, 1);
+
+        TestExpectTrue(SV_equals(params.params[0].names[0], SV("path")));
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_STRING);
+        TestExpectFalse(params.params[0].optional);
+    }
+
+    TESTEND();
+}
+
+TestFunction(TestCmdParamParseArgs){
+    TESTBEGIN();
+
+    // Test 1: No arguments for command with no params
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":quit"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV(""), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 0);
+    }
+
+    // Test 2: Simple path argument
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("test.json"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 1);
+        TestExpectTrue(args.args[0].present);
+        TestExpectTrue(SV_equals(args.args[0].content, SV("test.json")));
+    }
+
+    // Test 3: Path with spaces (flags-anywhere approach)
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("/path/with spaces/file.json"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 1);
+        TestExpectTrue(args.args[0].present);
+        TestExpectTrue(SV_equals(args.args[0].content, SV("/path/with spaces/file.json")));
+    }
+
+    // Test 4: Flag before path
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open [--braceless] <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("--braceless test.json"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 2);
+        TestExpectTrue(args.args[0].present);  // --braceless flag
+        TestExpectTrue(args.args[1].present);  // file
+        TestExpectTrue(SV_equals(args.args[1].content, SV("test.json")));
+    }
+
+    // Test 5: Flag after path (flags-anywhere)
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open [--braceless] <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("test.json --braceless"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 2);
+        TestExpectTrue(args.args[0].present);  // --braceless flag
+        TestExpectTrue(args.args[1].present);  // file
+        TestExpectTrue(SV_equals(args.args[1].content, SV("test.json")));
+    }
+
+    // Test 6: Optional flag not present
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open [--braceless] <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("test.json"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 2);
+        TestExpectFalse(args.args[0].present);  // --braceless not provided
+        TestExpectTrue(args.args[1].present);   // file provided
+    }
+
+    // Test 7: Alternative flags - first alternative
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":sort [keys|values]"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("keys"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 1);
+        TestExpectTrue(args.args[0].present);
+        TestExpectTrue(SV_equals(args.args[0].content, SV("keys")));
+    }
+
+    // Test 8: Alternative flags - second alternative
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":sort [keys|values]"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("values"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 1);
+        TestExpectTrue(args.args[0].present);
+        TestExpectTrue(SV_equals(args.args[0].content, SV("values")));
+    }
+
+    // Test 9: Multiple flags in any order
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":sort [<query>] [keys|values] [asc|desc]"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("desc values age"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 3);
+
+        // query param gets "age"
+        TestExpectTrue(args.args[0].present);
+        TestExpectTrue(SV_equals(args.args[0].content, SV("age")));
+
+        // keys|values param gets "values"
+        TestExpectTrue(args.args[1].present);
+        TestExpectTrue(SV_equals(args.args[1].content, SV("values")));
+
+        // asc|desc param gets "desc"
+        TestExpectTrue(args.args[2].present);
+        TestExpectTrue(SV_equals(args.args[2].content, SV("desc")));
+    }
+
+    // Test 10: Missing required argument
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV(""), &params, &args);
+        TestExpectEquals(err, 1);  // Should fail
+    }
+
+    // Test 11: Flags with path containing spaces
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":w [--braceless] <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("--braceless /path/with spaces/file.json"), &params, &args);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(args.count, 2);
+        TestExpectTrue(args.args[0].present);
+        TestExpectTrue(args.args[1].present);
+        TestExpectTrue(SV_equals(args.args[1].content, SV("/path/with spaces/file.json")));
+    }
+
+    // Test 12: Using cmd_get_arg_bool and cmd_get_arg_string
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open [--braceless] <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("--braceless test.json"), &params, &args) == 0);
+
+        _Bool braceless = 0;
+        int err = cmd_get_arg_bool(&args, SV("--braceless"), &braceless);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectTrue(braceless);
+
+        StringView file = {0};
+        err = cmd_get_arg_string(&args, SV("file"), &file);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectTrue(SV_equals(file, SV("test.json")));
+    }
+
+    // Test 13: cmd_get_arg_bool for missing optional flag
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open [--braceless] <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("test.json"), &params, &args) == 0);
+
+        _Bool braceless = 1;  // Initialize to true to verify it's set to false
+        int err = cmd_get_arg_bool(&args, SV("--braceless"), &braceless);
+        TestExpectEquals(err, CMD_ARG_ERROR_MISSING_BUT_OPTIONAL);
+    }
+    // Test 14: flag in between bare tokens
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":open [--braceless] <file>"), &params) == 0);
+
+        CmdArgs args = {0};
+        int err = cmd_param_parse_args(SV("test --braceless file.json"), &params, &args);
+        TestExpectEquals(err, 1);
+        if(!err){
+            StringView path;
+            err = cmd_get_arg_string(&args, SV("file"), &path);
+            if(!err)
+                TestPrintValue("file", path);
+        }
+    }
+
+    TESTEND();
+}
+
+TestFunction(TestCmdParamQuoting){
+    TESTBEGIN();
+
+    // Test 1: Double-quoted string with spaces - quotes are included in token
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <file>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("\"/path/with spaces/file.json\""), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView file_arg = {0};
+        err = cmd_get_arg_string(&args, SV("file"), &file_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,file_arg, SV("\"/path/with spaces/file.json\""));
+    }
+
+    // Test 2: Single-quoted string with spaces - quotes are included in token
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <file>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("'/path/with spaces/file.json'"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView file_arg = {0};
+        err = cmd_get_arg_string(&args, SV("file"), &file_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,file_arg, SV("'/path/with spaces/file.json'"));
+    }
+
+    // Test 3: Bracketed content with spaces - brackets are included
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <query>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("[0 1 2]"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView query_arg = {0};
+        err = cmd_get_arg_string(&args, SV("query"), &query_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,query_arg, SV("[0 1 2]"));
+    }
+
+    // Test 4: JSON path with nested quotes and brackets
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <query>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV(".foo[\"bar\"]"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView query_arg = {0};
+        err = cmd_get_arg_string(&args, SV("query"), &query_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,query_arg, SV(".foo[\"bar\"]"));
+    }
+
+    // Test 5: Nested brackets
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <query>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("[[0]]"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView query_arg = {0};
+        err = cmd_get_arg_string(&args, SV("query"), &query_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,query_arg, SV("[[0]]"));
+    }
+
+    // Test 6: Quoted string with flag present
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test --verbose <file>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)2);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("--verbose \"my file.txt\""), &params, &args);
+        TestExpectEquals(err, 0);
+
+        _Bool verbose = 0;
+        err = cmd_get_arg_bool(&args, SV("--verbose"), &verbose);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectTrue(verbose);
+
+        StringView file_arg = {0};
+        err = cmd_get_arg_string(&args, SV("file"), &file_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,file_arg, SV("\"my file.txt\""));
+    }
+
+    // Test 7: Flag after quoted string
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <file> --verbose"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)2);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("'my file.txt' --verbose"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView file_arg = {0};
+        err = cmd_get_arg_string(&args, SV("file"), &file_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,file_arg, SV("'my file.txt'"));
+
+        _Bool verbose = 0;
+        err = cmd_get_arg_bool(&args, SV("--verbose"), &verbose);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectTrue(verbose);
+    }
+
+    // Test 8: Empty quoted string - includes the quotes
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <name>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("\"\""), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView name_arg = {0};
+        err = cmd_get_arg_string(&args, SV("name"), &name_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,name_arg, SV("\"\""));
+    }
+
+    // Test 9: Unclosed quote - treats rest as token including the opening quote
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <file>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("\"unclosed"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView file_arg = {0};
+        err = cmd_get_arg_string(&args, SV("file"), &file_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,file_arg, SV("\"unclosed"));
+    }
+
+    // Test 10: Quote in the middle - whole token is treated as-is
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test [--flag] <str>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)2);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("--\"flag\""), &params, &args);
+        TestExpectEquals(err, 0);
+
+        // The --flag param should NOT match (token is --"flag" not --flag)
+        _Bool flag_val = 0;
+        err = cmd_get_arg_bool(&args, SV("--flag"), &flag_val);
+        TestExpectEquals(err, CMD_ARG_ERROR_MISSING_BUT_OPTIONAL);
+
+        // The <str> param should contain the whole token with quotes
+        StringView str_arg = {0};
+        err = cmd_get_arg_string(&args, SV("str"), &str_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,str_arg, SV("--\"flag\""));
+    }
+
+    // Test 11: Complex JSON path with quotes containing spaces and special chars
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <query>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV(".foo[\"bar with spaces\"].hello[\"]]\"]"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView query_arg = {0};
+        err = cmd_get_arg_string(&args, SV("query"), &query_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,query_arg, SV(".foo[\"bar with spaces\"].hello[\"]]\"]"));
+    }
+
+    // Test 12: Simple case - unquoted token with brackets containing space
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <query>"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)1);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV(".foo[bar baz]"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        StringView query_arg = {0};
+        err = cmd_get_arg_string(&args, SV("query"), &query_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,query_arg, SV(".foo[bar baz]"));
+    }
+
+    // Test 13: JSON path that contains a flag-like string in quotes
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <query> [--flag]"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)2);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV(".foo[\" --flag \"]"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        // The query should be the entire path including the quoted flag
+        StringView query_arg = {0};
+        err = cmd_get_arg_string(&args, SV("query"), &query_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals,query_arg, SV(".foo[\" --flag \"]"));
+
+        // The --flag param should NOT be present
+        _Bool flag_val = 0;
+        err = cmd_get_arg_bool(&args, SV("--flag"), &flag_val);
+        TestExpectEquals(err, CMD_ARG_ERROR_MISSING_BUT_OPTIONAL);
+    }
+
+    // Test 14: Leading ] causes negative bracket depth - space doesn't break
+    {
+        CmdParams params = {0};
+        int err = cmd_param_parse_signature(SV(":test <query> [--flag]"), &params);
+        TestExpectEquals(err, 0);
+        TestExpectEquals(params.count, (size_t)2);
+
+        CmdArgs args = {0};
+        err = cmd_param_parse_args(SV("] foo --flag"), &params, &args);
+        TestExpectEquals(err, 0);
+
+        // Because bracket_depth goes negative, the space doesn't break the token
+        StringView query_arg = {0};
+        err = cmd_get_arg_string(&args, SV("query"), &query_arg);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals, query_arg, SV("] foo"));
+        _Bool flag = 0;
+        err = cmd_get_arg_bool(&args, SV("--flag"), &flag);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectTrue(flag);
+    }
+
     TESTEND();
 }
 

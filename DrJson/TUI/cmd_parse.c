@@ -38,7 +38,8 @@ cmd_param_parse_signature(StringView sig, CmdParams* params){
                     params->params[params->count - 1].names[1] =
                         (StringView){.length = len, .text = token_start};
                     expecting_alt = 0;
-                } else {
+                }
+                else {
                     CmdParam* param = &params->params[params->count++];
                     param->names[0] = (StringView){.length = len, .text = token_start};
                     param->names[1] = (StringView){0, NULL};
@@ -70,7 +71,8 @@ cmd_param_parse_signature(StringView sig, CmdParams* params){
                     params->params[params->count - 1].names[1] =
                         (StringView){.length = len, .text = token_start};
                     expecting_alt = 0;
-                } else {
+                }
+                else {
                     CmdParam* param = &params->params[params->count++];
                     param->names[0] = (StringView){.length = len, .text = token_start};
                     param->names[1] = (StringView){0, NULL};
@@ -105,11 +107,10 @@ cmd_param_parse_signature(StringView sig, CmdParams* params){
 
             // Determine kind based on name (exact match for "file" or "dir")
             StringView name = param->names[0];
-            if(SV_equals(name, SV("file")) || SV_equals(name, SV("dir"))){
+            if(SV_equals(name, SV("file")) || SV_equals(name, SV("dir")))
                 param->kind = CMD_PARAM_PATH;
-            } else {
+            else
                 param->kind = CMD_PARAM_STRING;
-            }
             param->optional = optional;
 
             in_angle = 0;
@@ -155,7 +156,8 @@ cmd_param_parse_signature(StringView sig, CmdParams* params){
         if(expecting_alt && params->count > 0){
             params->params[params->count - 1].names[1] =
                 (StringView){.length = len, .text = token_start};
-        } else {
+        }
+        else {
             CmdParam* param = &params->params[params->count++];
             param->names[0] = (StringView){.length = len, .text = token_start};
             param->names[1] = (StringView){0, NULL};
@@ -200,10 +202,61 @@ cmd_param_parse_args(StringView cmd_line, const CmdParams* params, CmdArgs* args
         while(p < end && *p == ' ') p++;
         if(p >= end) break;
 
-        // Find token end
         const char* token_start = p;
-        while(p < end && *p != ' ') p++;
-        size_t token_len = p - token_start;
+        size_t token_len = 0;
+
+        // Scan token - track quote state and bracket depth
+        // Break on space only when outside quotes and brackets
+        int bracket_depth = 0;
+        int brace_depth = 0;
+        int backslash = 0;
+        char in_quote = 0;  // 0 = not in quote, '"' or '\'' = in that quote type
+
+        for(;p < end;p++){
+            char c = *p;
+
+            if(in_quote){
+                if(c == '\\'){
+                    backslash++;
+                    continue;
+                }
+                // Inside a quote - only the matching quote ends it
+                if(c == in_quote && !(backslash & 1)){
+                    in_quote = 0;
+                }
+                backslash = 0;
+                continue;
+            }
+            if(c == '"' || c == '\''){
+                // Start of quoted section
+                in_quote = c;
+                continue;
+            }
+            if(c == '{'){
+                brace_depth++;
+                continue;
+            }
+            if(c == '}'){
+                if(brace_depth)
+                    brace_depth--;
+                continue;
+            }
+            if(c == '['){
+                bracket_depth++;
+                continue;
+            }
+            if(c == ']'){
+                if(bracket_depth)
+                    bracket_depth--;
+                continue;
+            }
+            if(c == ' ' && bracket_depth == 0 && brace_depth == 0){
+                // Space outside of brackets/quotes - end of token
+                break;
+            }
+        }
+        token_len = p - token_start;
+
         StringView token = {.length = token_len, .text = token_start};
 
         // Check if this token matches any flag param
@@ -221,6 +274,24 @@ cmd_param_parse_args(StringView cmd_line, const CmdParams* params, CmdArgs* args
                 break;
             }
         }
+        if(matched_flag && non_flag_count){
+            const char* first = non_flag_tokens[0];
+            const char* last = non_flag_tokens[non_flag_count - 1];
+            size_t total_len = (last + non_flag_lengths[non_flag_count - 1]) - first;
+            StringView concatenated = {.length = total_len, .text = first};
+
+            // Assign to string/path param(s)
+            for(size_t i = 0; i < params->count; i++){
+                if(args->args[i].present) continue;
+                const CmdParam* param = &params->params[i];
+                if(param->kind == CMD_PARAM_STRING || param->kind == CMD_PARAM_PATH){
+                    args->args[i].present = 1;
+                    args->args[i].content = concatenated;
+                    break;
+                }
+            }
+            non_flag_count = 0;
+        }
 
         if(!matched_flag){
             // This is a non-flag token, save it for string/path args
@@ -234,20 +305,26 @@ cmd_param_parse_args(StringView cmd_line, const CmdParams* params, CmdArgs* args
 
     // Build string/path arg content by concatenating non-flag tokens
     // Preserve spaces between tokens by using the range from first to last
-    if(non_flag_count > 0){
+    if(non_flag_count){
         const char* first = non_flag_tokens[0];
         const char* last = non_flag_tokens[non_flag_count - 1];
         size_t total_len = (last + non_flag_lengths[non_flag_count - 1]) - first;
         StringView concatenated = {.length = total_len, .text = first};
+        _Bool used = 0;
 
         // Assign to string/path param(s)
         for(size_t i = 0; i < params->count; i++){
+            if(args->args[i].present) continue;
             const CmdParam* param = &params->params[i];
             if(param->kind == CMD_PARAM_STRING || param->kind == CMD_PARAM_PATH){
                 args->args[i].present = 1;
                 args->args[i].content = concatenated;
+                used = 1;
+                break;
             }
         }
+        if(!used)
+            return 1; // unused string args
     }
 
     // Check for missing mandatory args
