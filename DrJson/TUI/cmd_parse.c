@@ -176,8 +176,6 @@ CMD_PARSE_WARN_UNUSED
 static
 int
 cmd_param_parse_args(StringView cmd_line, const CmdParams* params, CmdArgs* args){
-    args->count = 0;
-
     // Initialize args from params
     for(size_t i = 0; i < params->count; i++){
         args->args[i].param = &params->params[i];
@@ -385,6 +383,173 @@ cmd_get_arg_string(CmdArgs* args, StringView name, StringView* out){
         }
     }
     return CMD_ARG_ERROR_MISSING_PARAM;
+}
+
+CMD_PARSE_WARN_UNUSED
+static
+int
+cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params, CmdParams* restrict out, StringView* completing_token){
+    CmdArgs args_ = {0};
+    CmdArgs* args = &args_;
+    out->count = 0;
+    // Copy-pasted from cmd_param_parse_args
+
+    // Initialize args from params
+    for(size_t i = 0; i < params->count; i++){
+        args->args[i].param = &params->params[i];
+        args->args[i].present = 0;
+        args->args[i].consumed = 0;
+        args->args[i].content = (StringView){0, NULL};
+    }
+    args->count = params->count;
+
+    enum {MAX_NON_FLAGS=16};
+    // Collect non-flag tokens for string/path args
+    const char* non_flag_tokens[MAX_NON_FLAGS];
+    size_t non_flag_lengths[MAX_NON_FLAGS];
+    size_t non_flag_count = 0;
+
+    // Tokenize and match
+    const char* p = cmd_line.text;
+    const char* end = cmd_line.text + cmd_line.length;
+
+    // Skip command name (first token before space)
+    for(; p != end && *p != ' '; p++);
+    // Skip spaces after command
+    for(; p != end && *p == ' '; p++);
+
+    while(p < end){
+        // Skip whitespace
+        while(p < end && *p == ' ') p++;
+        if(p >= end) break;
+
+        const char* token_start = p;
+        size_t token_len = 0;
+
+        // Scan token - track quote state and bracket depth
+        // Break on space only when outside quotes and brackets
+        int bracket_depth = 0;
+        int brace_depth = 0;
+        int backslash = 0;
+        char in_quote = 0;  // 0 = not in quote, '"' or '\'' = in that quote type
+
+        for(;p < end;p++){
+            char c = *p;
+
+            if(in_quote){
+                if(c == '\\'){
+                    backslash++;
+                    continue;
+                }
+                // Inside a quote - only the matching quote ends it
+                if(c == in_quote && !(backslash & 1)){
+                    in_quote = 0;
+                }
+                backslash = 0;
+                continue;
+            }
+            if(c == '"' || c == '\''){
+                // Start of quoted section
+                in_quote = c;
+                continue;
+            }
+            if(c == '{'){
+                brace_depth++;
+                continue;
+            }
+            if(c == '}'){
+                if(brace_depth)
+                    brace_depth--;
+                continue;
+            }
+            if(c == '['){
+                bracket_depth++;
+                continue;
+            }
+            if(c == ']'){
+                if(bracket_depth)
+                    bracket_depth--;
+                continue;
+            }
+            if(c == ' ' && bracket_depth == 0 && brace_depth == 0){
+                // Space outside of brackets/quotes - end of token
+                break;
+            }
+        }
+        token_len = p - token_start;
+
+        StringView token = {.length = token_len, .text = token_start};
+
+        // Check if this token matches any flag param
+        _Bool matched_flag = 0;
+        for(size_t i = 0; i < params->count; i++){
+            const CmdParam* param = &params->params[i];
+            if(param->kind != CMD_PARAM_FLAG) continue;
+
+            if(SV_equals(token, param->names[0]) ||
+               (param->names[1].text && SV_equals(token, param->names[1]))){
+                // Matched this flag
+                args->args[i].present = 1;
+                args->args[i].content = token;
+                matched_flag = 1;
+                break;
+            }
+        }
+        if(matched_flag && non_flag_count){
+            const char* first = non_flag_tokens[0];
+            const char* last = non_flag_tokens[non_flag_count - 1];
+            size_t total_len = (last + non_flag_lengths[non_flag_count - 1]) - first;
+            StringView concatenated = {.length = total_len, .text = first};
+
+            // Assign to string/path param(s)
+            for(size_t i = 0; i < params->count; i++){
+                if(args->args[i].present) continue;
+                const CmdParam* param = &params->params[i];
+                if(param->kind == CMD_PARAM_STRING || param->kind == CMD_PARAM_PATH){
+                    args->args[i].present = 1;
+                    args->args[i].content = concatenated;
+                    break;
+                }
+            }
+            non_flag_count = 0;
+        }
+
+        if(!matched_flag){
+            // This is a non-flag token, save it for string/path args
+            if(non_flag_count < MAX_NON_FLAGS){
+                non_flag_tokens[non_flag_count] = token_start;
+                non_flag_lengths[non_flag_count] = token_len;
+                non_flag_count++;
+            }
+        }
+    }
+
+    // Build string/path arg content by concatenating non-flag tokens
+    // Preserve spaces between tokens by using the range from first to last
+    if(non_flag_count){
+        const char* first = non_flag_tokens[0];
+        const char* last = non_flag_tokens[non_flag_count - 1];
+        size_t total_len = (last + non_flag_lengths[non_flag_count - 1]) - first;
+        StringView concatenated = {.length = total_len, .text = first};
+        _Bool used = 0;
+
+        // Assign to string/path param(s)
+        for(size_t i = 0; i < params->count; i++){
+            if(args->args[i].present) continue;
+            const CmdParam* param = &params->params[i];
+            if(param->kind == CMD_PARAM_STRING || param->kind == CMD_PARAM_PATH){
+                args->args[i].present = 1;
+                args->args[i].content = concatenated;
+                used = 1;
+                break;
+            }
+        }
+        if(!used)
+            return 1; // unused string args
+    }
+    (void)completing_token;
+
+    return 0;
 }
 #ifdef __clang__
 #pragma clang assume_nonnull end

@@ -105,6 +105,7 @@
     X(TestCmdParamParseSignature) \
     X(TestCmdParamParseArgs) \
     X(TestCmdParamQuoting) \
+    X(TestCmdCompletion) \
 
 
 // Forward declarations of test functions
@@ -4886,6 +4887,25 @@ TestFunction(TestCmdParamQuoting){
         TestExpectEquals(err, CMD_ARG_ERROR_NONE);
         TestExpectTrue(flag);
     }
+
+    TESTEND();
+}
+
+TestFunction(TestCmdCompletion){
+    TESTBEGIN();
+    StringView sig = SV(":open <file> [--braceless]");
+    CmdParams params = {0};
+    int err;
+    err = cmd_param_parse_signature(sig, &params);
+    TestAssertFalse(err);
+    StringView cmd_line = SV("open foo --");
+    CmdParams poss = {0};
+    StringView token = {0};
+    err = cmd_get_completion_params(cmd_line, &params, &poss, &token);
+    TestAssertFalse(err);
+    TestExpectEquals(poss.count, 1);
+    TestExpectEquals(memcmp(&poss.params[0], &params.params[1], sizeof poss.params[0]), 0);
+    TestExpectEquals2(SV_equals, token, SV("--"));
 
     TESTEND();
 }

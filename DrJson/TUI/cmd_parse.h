@@ -163,6 +163,18 @@ int
 cmd_get_arg_string(CmdArgs* args, StringView name, StringView* out);
 
 
+//
+// Parses the command line and and outputs the params we could be completing.
+// cmd_line should include the command.
+//
+// Returns 0 on success and nonzero on error.
+CMD_PARSE_WARN_UNUSED
+static
+int
+cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params, CmdParams* restrict out, StringView* completing_token);
+
+
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
