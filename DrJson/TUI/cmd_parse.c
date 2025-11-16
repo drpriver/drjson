@@ -1,5 +1,6 @@
 #ifndef CMD_PARSE_C
 #define CMD_PARSE_C
+#include <string.h>
 #include "cmd_parse.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -392,7 +393,7 @@ cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params,
     CmdArgs args_ = {0};
     CmdArgs* args = &args_;
     out->count = 0;
-    // Copy-pasted from cmd_param_parse_args
+    // Copy-pasted and altered from cmd_param_parse_args
 
     // Initialize args from params
     for(size_t i = 0; i < params->count; i++){
@@ -405,8 +406,7 @@ cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params,
 
     enum {MAX_NON_FLAGS=16};
     // Collect non-flag tokens for string/path args
-    const char* non_flag_tokens[MAX_NON_FLAGS];
-    size_t non_flag_lengths[MAX_NON_FLAGS];
+    StringView non_flag_tokens[MAX_NON_FLAGS];
     size_t non_flag_count = 0;
 
     // Tokenize and match
@@ -496,10 +496,10 @@ cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params,
             }
         }
         if(matched_flag && non_flag_count){
-            const char* first = non_flag_tokens[0];
-            const char* last = non_flag_tokens[non_flag_count - 1];
-            size_t total_len = (last + non_flag_lengths[non_flag_count - 1]) - first;
-            StringView concatenated = {.length = total_len, .text = first};
+            StringView first = non_flag_tokens[0];
+            StringView last = non_flag_tokens[non_flag_count-1];
+            size_t total_len = (last.text + last.length) - first.text;
+            StringView concatenated = {total_len, first.text};
 
             // Assign to string/path param(s)
             for(size_t i = 0; i < params->count; i++){
@@ -514,41 +514,66 @@ cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params,
             non_flag_count = 0;
         }
 
-        if(!matched_flag){
+        if(!matched_flag && non_flag_count < MAX_NON_FLAGS){
             // This is a non-flag token, save it for string/path args
-            if(non_flag_count < MAX_NON_FLAGS){
-                non_flag_tokens[non_flag_count] = token_start;
-                non_flag_lengths[non_flag_count] = token_len;
-                non_flag_count++;
-            }
+            non_flag_tokens[non_flag_count++] = (StringView){token_len, token_start};
         }
     }
 
-    // Build string/path arg content by concatenating non-flag tokens
-    // Preserve spaces between tokens by using the range from first to last
     if(non_flag_count){
-        const char* first = non_flag_tokens[0];
-        const char* last = non_flag_tokens[non_flag_count - 1];
-        size_t total_len = (last + non_flag_lengths[non_flag_count - 1]) - first;
-        StringView concatenated = {.length = total_len, .text = first};
-        _Bool used = 0;
-
-        // Assign to string/path param(s)
-        for(size_t i = 0; i < params->count; i++){
-            if(args->args[i].present) continue;
-            const CmdParam* param = &params->params[i];
-            if(param->kind == CMD_PARAM_STRING || param->kind == CMD_PARAM_PATH){
-                args->args[i].present = 1;
-                args->args[i].content = concatenated;
-                used = 1;
+        // Check the last token to see if it partially matches a flag
+        StringView last = non_flag_tokens[non_flag_count-1];
+        if(last.text + last.length != end){
+            // Trailing space, consume a string/path param if possible
+            // and then as all consumed.
+            for(size_t i = 0; i < args->count; i++){
+                CmdArg* a = &args->args[i];
+                if(a->present) continue;
+                const CmdParam* p = a->param;
+                if(p->kind != CMD_PARAM_STRING && p->kind != CMD_PARAM_PATH) continue;
+                a->present = 1;
                 break;
             }
+            goto all_consumed;
         }
-        if(!used)
-            return 1; // unused string args
+        _Bool matched = 0;
+        for(size_t i = 0; i < args->count; i++){
+            CmdArg* a = &args->args[i];
+            if(a->present) continue;
+            const CmdParam* p = a->param;
+            if(p->kind != CMD_PARAM_FLAG) continue;
+            if(SV_starts_with(p->names[0], last) || SV_starts_with(p->names[1], last)){
+                out->params[out->count++] = *p;
+                matched = 1;
+            }
+        }
+        if(matched){
+            *completing_token = last;
+            return 0;
+        }
+        // didn't partial match a flag, but we have tokens so we can only match strings.
+        StringView first = non_flag_tokens[0];
+        size_t total_len = (last.text + last.length) - first.text;
+        StringView concatenated = {total_len, first.text};
+        for(size_t i = 0; i < args->count; i++){
+            CmdArg* a = &args->args[i];
+            if(a->present) continue;
+            const CmdParam* p = a->param;
+            if(p->kind != CMD_PARAM_STRING && p->kind != CMD_PARAM_PATH) continue;
+            out->params[out->count++] = *p;
+        }
+        *completing_token = concatenated;
+        return 0;
     }
-    (void)completing_token;
-
+    all_consumed:;
+    // All our tokens got consumed, so any param not used is valid.
+    for(size_t i = 0; i < args->count; i++){
+        CmdArg* a = &args->args[i];
+        if(a->present) continue;
+        const CmdParam* p = a->param;
+        out->params[out->count++] = *p;
+    }
+    *completing_token = (StringView){0, end};
     return 0;
 }
 #ifdef __clang__

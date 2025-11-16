@@ -64,9 +64,23 @@ typedef long long ssize_t;
 #endif
 #endif
 
+#ifdef __clang__
+#pragma clang assume_nonnull begin
+#else
+#ifndef _Nullable
+#define _Nullable
+#endif
+#ifndef _Null_unspecified
+#define _Null_unspecified
+#endif
+#ifndef _Nonnull
+#define _Nonnull
+#endif
+#endif
+
 static inline
 void
-strip_whitespace(const char** ptext, size_t *pcount){
+strip_whitespace(const char*_Nonnull*_Nonnull ptext, size_t *pcount){
     size_t count = *pcount;
     const char* text = *ptext;
     while(count && text[0] == ' '){
@@ -185,6 +199,7 @@ struct JsonNav {
     int tab_count;                  // Number of consecutive tabs pressed
     char saved_command[256];        // Original command before tab completion
     size_t saved_command_len;       // Length of saved command
+    size_t saved_prefix_len;
 
     // Completion menu
     _Bool in_completion_menu;       // Whether completion menu is showing
@@ -2159,7 +2174,7 @@ typedef int (CommandHandler)(JsonNav* nav, CmdArgs* args);
 typedef struct Command Command;
 struct Command {
     StringView name;
-    StringView help_name;
+    StringView signature;
     StringView short_help;
     CommandHandler* handler;
 };
@@ -2198,6 +2213,16 @@ static const Command commands[] = {
     {SV("move"), SV(":move <index>"), SV("  Move current item to <index>"), cmd_move},
     {SV("m"), SV(":m <index>"), SV("  Move current item to <index>"), cmd_move},
 };
+
+static
+const Command* _Nullable
+cmd_by_name(StringView name){
+    for(size_t i = 0; i < sizeof commands / sizeof commands[0]; i++){
+        if(SV_equals(commands[i].name, name))
+            return &commands[i];
+    }
+    return NULL;
+}
 
 static void build_command_helps(void);
 static const StringView* cmd_helps;
@@ -2480,9 +2505,9 @@ copy_to_clipboard(const char* text, size_t len){
 
 #ifdef __APPLE__
 // Cached Objective-C runtime state for clipboard operations
-typedef void* (*objc_getClass_t)(const char*);
-typedef void* (*sel_registerName_t)(const char*);
-typedef void* (*objc_msgSend_t)(void*, void*, ...);
+typedef void*_Null_unspecified (*objc_getClass_t)(const char*);
+typedef void*_Null_unspecified (*sel_registerName_t)(const char*);
+typedef void*_Null_unspecified (*objc_msgSend_t)(void*, void*, ...);
 
 typedef struct ObjCClipboard ObjCClipboard;
 struct ObjCClipboard {
@@ -2522,7 +2547,7 @@ struct ObjCClipboard {
 };
 
 static
-ObjCClipboard*
+ObjCClipboard* _Nullable
 get_objc_clipboard(void){
     static ObjCClipboard cached = {0};
     static _Bool initialized = 0;
@@ -3642,7 +3667,7 @@ enum Operator {
 typedef enum Operator Operator;
 
 static
-const char*
+const char* _Nullable
 parse_operator(const char* p, const char* end, Operator* op){
     while (p < end && *p == ' ') p++; // skip whitespace
     if(p >= end) return NULL;
@@ -3661,7 +3686,7 @@ parse_operator(const char* p, const char* end, Operator* op){
 }
 
 static
-const char*
+const char* _Nullable
 parse_literal(DrJsonContext* ctx, const char* p, const char* end, DrJsonValue* val){
     while (p < end && *p == ' ') p++; // skip whitespace
     if(p >= end) return NULL;
@@ -4070,6 +4095,19 @@ cmd_path(JsonNav* nav, CmdArgs* args){
     return CMD_OK;
 }
 
+static
+void
+nav_completion_add(JsonNav* nav, StringView name){
+    if(nav->completion_count >= 64) return;
+    // Store the full command name
+    size_t copy_len = name.length < 255 ? name.length : 255;
+    memcpy(nav->completion_matches[nav->completion_count], name.text, copy_len);
+    nav->completion_matches[nav->completion_count][copy_len] = '\0';
+    nav->completion_count++;
+}
+
+static void nav_completion_add_path_completion(JsonNav* nav, StringView prefix);
+
 // Tab completion for command mode
 // Opens completion menu with all matches
 // Returns: 0 = no completion, 1 = menu shown
@@ -4086,14 +4124,14 @@ nav_complete_command(JsonNav* nav){
     }
 
     // Use saved command for determining context
-    const char* source = nav->saved_command;
-    size_t source_len = nav->saved_command_len;
+    StringView source = {nav->saved_command_len, nav->saved_command};
 
     // Find where we are in the command
     // If cursor is at start or only whitespace before cursor, complete command names
+    StringView cmd_name = {.text = source.text};
     _Bool completing_command = 1;
-    for(size_t i = 0; i < source_len; i++){
-        if(source[i] == ' '){
+    for(; cmd_name.length < source.length; cmd_name.length++){
+        if(source.text[cmd_name.length] == ' '){
             completing_command = 0;
             break;
         }
@@ -4103,295 +4141,192 @@ nav_complete_command(JsonNav* nav){
 
     if(completing_command){
         // Complete command names using command table
-        // Find prefix
-        size_t prefix_len = source_len;
-        const char* prefix = source;
 
         // Find matching commands
-        for(size_t i = 0; i < sizeof commands / sizeof commands[0] && nav->completion_count < 64; i++){
-            size_t cmd_len = commands[i].name.length;
-            if(cmd_len >= prefix_len && memcmp(commands[i].name.text, prefix, prefix_len) == 0){
-                // Store the full command name
-                size_t copy_len = cmd_len < 255 ? cmd_len : 255;
-                memcpy(nav->completion_matches[nav->completion_count], commands[i].name.text, copy_len);
-                nav->completion_matches[nav->completion_count][copy_len] = '\0';
-                nav->completion_count++;
+        for(size_t i = 0; i < sizeof commands / sizeof commands[0]; i++){
+            StringView name = commands[i].name;
+            if(SV_starts_with(name, cmd_name)){
+                nav_completion_add(nav, name);
             }
         }
-
-        if(nav->completion_count == 0){
-            return 0; // No matches
-        }
-
-        // Show completion menu
-        nav->in_completion_menu = 1;
-        nav->completion_selected = 0;
-        nav->completion_scroll = 0;
-
-        // Update buffer with first completion
-        const char* first = nav->completion_matches[0];
-        size_t first_len = strlen(first);
-        le->length = first_len < le->capacity ? first_len : le->capacity - 1;
-        memcpy(le->data, first, le->length);
-        le->data[le->length] = '\0';
-        le->cursor_pos = le->length;
-
-        return 1;
+        if(nav->completion_count)
+            nav->saved_prefix_len = 0;
     }
     else {
-        // Complete file paths
-        // Use saved original command to extract the path prefix
-        const char* source = nav->saved_command;
-        size_t source_len = nav->saved_command_len;
+        // Complete commands according to the current possible completions based on cmd signature.
+        const Command* cmd = cmd_by_name(cmd_name);
+        if(!cmd) return 0;
 
-        // Extract the path part after the command
-        size_t path_start = 0;
-        for(size_t i = 0; i < source_len; i++){
-            if(source[i] == ' '){
-                path_start = i + 1;
+        CmdParams params, completion_params;
+        int err;
+        err = cmd_param_parse_signature(cmd->signature, &params);
+        if(err) return 0;
+        StringView completion_token;
+        err = cmd_get_completion_params(source, &params, &completion_params, &completion_token);
+        if(err) return 0;
+
+        // do flags first
+        for(size_t i = 0; i < completion_params.count; i++){
+            CmdParam* p = &completion_params.params[i];
+            if(p->kind == CMD_PARAM_FLAG){
+                if(p->names[0].length)
+                    nav_completion_add(nav, p->names[0]);
+                if(p->names[1].length)
+                    nav_completion_add(nav, p->names[1]);
+            }
+        }
+
+        // paths last
+        for(size_t i = 0; i < completion_params.count; i++){
+            CmdParam* p = &completion_params.params[i];
+            if(p->kind == CMD_PARAM_PATH){
+                nav_completion_add_path_completion(nav, completion_token);
                 break;
             }
         }
-
-        // Skip leading spaces in path
-        while(path_start < source_len && source[path_start] == ' '){
-            path_start++;
+        if(nav->completion_count){
+            nav->saved_prefix_len = completion_token.text - source.text;
         }
-
-        if(path_start >= source_len){
-            // No path typed yet, list current directory
-            path_start = source_len;
-        }
-
-        // Extract the path prefix from the original saved command
-        size_t path_len = source_len - path_start;
-        char path_prefix[1024];
-        if(path_len >= sizeof path_prefix) path_len = sizeof path_prefix - 1;
-        memcpy(path_prefix, source + path_start, path_len);
-        path_prefix[path_len] = '\0';
-
-        // Expand ~ in the path prefix
-        char expanded_path[1024];
-        if(expand_tilde_to_buffer(path_prefix, path_len, expanded_path, sizeof expanded_path) == 0){
-            // Use expanded path
-            size_t expanded_len = strlen(expanded_path);
-            if(expanded_len < sizeof path_prefix){
-                memcpy(path_prefix, expanded_path, expanded_len);
-                path_prefix[expanded_len] = '\0';
-                path_len = expanded_len;
-            }
-        }
-
-        // Split into directory and filename parts
-        char dir_path[1024] = ".";
-        char file_prefix[256] = "";
-        size_t file_prefix_len = 0;
-
-        // Find last '/' to split directory and filename
-        for(size_t i = path_len; i > 0; i--){
-            if(path_prefix[i-1] == '/' || path_prefix[i-1] == '\\'){
-                // Copy directory part
-                size_t dir_len = i;
-                if(dir_len >= sizeof dir_path) dir_len = sizeof dir_path - 1;
-                memcpy(dir_path, path_prefix, dir_len);
-                dir_path[dir_len] = '\0';
-
-                // Copy filename prefix
-                file_prefix_len = path_len - i;
-                if(file_prefix_len >= sizeof file_prefix) file_prefix_len = sizeof file_prefix - 1;
-                memcpy(file_prefix, path_prefix + i, file_prefix_len);
-                file_prefix[file_prefix_len] = '\0';
-                break;
-            }
-        }
-
-        // If no '/' found, use current directory and full path as prefix
-        if(dir_path[0] != '.' || dir_path[1] != '\0'){
-            // We found a directory part
-        }
-        else {
-            // No directory separator found, use whole path as filename prefix
-            file_prefix_len = path_len;
-            if(file_prefix_len >= sizeof file_prefix) file_prefix_len = sizeof file_prefix - 1;
-            memcpy(file_prefix, path_prefix, file_prefix_len);
-            file_prefix[file_prefix_len] = '\0';
-        }
-
-        // List matching files
-        #ifndef _WIN32
-        DIR* d = opendir(dir_path);
-        if(!d) return 0;
-
-        // Collect matching entries into completion menu
-        struct dirent* entry;
-        while((entry = readdir(d)) != NULL && nav->completion_count < 64){
-            // Skip . and ..
-            if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
-                continue;
-            }
-
-            // Check if it matches the prefix
-            size_t entry_len = strlen(entry->d_name);
-            if(entry_len >= file_prefix_len && memcmp(entry->d_name, file_prefix, file_prefix_len) == 0){
-
-                // Build the full completed path for this match
-                char completed[256];
-                size_t completed_len = 0;
-
-                // Copy command part from saved original
-                for(size_t i = 0; i < path_start; i++){
-                    if(completed_len < sizeof completed - 1){
-                        completed[completed_len++] = source[i];
-                    }
-                }
-
-                // Copy directory part if present
-                if(dir_path[0] != '.' || dir_path[1] != '\0'){
-                    size_t dir_len = strlen(dir_path);
-                    for(size_t i = 0; i < dir_len && completed_len < sizeof completed - 1; i++){
-                        completed[completed_len++] = dir_path[i];
-                    }
-                }
-
-                // Copy matched filename
-                for(size_t i = 0; i < entry_len && completed_len < sizeof completed - 1; i++){
-                    completed[completed_len++] = entry->d_name[i];
-                }
-
-                completed[completed_len] = '\0';
-
-                // Store in completion matches
-                memcpy(nav->completion_matches[nav->completion_count], completed, completed_len + 1);
-                nav->completion_count++;
-            }
-        }
-        closedir(d);
-
-        if(nav->completion_count == 0)
-            return 0; // No matches
-
-        // Show completion menu
-        nav->in_completion_menu = 1;
-        nav->completion_selected = 0;
-        nav->completion_scroll = 0;
-
-        // Update buffer with first completion
-        const char* first = nav->completion_matches[0];
-        size_t first_len = strlen(first);
-        le->length = first_len < le->capacity ? first_len : le->capacity - 1;
-        memcpy(le->data, first, le->length);
-        le->data[le->length] = '\0';
-        le->cursor_pos = le->length;
-
-        return 1;
-        #else
-        // Windows file completion using FindFirstFile/FindNextFile
-        WIN32_FIND_DATAA find_data;
-        char search_pattern[512];
-        size_t pattern_len = 0;
-
-        // Build search pattern: dir_path + "*"
-        // dir_path is either "." or "path/to/dir/" (includes trailing separator)
-        size_t dir_len = strlen(dir_path);
-        for(size_t i = 0; i < dir_len && pattern_len < sizeof search_pattern - 2; i++){
-            search_pattern[pattern_len++] = dir_path[i];
-        }
-        // If dir_path is ".", append "\*", otherwise just append "*"
-        if(dir_len == 1 && dir_path[0] == '.'){
-            search_pattern[pattern_len++] = '\\';
-        }
-        search_pattern[pattern_len++] = '*';
-        search_pattern[pattern_len] = '\0';
-
-        HANDLE hFind = FindFirstFileA(search_pattern, &find_data);
-        if(hFind == INVALID_HANDLE_VALUE){
-            return 0;
-        }
-
-        // Collect matching entries
-        do {
-            // Skip . and ..
-            if(strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0){
-                continue;
-            }
-
-            // Check if it matches the prefix
-            size_t entry_len = strlen(find_data.cFileName);
-            if(entry_len >= file_prefix_len && memcmp(find_data.cFileName, file_prefix, file_prefix_len) == 0){
-                // Build the full completed path for this match
-                char completed[256];
-                size_t completed_len = 0;
-
-                // Copy command part from saved original
-                for(size_t i = 0; i < path_start; i++){
-                    if(completed_len < sizeof completed - 1){
-                        completed[completed_len++] = source[i];
-                    }
-                }
-
-                // Copy directory part if present
-                if(dir_path[0] != '.' || dir_path[1] != '\0'){
-                    size_t dir_len2 = strlen(dir_path);
-                    for(size_t i = 0; i < dir_len2 && completed_len < sizeof completed - 1; i++){
-                        completed[completed_len++] = dir_path[i];
-                    }
-                }
-
-                // Copy matched filename
-                for(size_t i = 0; i < entry_len && completed_len < sizeof completed - 1; i++){
-                    completed[completed_len++] = find_data.cFileName[i];
-                }
-
-                completed[completed_len] = '\0';
-
-                // Store in completion matches
-                memcpy(nav->completion_matches[nav->completion_count], completed, completed_len + 1);
-                nav->completion_count++;
-
-                if(nav->completion_count >= 64) break;
-            }
-        } while(FindNextFileA(hFind, &find_data));
-
-        FindClose(hFind);
-
-        if(nav->completion_count == 0)
-            return 0; // No matches
-
-        // Show completion menu
-        nav->in_completion_menu = 1;
-        nav->completion_selected = 0;
-        nav->completion_scroll = 0;
-
-        // Update buffer with first completion
-        const char* first = nav->completion_matches[0];
-        size_t first_len = strlen(first);
-        le->length = first_len < le->capacity ? first_len : le->capacity - 1;
-        memcpy(le->data, first, le->length);
-        le->data[le->length] = '\0';
-        le->cursor_pos = le->length;
-
-        return 1;
-        #endif
     }
+    if(!nav->completion_count) return 0;
+
+    // Show completion menu
+    nav->in_completion_menu = 1;
+    nav->completion_selected = 0;
+    nav->completion_scroll = 0;
+
+    // Update buffer with first completion
+    const char* first = nav->completion_matches[0];
+    size_t first_len = strlen(first);
+    size_t total_len = nav->saved_prefix_len + first_len;
+    if(total_len < le->capacity){
+        memcpy(le->data, nav->saved_command, nav->saved_prefix_len);
+        memcpy(le->data+nav->saved_prefix_len, first, first_len);
+        le->length = total_len;
+        le->data[total_len] = 0;
+        le->cursor_pos = total_len;
+    }
+    return 1;
+}
+
+static
+void
+nav_completion_add_path_completion(JsonNav* nav, StringView prefix){
+    char path_prefix[1024];
+    // Expand ~ in the path prefix
+    int err = expand_tilde_to_buffer(prefix.text, prefix.length, path_prefix, sizeof path_prefix);
+    if(err != 0) return;
+    size_t path_len = strlen(path_prefix);
+    if(0)LOG("path_prefix: '%s'\n", path_prefix);
+
+    // Split into directory and filename parts
+    char dir_path[1024] = ".";
+    char file_prefix[256] = "";
+    size_t file_prefix_len = 0;
+
+    // Find last '/' to split directory and filename
+    for(size_t i = path_len; i > 0; i--){
+        _Bool is_slash;
+        #ifdef _WIN32
+        is_slash = path_prefix[i-1] == '\\' || path_prefix[i-1] == '/';
+        #else
+        is_slash = path_prefix[i-1] == '/';
+        #endif
+        if(is_slash){
+            // Copy directory part
+            size_t dir_len = i;
+            if(dir_len >= sizeof dir_path) return;
+            memcpy(dir_path, path_prefix, dir_len);
+            dir_path[dir_len] = '\0';
+
+            // Copy filename prefix
+            file_prefix_len = path_len - i;
+            if(file_prefix_len >= sizeof file_prefix) return;
+            memcpy(file_prefix, path_prefix + i, file_prefix_len);
+            file_prefix[file_prefix_len] = '\0';
+            break;
+        }
+    }
+    if(0)LOG("file_prefix_len: %zu\n", file_prefix_len);
+
+    // If no '/' found, use current directory and full path as prefix
+    if(dir_path[0] != '.' || dir_path[1] != '\0'){
+        // We found a directory part
+        if(0)LOG("found directory part\n");
+    }
+    else {
+        // No directory separator found, use whole path as filename prefix
+        file_prefix_len = path_len;
+        if(file_prefix_len >= sizeof file_prefix) return;
+        memcpy(file_prefix, path_prefix, file_prefix_len);
+        file_prefix[file_prefix_len] = '\0';
+        if(0)LOG("no directory separator\n");
+    }
+
+    // List matching files
+    #ifndef _WIN32
+    DIR* d = opendir(dir_path);
+    if(!d) return;
+
+    // Collect matching entries into completion menu
+    for(struct dirent* entry = readdir(d); entry; entry = readdir(d)){
+        // Skip . and ..
+        if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
+            continue;
+        }
+        if(0)LOG("entry->d_name: '%s'\n", entry->d_name);
+
+        // Check if it matches the prefix
+        size_t entry_len = strlen(entry->d_name);
+        if(entry_len >= file_prefix_len && memcmp(entry->d_name, file_prefix, file_prefix_len) == 0){
+
+            // Build the full completed path for this match
+            char completed[256];
+            size_t completed_len = 0;
+            if(prefix.length >= sizeof completed) return;
+            memcpy(completed, prefix.text, prefix.length);
+            completed_len = prefix.length;
+            if(entry_len < file_prefix_len){
+                if(0)LOG("entry_len < file_prefix_len: %zu < %zu\n", entry_len, file_prefix_len);
+                continue;
+            }
+            size_t entry_diff = entry_len - file_prefix_len;
+            if(entry_diff + completed_len >= sizeof completed){
+                if(0)LOG("entry_diff + completed_len: %zu + %zu = %zu\n", entry_diff, completed_len, entry_diff+completed_len);
+                continue;
+            }
+            memcpy(completed+completed_len, entry->d_name+file_prefix_len, entry_diff);
+            completed_len += entry_diff;
+            if(0)LOG("completed: '%.*s'\n", (int)completed_len, completed);
+            StringView comp = {completed_len, completed};
+            nav_completion_add(nav, comp);
+        }
+    }
+    closedir(d);
+    #else
+    // Windows file completion using FindFirstFile/FindNextFile
+    // TODO
+    #endif
 }
 
 // Accept the currently selected completion
 static
 void
 nav_accept_completion(JsonNav* nav){
-    if(!nav->in_completion_menu || nav->completion_count == 0){
+    if(!nav->in_completion_menu || nav->completion_count == 0)
         return;
-    }
 
     LineEditor* le = &nav->command_buffer;
     const char* completion = nav->completion_matches[nav->completion_selected];
     size_t completion_len = strlen(completion);
+    size_t total_len = completion_len + nav->saved_prefix_len;
 
-    if(completion_len < le->capacity){
-        memcpy(le->data, completion, completion_len);
-        le->data[completion_len] = '\0';
-        le->length = completion_len;
-        le->cursor_pos = completion_len;
+    if(total_len < le->capacity){
+        memcpy(le->data, nav->saved_command, nav->saved_prefix_len);
+        memcpy(le->data+nav->saved_prefix_len, completion, completion_len);
+        le->data[total_len] = '\0';
+        le->length = total_len;
+        le->cursor_pos = total_len;
     }
 
     // Exit completion menu
@@ -4409,9 +4344,8 @@ nav_exit_completion(JsonNav* nav){
 static
 void
 nav_cancel_completion(JsonNav* nav){
-    if(!nav->in_completion_menu){
+    if(!nav->in_completion_menu)
         return;
-    }
 
     LineEditor* le = &nav->command_buffer;
     memcpy(le->data, nav->saved_command, nav->saved_command_len);
@@ -4426,9 +4360,8 @@ nav_cancel_completion(JsonNav* nav){
 static
 void
 nav_completion_move(JsonNav* nav, int delta){
-    if(!nav->in_completion_menu || nav->completion_count == 0){
+    if(!nav->in_completion_menu || nav->completion_count == 0)
         return;
-    }
 
     nav->completion_selected += delta;
 
@@ -4444,11 +4377,15 @@ nav_completion_move(JsonNav* nav, int delta){
     const char* selected = nav->completion_matches[nav->completion_selected];
     size_t selected_len = strlen(selected);
 
+    size_t total_len = selected_len + nav->saved_prefix_len;
     LineEditor* le = &nav->command_buffer;
-    le->length = selected_len < le->capacity ? selected_len : le->capacity - 1;
-    memcpy(le->data, selected, le->length);
-    le->data[le->length] = '\0';
-    le->cursor_pos = le->length;
+    if(total_len < le->capacity){
+        memcpy(le->data, nav->saved_command, nav->saved_prefix_len);
+        memcpy(le->data+nav->saved_prefix_len, selected, selected_len);
+        le->data[total_len] = '\0';
+        le->length = total_len;
+        le->cursor_pos = total_len;
+    }
 
     // Adjust scroll to keep selection visible
     // Show up to 10 items at a time
@@ -4493,37 +4430,35 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
 
     // Look up command in command table
     StringView cmd_sv = {.text = command, .length = cmd_len};
-    for(size_t i = 0; i < sizeof commands / sizeof commands[0]; i++){
-        if(SV_equals(commands[i].name, cmd_sv)){
-            // Found matching command, call handler
-            const char* args = arg_start ? arg_start : "";
-            size_t args_len = arg_start ? arg_len : 0;
-            strip_whitespace(&args, &args_len);
+    const Command* cmd = cmd_by_name(cmd_sv);
+    if(!cmd){
+        // Unknown command
+        nav_set_messagef(nav, "Unknown command: %.*s", (int)cmd_len, command);
+        return CMD_ERROR;
+    }
+    // Found matching command, call handler
+    const char* args = arg_start ? arg_start : "";
+    size_t args_len = arg_start ? arg_len : 0;
+    strip_whitespace(&args, &args_len);
 
-            // Parse command signature
-            CmdParams params = {0};
-            int err = cmd_param_parse_signature(commands[i].help_name, &params);
-            if(err){
-                nav_set_messagef(nav, "Internal error: invalid command signature");
-                return CMD_ERROR;
-            }
-
-            // Parse command line arguments
-            CmdArgs cmdargs = {0};
-            err = cmd_param_parse_args((StringView){.length = args_len, .text = args}, &params, &cmdargs);
-            if(err){
-                nav_set_messagef(nav, "Error: Invalid arguments for command");
-                return CMD_ERROR;
-            }
-
-            // Call command handler
-            return commands[i].handler(nav, &cmdargs);
-        }
+    // Parse command signature
+    CmdParams params = {0};
+    int err = cmd_param_parse_signature(cmd->signature, &params);
+    if(err){
+        nav_set_messagef(nav, "Internal error: invalid command signature");
+        return CMD_ERROR;
     }
 
-    // Unknown command
-    nav_set_messagef(nav, "Unknown command: %.*s", (int)cmd_len, command);
-    return CMD_ERROR;
+    // Parse command line arguments
+    CmdArgs cmdargs = {0};
+    err = cmd_param_parse_args((StringView){.length = args_len, .text = args}, &params, &cmdargs);
+    if(err){
+        nav_set_messagef(nav, "Error: Invalid arguments for command");
+        return CMD_ERROR;
+    }
+
+    // Call command handler
+    return cmd->handler(nav, &cmdargs);
 }
 
 //------------------------------------------------------------
@@ -5341,7 +5276,7 @@ utf8_display_width(const char* str, size_t byte_len){
 // Takes an array of StringView lines and renders them with pagination
 static
 void
-nav_render_help(Drt* drt, int screenw, int screenh, int page, int* out_num_pages,
+nav_render_help(Drt* drt, int screenw, int screenh, int page, int*_Nullable out_num_pages,
                         const StringView* help_lines, int total_lines){
     // Calculate lines available for content (leave room for borders and page indicator)
     int max_content_height = screenh - 6;  // Top border, bottom border, page indicator, margins
@@ -5470,7 +5405,7 @@ build_command_helps(void){
     helps[j++] = SV("Commands");
     helps[j++] = SV("");
     for(size_t i = 0; i < command_count; i++){
-        helps[j++] = commands[i].help_name;
+        helps[j++] = commands[i].signature;
         if(i + 1 < command_count && commands[i].handler != commands[i+1].handler){
             helps[j++] = commands[i].short_help;
             helps[j++] = SV("");
@@ -5997,7 +5932,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
             int match_idx = nav->completion_scroll + i;
             if(match_idx >= nav->completion_count) break;
 
-            int y = screenh - 1 - visible_items + i;
+            int y = screenh - 2 - visible_items + i;
             if(y < 1) break; // Don't overwrite status line
 
             drt_move(drt, 0, y);
@@ -6048,6 +5983,26 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     }
     drt_clear_to_end_of_row(drt);
     drt_pop_state(drt);
+
+    if(nav->command_mode){
+        StringView cmd_name = nav->command_buffer.sv;
+        for(size_t i = 0; i < nav->command_buffer.length; i++){
+            if(nav->command_buffer.data[i] == ' '){
+                cmd_name.length = i;
+                break;
+            }
+        }
+        const Command* cmd = cmd_by_name(cmd_name);
+        if(cmd){
+            drt_move(drt, 0, screenh-2);
+            drt_push_state(drt);
+            drt_set_style(drt, DRT_STYLE_ITALIC);
+            drt_set_8bit_color(drt, 7);
+            drt_puts(drt, cmd->signature.text, cmd->signature.length);
+            drt_pop_state(drt);
+            drt_clear_to_end_of_row(drt);
+        }
+    }
 
     // Position cursor and show/hide based on whether we're editing
     if(show_cursor && cursor_x >= 0 && cursor_y >= 0){
@@ -6182,7 +6137,7 @@ parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJsonValue* ou
 
 
 int
-main(int argc, const char* const* argv){
+main(int argc, const char*_Nonnull const*_Nonnull argv){
     // Set these here instead of in static storage for bss optimization.
     globals.needs_recalc = 1;
     globals.needs_rescale = 1;
@@ -6465,6 +6420,7 @@ main(int argc, const char* const* argv){
                 switch(c){
                     case UP:
                     case CTRL_P:
+                    case SHIFT_TAB:
                         nav_completion_move(&nav, -1);
                         continue;
                     case DOWN:
@@ -7302,3 +7258,6 @@ main(int argc, const char* const* argv){
     nav_free(&nav);
     return 0;
 }
+#ifdef __clang__
+#pragma clang assume_nonnull end
+#endif
