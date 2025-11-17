@@ -284,6 +284,14 @@ struct JsonNav {
     size_t focus_stack_count;
     size_t focus_stack_capacity;
 
+    // Jump list (stores paths to allow jumps across expand/collapse)
+    struct {
+        DrJsonPath* paths;          // Array of paths to jump positions
+        size_t count;               // Number of jumps in list
+        size_t capacity;            // Allocated capacity
+        size_t current;             // Current position in jump list (0 = oldest)
+    } jump_list;
+
     // Multi-key input state
     int pending_key;                // First key of a two-key sequence (z, c, d, y)
 };
@@ -747,9 +755,198 @@ nav_free(JsonNav* nav){
     le_free(&nav->command_buffer);
     if(nav->focus_stack)
         nav->allocator.free(nav->allocator.user_pointer, nav->focus_stack, nav->focus_stack_capacity * sizeof *nav->focus_stack);
+    if(nav->jump_list.paths)
+        nav->allocator.free(nav->allocator.user_pointer, nav->jump_list.paths, nav->jump_list.capacity * sizeof *nav->jump_list.paths);
     if(nav->completion.matches)
         nav->allocator.free(nav->allocator.user_pointer, nav->completion.matches, nav->completion.capacity*COMMAND_SIZE);
     *nav = (JsonNav){0};
+}
+
+// Forward declaration for nav_navigate_to_path (defined later in file)
+static size_t nav_navigate_to_path(JsonNav* nav, size_t container_idx, const DrJsonPath* path);
+
+// Build DrJsonPath to current cursor position
+// Returns 0 on success, non-zero on error
+static
+int
+nav_build_path_to_cursor(JsonNav* nav, DrJsonPath* out_path){
+    if(nav->item_count == 0) return -1;
+
+    NavItem* cursor_item = &nav->items[nav->cursor_pos];
+
+    // Build path in reverse (from cursor to root)
+    DrJsonPath temp = {0};
+
+    // Start from cursor position and walk backwards to root
+    size_t current_pos = nav->cursor_pos;
+    int current_depth = cursor_item->depth;
+
+    // Add the cursor item itself
+    if(current_depth > 0 && temp.count < DRJSON_PATH_MAX_DEPTH){
+        if(cursor_item->key.bits != 0){
+            temp.segments[temp.count].kind = DRJSON_PATH_KEY;
+            temp.segments[temp.count].key = cursor_item->key;
+            temp.count++;
+        }
+        else if(cursor_item->index >= 0){
+            temp.segments[temp.count].kind = DRJSON_PATH_INDEX;
+            temp.segments[temp.count].index = cursor_item->index;
+            temp.count++;
+        }
+    }
+
+    // Walk backwards to find all parent items
+    for(size_t i = current_pos; i > 0 && current_depth > 0; i--){
+        NavItem* item = &nav->items[i - 1];
+        if(item->depth < current_depth){
+            // Found a parent
+            if(item->depth > 0 && temp.count < DRJSON_PATH_MAX_DEPTH){
+                if(item->key.bits != 0){
+                    temp.segments[temp.count].kind = DRJSON_PATH_KEY;
+                    temp.segments[temp.count].key = item->key;
+                    temp.count++;
+                }
+                else if(item->index >= 0){
+                    temp.segments[temp.count].kind = DRJSON_PATH_INDEX;
+                    temp.segments[temp.count].index = item->index;
+                    temp.count++;
+                }
+            }
+            current_depth = item->depth;
+        }
+    }
+
+    // Reverse the path (temp is cursor->root, we want root->cursor)
+    out_path->count = temp.count;
+    for(int i = 0; i < (int)temp.count; i++){
+        out_path->segments[i] = temp.segments[temp.count - 1 - i];
+    }
+
+    return 0;
+}
+
+// Record current position in jump list before a large jump
+static
+void
+nav_record_jump(JsonNav* nav){
+    if(nav->item_count == 0) return;
+
+    // Build path to current cursor position
+    DrJsonPath current_path;
+    int err;
+
+    err = nav_build_path_to_cursor(nav, &current_path);
+    if(err) return ;// Failed to build path
+
+    // If we're in the middle of the jump list (not at the end), truncate
+    // When nav_record_jump is called, it means we're about to make a new jump
+    // So truncate everything after current and move current past the end
+    if(nav->jump_list.count > 0 && nav->jump_list.current < nav->jump_list.count - 1){
+        nav->jump_list.count = nav->jump_list.current + 1;
+        nav->jump_list.current = nav->jump_list.count;
+        return;
+    }
+
+    // We're at or past the end of the list
+    // Don't record if we're already at this position (avoid duplicates)
+    if(nav->jump_list.count > 0){
+        size_t check_idx = nav->jump_list.current < nav->jump_list.count ? nav->jump_list.current : nav->jump_list.count - 1;
+        DrJsonPath* existing_path = &nav->jump_list.paths[check_idx];
+        // Compare paths
+        if(existing_path->count == current_path.count){
+            _Bool same = 1;
+            for(size_t i = 0; i < current_path.count; i++){
+                if(existing_path->segments[i].kind != current_path.segments[i].kind){
+                    same = 0;
+                    break;
+                }
+                if(existing_path->segments[i].kind == DRJSON_PATH_KEY){
+                    if(existing_path->segments[i].key.bits != current_path.segments[i].key.bits){
+                        same = 0;
+                        break;
+                    }
+                }
+                else {
+                    if(existing_path->segments[i].index != current_path.segments[i].index){
+                        same = 0;
+                        break;
+                    }
+                }
+            }
+            if(same) return; // Already at this path
+        }
+    }
+
+    // Ensure capacity
+    if(nav->jump_list.count >= nav->jump_list.capacity){
+        size_t old_capacity = nav->jump_list.capacity;
+        size_t new_capacity = old_capacity ? old_capacity * 2 : 32;
+        DrJsonPath* new_paths = nav->allocator.realloc(nav->allocator.user_pointer, nav->jump_list.paths, old_capacity * sizeof *new_paths, new_capacity * sizeof *new_paths);
+        if(!new_paths) return; // Allocation failed
+        nav->jump_list.paths = new_paths;
+        nav->jump_list.capacity = new_capacity;
+    }
+
+    // Add current path
+    nav->jump_list.paths[nav->jump_list.count] = current_path;
+    nav->jump_list.count++;
+    // Current should now be "past the end" since we're about to jump to a new position
+    nav->jump_list.current = nav->jump_list.count;
+}
+
+
+// Jump to older position (Ctrl-O)
+static
+void
+nav_jump_older(JsonNav* nav){
+    if(nav->jump_list.count == 0) return;
+
+    // If current is past the end, we're at a new unrecorded position
+    // Record it first so we can Ctrl-I back to it
+    if(nav->jump_list.current >= nav->jump_list.count){
+        nav_record_jump(nav);
+        // After recording: count increased by 1, current = count (past the end)
+        // We want to go back to the position before the one we just recorded
+        // That's at index (count - 2)
+        if(nav->jump_list.count >= 2){
+            nav->jump_list.current = nav->jump_list.count - 2;
+        }
+        else {
+            // Not enough history to go back
+            return;
+        }
+    }
+    // Otherwise, try to go back one more
+    else if(nav->jump_list.current > 0){
+        nav->jump_list.current--;
+    }
+    else {
+        return; // Already at oldest (index 0)
+    }
+
+    // Navigate to the stored path from root (index 0)
+    const DrJsonPath* target_path = &nav->jump_list.paths[nav->jump_list.current];
+    size_t target_idx = nav_navigate_to_path(nav, 0, target_path);
+    nav->cursor_pos = target_idx;
+}
+
+// Jump to newer position (Ctrl-I)
+static
+void
+nav_jump_newer(JsonNav* nav){
+    if(nav->jump_list.count == 0) return;
+
+    // Check if we can go forward
+    if(nav->jump_list.current >= nav->jump_list.count - 1){
+        return; // Already at newest (or past the end)
+    }
+
+    nav->jump_list.current++;
+
+    // Navigate to the stored path from root (index 0)
+    const DrJsonPath* target_path = &nav->jump_list.paths[nav->jump_list.current];
+    size_t target_idx = nav_navigate_to_path(nav, 0, target_path);
+    nav->cursor_pos = target_idx;
 }
 
 static inline
@@ -3268,16 +3465,12 @@ cmd_query(JsonNav* nav, CmdArgs* args){
         return CMD_ERROR;
     }
 
-    // Get current value as starting point
-    DrJsonValue current = nav->items[nav->cursor_pos].value;
-
-    // Navigate through the path using the JSON API (not the visible items)
-    // This allows us to navigate through collapsed containers
+    // First validate the path exists by traversing the JSON value tree
+    DrJsonValue current = nav->root;
     for(size_t seg_idx = 0; seg_idx < path.count; seg_idx++){
         DrJsonPathSegment* seg = &path.segments[seg_idx];
 
         if(seg->kind == DRJSON_PATH_KEY){
-            // Navigate by key (object member)
             if(current.kind != DRJSON_OBJECT){
                 nav_set_messagef(nav, "Error: Cannot index non-object with key at segment %zu", seg_idx);
                 return CMD_ERROR;
@@ -3294,16 +3487,9 @@ cmd_query(JsonNav* nav, CmdArgs* args){
                     nav_set_messagef(nav, "Error: Key not found");
                 return CMD_ERROR;
             }
-
-            // Expand the current container if needed
-            if(nav_is_container(current)){
-                bs_add(&nav->expanded, nav_get_container_id(current), &nav->allocator);
-            }
-
             current = next;
         }
         else if(seg->kind == DRJSON_PATH_INDEX){
-            // Navigate by index (array element)
             if(current.kind != DRJSON_ARRAY){
                 nav_set_messagef(nav, "Error: Cannot index non-array with [%lld] at segment %zu", (long long)seg->index, seg_idx);
                 return CMD_ERROR;
@@ -3314,32 +3500,18 @@ cmd_query(JsonNav* nav, CmdArgs* args){
                 nav_set_messagef(nav, "Error: Index [%lld] out of bounds", (long long)seg->index);
                 return CMD_ERROR;
             }
-
-            // Expand the current container if needed
-            if(nav_is_container(current)){
-                bs_add(&nav->expanded, nav_get_container_id(current), &nav->allocator);
-            }
-
             current = next;
         }
     }
 
-    // Rebuild the items array to show newly expanded containers
-    nav->needs_rebuild = 1;
-    nav_rebuild(nav);
+    // Path is valid, record jump before moving
+    nav_record_jump(nav);
 
-    // Now find the target value in the rebuilt items array
-    for(size_t i = 0; i < nav->item_count; i++){
-        if(drjson_eq(nav->items[i].value, current)){
-            nav->cursor_pos = i;
-            nav_set_messagef(nav, "Navigated to: %.*s", (int)path_sv.length, path_sv.text);
-            return CMD_OK;
-        }
-    }
-
-    // This shouldn't happen, but handle it just in case
-    nav_set_messagef(nav, "Error: Found value but couldn't locate it in view");
-    return CMD_ERROR;
+    // Use nav_navigate_to_path which correctly handles navigation and expansion
+    size_t target_idx = nav_navigate_to_path(nav, 0, &path);
+    nav->cursor_pos = target_idx;
+    nav_set_messagef(nav, "Navigated to: %.*s", (int)path_sv.length, path_sv.text);
+    return CMD_OK;
 }
 
 static
@@ -3385,6 +3557,9 @@ cmd_focus(JsonNav* nav, CmdArgs* args){
         nav_set_messagef(nav, "Error: Already the root");
         return CMD_ERROR;
     }
+
+    // Record jump before changing focus
+    nav_record_jump(nav);
 
     nav_focus_stack_push(nav, nav->root);
     nav->root = item->value;
@@ -4596,6 +4771,9 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
                 target_pos = 0;
             }
         }
+
+        // Record jump before moving
+        nav_record_jump(nav);
 
         // Jump to the line
         nav->cursor_pos = target_pos;
@@ -5829,32 +6007,24 @@ nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
 
     NavItem* cursor_item = &nav->items[nav->cursor_pos];
 
-    // Collect path components by walking backwards to root
-    typedef struct PathComponent PathComponent;
-    struct PathComponent {
-        _Bool is_array_index;
-        int64_t index;
-        DrJsonAtom key;
-    };
-
-    PathComponent components[64]; // Support up to 64 levels deep
-    int component_count = 0;
+    // Build path in reverse (from cursor to root)
+    DrJsonPath temp = {0};
 
     // Start from cursor position and walk backwards to root
     size_t current_pos = nav->cursor_pos;
     int current_depth = cursor_item->depth;
 
     // Add the cursor item itself
-    if(current_depth > 0 && component_count < 64){
+    if(current_depth > 0 && temp.count < DRJSON_PATH_MAX_DEPTH){
         if(cursor_item->key.bits != 0){
-            components[component_count].is_array_index = 0;
-            components[component_count].key = cursor_item->key;
-            component_count++;
+            temp.segments[temp.count].kind = DRJSON_PATH_KEY;
+            temp.segments[temp.count].key = cursor_item->key;
+            temp.count++;
         }
         else if(cursor_item->index >= 0){
-            components[component_count].is_array_index = 1;
-            components[component_count].index = cursor_item->index;
-            component_count++;
+            temp.segments[temp.count].kind = DRJSON_PATH_INDEX;
+            temp.segments[temp.count].index = cursor_item->index;
+            temp.count++;
         }
     }
 
@@ -5863,23 +6033,23 @@ nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
         NavItem* item = &nav->items[i - 1];
         if(item->depth < current_depth){
             // Found a parent
-            if(item->depth > 0 && component_count < 64){
+            if(item->depth > 0 && temp.count < DRJSON_PATH_MAX_DEPTH){
                 if(item->key.bits != 0){
-                    components[component_count].is_array_index = 0;
-                    components[component_count].key = item->key;
-                    component_count++;
+                    temp.segments[temp.count].kind = DRJSON_PATH_KEY;
+                    temp.segments[temp.count].key = item->key;
+                    temp.count++;
                 }
                 else if(item->index >= 0){
-                    components[component_count].is_array_index = 1;
-                    components[component_count].index = item->index;
-                    component_count++;
+                    temp.segments[temp.count].kind = DRJSON_PATH_INDEX;
+                    temp.segments[temp.count].index = item->index;
+                    temp.count++;
                 }
             }
             current_depth = item->depth;
         }
     }
 
-    // Build the path string (components are in reverse order)
+    // Build the path string (temp is cursor->root, output root->cursor)
     size_t written = 0;
 
     // Start with root indicator
@@ -5888,11 +6058,11 @@ nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
     }
 
     // Add components in reverse order (from root to cursor)
-    for(int i = component_count - 1; i >= 0 && written < buf_size; i--){
-        if(components[i].is_array_index){
+    for(int i = temp.count - 1; i >= 0 && written < buf_size; i--){
+        if(temp.segments[i].kind == DRJSON_PATH_INDEX){
             // Array index: [123]
             char index_buf[32];
-            int len = snprintf(index_buf, sizeof index_buf, "[%lld]", (long long)components[i].index);
+            int len = snprintf(index_buf, sizeof index_buf, "[%lld]", (long long)temp.segments[i].index);
             if(len > 0 && written + (size_t)len < buf_size){
                 memcpy(buf + written, index_buf, len);
                 written += len;
@@ -5900,7 +6070,7 @@ nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size){
         }
         else {
             // Object key: .keyname
-            DrJsonValue key_val = drjson_atom_to_value(components[i].key);
+            DrJsonValue key_val = drjson_atom_to_value(temp.segments[i].key);
             const char* key_str = NULL;
             size_t key_len = 0;
             int err = drjson_get_str_and_len(nav->jctx, key_val, &key_str, &key_len);
@@ -6830,6 +7000,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                         // Setup failed (e.g., query parse failed), fall back to recursive
                         nav_setup_search(&nav, search_str, search_len, SEARCH_RECURSIVE);
                     }
+                    nav_record_jump(&nav);
 
                     // Perform search
                     nav_search_recursive(&nav);
@@ -7358,6 +7529,18 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                 nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
 
+            case CTRL_O:
+                // Jump to older position in jump list
+                nav_jump_older(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
+            case TAB:
+                // Jump to newer position in jump list (Ctrl-I is same as Tab)
+                nav_jump_newer(&nav);
+                nav_ensure_cursor_visible(&nav, globals.screenh);
+                break;
+
             case HOME:
             case 'g':
                 nav.cursor_pos = 0;
@@ -7597,12 +7780,14 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
 
             case 'n':
                 // Next search match
+                nav_record_jump(&nav);
                 nav_search_next(&nav);
                 nav_center_cursor(&nav, globals.screenh);
                 break;
 
             case 'N':
                 // Previous search match
+                nav_record_jump(&nav);
                 nav_search_prev(&nav);
                 nav_center_cursor(&nav, globals.screenh);
                 break;

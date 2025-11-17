@@ -72,6 +72,7 @@
     X(TestQueryCommand) \
     X(TestLineNumberCommand) \
     X(TestValuesOnlySearch) \
+    X(TestJumpList) \
     X(TestFocusUnfocusCommands) \
     X(TestNavJumpToNthChild) \
     X(TestFocusStackOperations) \
@@ -2296,6 +2297,162 @@ TestFunction(TestValuesOnlySearch){
     // Should find "test" only as value (in "name": "test")
     TestExpectTrue(matches_values < matches_all); // Should be fewer matches than normal search
     TestExpectEquals(matches_values, 1); // Should still find the value match
+
+    // Cleanup
+    nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+// Test jump list (Ctrl-O / Ctrl-I)
+TestFunction(TestJumpList){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // Create a simple object with string values to avoid flat array view
+    LongString json = LS("{\"a\": \"alpha\", \"b\": \"beta\", \"c\": \"gamma\", \"d\": \"delta\", \"e\": \"epsilon\", \"f\": \"zeta\", \"g\": \"eta\", \"h\": \"theta\", \"i\": \"iota\", \"j\": \"kappa\"}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
+
+    // Expand root to see all items
+    uint64_t root_id = nav_get_container_id(root);
+    bs_add(&nav.expanded, root_id, &a);
+    nav_rebuild(&nav);
+
+    // Start at position 0
+    nav.cursor_pos = 0;
+    TestExpectEquals(nav.cursor_pos, 0);
+    TestExpectEquals(nav.jump_list.count, 0);
+
+    // Jump to line 5 (index 4) - record where we are (0), then move
+    nav_record_jump(&nav);
+    nav.cursor_pos = 4;
+    TestExpectEquals(nav.jump_list.count, 1);
+    TestExpectEquals(nav.jump_list.current, 1);  // Past the end
+
+    // Jump to line 8 (index 7) - record where we are (4), then move
+    nav_record_jump(&nav);
+    nav.cursor_pos = 7;
+    TestExpectEquals(nav.jump_list.count, 2);
+    TestExpectEquals(nav.jump_list.current, 2);  // Past the end
+
+    // Jump to line 10 (index 9) - record where we are (7), then move
+    nav_record_jump(&nav);
+    nav.cursor_pos = 9;
+    TestExpectEquals(nav.jump_list.count, 3);
+    TestExpectEquals(nav.jump_list.current, 3);  // Past the end
+
+    // Now jump back with Ctrl-O (current=3, past the end)
+    // This should record position 9 first, then jump back
+    nav_jump_older(&nav);
+    TestExpectEquals(nav.cursor_pos, 7);  // Should be at position stored at index 2
+    TestExpectEquals(nav.jump_list.current, 2);
+    TestExpectEquals(nav.jump_list.count, 4);  // Now 4 because we recorded position 9
+
+    // Jump back again (move to index 1)
+    nav_jump_older(&nav);
+    TestExpectEquals(nav.cursor_pos, 4);  // Should be at position stored at index 1
+    TestExpectEquals(nav.jump_list.current, 1);
+
+    // Jump back to start (move to index 0)
+    nav_jump_older(&nav);
+    TestExpectEquals(nav.cursor_pos, 0);  // Should be at position stored at index 0
+    TestExpectEquals(nav.jump_list.current, 0);
+
+    // Try to jump back again - should not move
+    size_t before = nav.cursor_pos;
+    nav_jump_older(&nav);
+    TestExpectEquals(nav.cursor_pos, before);  // Should not have moved
+    TestExpectEquals(nav.jump_list.current, 0);  // Should still be at 0
+
+    // Jump forward with Ctrl-I (move to index 1)
+    nav_jump_newer(&nav);
+    TestExpectEquals(nav.cursor_pos, 4);
+    TestExpectEquals(nav.jump_list.current, 1);
+
+    // Jump forward again (move to index 2)
+    nav_jump_newer(&nav);
+    TestExpectEquals(nav.cursor_pos, 7);
+    TestExpectEquals(nav.jump_list.current, 2);
+
+    // Call nav_record_jump from the middle - should truncate even if at same position
+    nav_record_jump(&nav);
+    TestExpectEquals(nav.jump_list.count, 3);  // Truncated to [0, 4, 7]
+    TestExpectEquals(nav.jump_list.current, 3);  // Past the end
+
+    // Now actually move somewhere new
+    nav.cursor_pos = 2;
+    // We've moved but not called nav_record_jump yet
+    // So we're at an unrecorded position
+
+    // Test the specific bug: :2, ctrl-o, :5, ctrl-o should work
+    nav.jump_list.count = 0;
+    nav.jump_list.current = 0;
+    nav.cursor_pos = 0;
+
+    // :2 to jump to line 2
+    test_execute_commandf(&nav, "2");
+    TestExpectEquals(nav.jump_list.count, 1);  // [0]
+    TestExpectEquals(nav.jump_list.current, 1);  // Past the end
+
+    // ctrl-o back - should record position 2, then jump to 0
+    nav_jump_older(&nav);
+    TestExpectEquals(nav.cursor_pos, 0);
+    TestExpectEquals(nav.jump_list.count, 2);  // [0, 2]
+    TestExpectEquals(nav.jump_list.current, 0);
+
+    // :5 to jump to 5 - should truncate and set current past end
+    test_execute_commandf(&nav, "5");
+    TestExpectEquals(nav.jump_list.count, 1);  // Truncated to [0]
+    TestExpectEquals(nav.jump_list.current, 1);  // Past the end
+
+    // ctrl-o - should record position 5, then jump to 0
+    nav_jump_older(&nav);
+    TestExpectEquals(nav.cursor_pos, 0);
+    TestExpectEquals(nav.jump_list.count, 2);  // [0, 5]
+    TestExpectEquals(nav.jump_list.current, 0);
+
+    // ctrl-i - should jump to 5
+    nav_jump_newer(&nav);
+    TestExpectEquals(nav.cursor_pos, 4);
+    TestExpectEquals(nav.jump_list.current, 1);
+
+    // Test Ctrl-O from unrecorded position records it so you can Ctrl-I back
+    // Reset to a clean state
+    nav.jump_list.count = 0;
+    nav.jump_list.current = 0;
+    nav.cursor_pos = 0;
+
+    // Record a couple of jumps
+    nav_record_jump(&nav);  // Records 0
+    nav.cursor_pos = 3;
+    nav_record_jump(&nav);  // Records 3
+    nav.cursor_pos = 6;
+    // Now at position 6, count=2 [0, 3], current=2 (past the end)
+    TestExpectEquals(nav.jump_list.count, 2);
+    TestExpectEquals(nav.jump_list.current, 2);
+
+    // Press Ctrl-O from this unrecorded position
+    // Should record position 6, then jump back to position 3
+    nav_jump_older(&nav);
+    TestExpectEquals(nav.cursor_pos, 3);
+    TestExpectEquals(nav.jump_list.count, 3);  // Now [0, 3, 6]
+    TestExpectEquals(nav.jump_list.current, 1);
+
+    // Press Ctrl-I to jump forward - should go back to position 6
+    nav_jump_newer(&nav);
+    TestExpectEquals(nav.cursor_pos, 6);
+    TestExpectEquals(nav.jump_list.current, 2);
 
     // Cleanup
     nav_free(&nav);

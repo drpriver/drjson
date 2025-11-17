@@ -615,7 +615,7 @@ drjson_make_array(DrJsonContext* ctx){
 MALLOC_FUNC
 ALLOCATOR_SIZE(2)
 static
-void*
+void*_Null_unspecified
 wrapped_malloc(void*_Null_unspecified _unused, size_t size){
     (void)_unused;
     return malloc(size);
@@ -623,12 +623,16 @@ wrapped_malloc(void*_Null_unspecified _unused, size_t size){
 
 ALLOCATOR_SIZE(4)
 static
-void*
+void*_Null_unspecified
 wrapped_realloc(void*_Null_unspecified _unused, void*_Nullable data, size_t orig_size, size_t new_size){
     (void)_unused;
     (void)orig_size;
-    void* result = realloc(data, new_size);
-    return result;
+    if(!new_size){
+        free(data);
+        return NULL;
+    }
+    if(!data) return malloc(new_size);
+    return realloc(data, new_size);
 }
 
 static
