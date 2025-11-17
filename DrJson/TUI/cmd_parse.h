@@ -25,6 +25,7 @@ enum CmdParamKind {
     CMD_PARAM_FLAG,
     CMD_PARAM_PATH,
     CMD_PARAM_STRING,
+    CMD_PARAM_INTEGER,
 };
 
 typedef struct CmdParam CmdParam;
@@ -109,7 +110,10 @@ struct CmdArg {
     const CmdParam* param;
     _Bool present; // Whether this arg was present in the commandline.
     _Bool consumed; // For arg retrieval, whether we've already consumed this arg.
-    StringView content; // The string that matched this arg.
+    union {
+        StringView content; // The string that matched this arg.
+        int64_t integer; // integer value of this arg.
+    };
 };
 
 typedef struct CmdArgs CmdArgs;
@@ -161,6 +165,16 @@ CMD_PARSE_WARN_UNUSED
 static
 int
 cmd_get_arg_string(CmdArgs* args, StringView name, StringView* out);
+
+//
+// Retrieves an integer of the given name.
+// Returns one of the CMD_ARG_ERROR_* error codes.
+// Parses the string content as int64_t and returns in 'out'.
+//
+CMD_PARSE_WARN_UNUSED
+static
+int
+cmd_get_arg_integer(CmdArgs* args, StringView name, int64_t* out);
 
 
 //

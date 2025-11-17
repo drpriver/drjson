@@ -4486,15 +4486,16 @@ cmd_flatten(JsonNav* nav, CmdArgs* args){
 
     // Parse optional depth argument (default: 1)
     int64_t depth = 1;
-    StringView depth_sv = {0};
-    int err = cmd_get_arg_string(args, SV("depth"), &depth_sv);
+    int err = cmd_get_arg_integer(args, SV("depth"), &depth);
     if(err == CMD_ARG_ERROR_NONE){
-        Int64Result parse_result = parse_int64(depth_sv.text, depth_sv.length);
-        if(parse_result.errored || parse_result.result < -1){
+        if(depth < -1){
             nav_set_messagef(nav, "Error: Invalid depth (use positive number or -1 for infinite).");
             return CMD_ERROR;
         }
-        depth = parse_result.result;
+    }
+    else if(err != CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+        nav_set_messagef(nav, "Error: Invalid depth (use positive number or -1 for infinite).");
+        return CMD_ERROR;
     }
 
     NavItem* item = &nav->items[nav->cursor_pos];
@@ -4661,27 +4662,20 @@ static
 int
 cmd_move(JsonNav* nav, CmdArgs* args){
     // Get required index argument
-    StringView index_sv = {0};
-    int err = cmd_get_arg_string(args, SV("index"), &index_sv);
+    int64_t target_index = 0;
+    int err = cmd_get_arg_integer(args, SV("index"), &target_index);
     if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
         nav_set_messagef(nav, "Error: :move requires an index.");
         return CMD_ERROR;
     }
     if(err != CMD_ARG_ERROR_NONE){
-        nav_set_messagef(nav, "Error parsing index");
-        return CMD_ERROR;
-    }
-
-    // Parse the target index
-    Int64Result parse_result = parse_int64(index_sv.text, index_sv.length);
-    if(parse_result.errored){
         nav_set_messagef(nav, "Error: Invalid index.");
         return CMD_ERROR;
     }
 
-    int result = nav_move_item_to_index(nav, parse_result.result);
+    int result = nav_move_item_to_index(nav, target_index);
     if(result == CMD_OK){
-        nav_set_messagef(nav, "Moved to index %lld.", (long long)parse_result.result);
+        nav_set_messagef(nav, "Moved to index %lld.", (long long)target_index);
     }
     return result;
 }

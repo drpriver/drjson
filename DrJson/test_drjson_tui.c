@@ -112,6 +112,7 @@
     X(TestCmdParamParseSignature) \
     X(TestCmdParamParseArgs) \
     X(TestCmdParamQuoting) \
+    X(TestCmdParamInteger) \
     X(TestCmdCompletion) \
     X(TestNavCompletion) \
 
@@ -5962,6 +5963,271 @@ TestFunction(TestCmdParamQuoting){
     TESTEND();
 }
 
+TestFunction(TestCmdParamInteger){
+    TESTBEGIN();
+
+    // Test 1: :flatten [<depth>] - real command with optional integer
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":flatten [<depth>]"), &params) == 0);
+        TestExpectEquals(params.count, (size_t)1);
+        TestExpectTrue(SV_equals(params.params[0].names[0], SV("depth")));
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_INTEGER);
+        TestExpectTrue(params.params[0].optional);
+
+        // With depth
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("5"), &params, &args) == 0);
+        int64_t depth = 0;
+        int err = cmd_get_arg_integer(&args, SV("depth"), &depth);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(depth, 5);
+
+        // Without depth (optional)
+        CmdArgs args2 = {0};
+        TestAssert(cmd_param_parse_args(SV(""), &params, &args2) == 0);
+        err = cmd_get_arg_integer(&args2, SV("depth"), &depth);
+        TestExpectEquals(err, CMD_ARG_ERROR_MISSING_BUT_OPTIONAL);
+    }
+
+    // Test 2: :move <index> - real command with required integer
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":move <index>"), &params) == 0);
+        TestExpectEquals(params.count, (size_t)1);
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_INTEGER);
+        TestExpectFalse(params.params[0].optional);
+
+        // Valid index
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("10"), &params, &args) == 0);
+        int64_t index = 0;
+        int err = cmd_get_arg_integer(&args, SV("index"), &index);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(index, 10);
+
+        // Negative index
+        CmdArgs args2 = {0};
+        TestAssert(cmd_param_parse_args(SV("-1"), &params, &args2) == 0);
+        err = cmd_get_arg_integer(&args2, SV("index"), &index);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(index, -1);
+
+        // Missing required arg
+        CmdArgs args3 = {0};
+        TestExpectEquals(cmd_param_parse_args(SV(""), &params, &args3), 1);
+    }
+
+    // Test 3: Multiple integers - e.g., :slice <start> <end>
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":slice <index> <count>"), &params) == 0);
+        TestExpectEquals(params.count, (size_t)2);
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_INTEGER);
+        TestExpectEquals(params.params[1].kind, CMD_PARAM_INTEGER);
+
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("10 20"), &params, &args) == 0);
+
+        int64_t index = 0;
+        int err = cmd_get_arg_integer(&args, SV("index"), &index);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(index, 10);
+
+        int64_t count = 0;
+        err = cmd_get_arg_integer(&args, SV("count"), &count);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(count, 20);
+    }
+
+    // Test 4: Integer before flag - e.g., :test <count> [--verbose]
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":test <count> [--verbose]"), &params) == 0);
+
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("42 --verbose"), &params, &args) == 0);
+
+        int64_t count = 0;
+        int err = cmd_get_arg_integer(&args, SV("count"), &count);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(count, 42);
+
+        _Bool verbose = 0;
+        err = cmd_get_arg_bool(&args, SV("--verbose"), &verbose);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectTrue(verbose);
+    }
+
+    // Test 5: Flag before integer - e.g., :test [--verbose] <count>
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":test [--verbose] <count>"), &params) == 0);
+
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("--verbose 42"), &params, &args) == 0);
+
+        _Bool verbose = 0;
+        int err = cmd_get_arg_bool(&args, SV("--verbose"), &verbose);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectTrue(verbose);
+
+        int64_t count = 0;
+        err = cmd_get_arg_integer(&args, SV("count"), &count);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(count, 42);
+    }
+
+    // Test 6: Integer with mutually exclusive flags
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":test <count> [asc|desc]"), &params) == 0);
+
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("100 desc"), &params, &args) == 0);
+
+        int64_t count = 0;
+        int err = cmd_get_arg_integer(&args, SV("count"), &count);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(count, 100);
+
+        _Bool desc = 0;
+        err = cmd_get_arg_bool(&args, SV("desc"), &desc);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectTrue(desc);
+    }
+
+    // Test 7: Invalid integer values
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":test <index>"), &params) == 0);
+
+        // Non-numeric
+        CmdArgs args1 = {0};
+        TestAssertEquals(cmd_param_parse_args(SV("abc"), &params, &args1), 1);
+        int64_t index = 0;
+        int err = cmd_get_arg_integer(&args1, SV("index"), &index);
+        TestExpectEquals(err, CMD_ARG_ERROR_MISSING);
+
+        // Overflow
+        CmdArgs args2 = {0};
+        TestAssertEquals(cmd_param_parse_args(SV("99999999999999999999999999"), &params, &args2), 1);
+        err = cmd_get_arg_integer(&args2, SV("index"), &index);
+        TestExpectEquals(err, CMD_ARG_ERROR_MISSING);
+
+        // Empty string (missing required)
+        CmdArgs args3 = {0};
+        TestExpectEquals(cmd_param_parse_args(SV(""), &params, &args3), 1);
+    }
+
+    // Test 8: Integer parsing edge cases
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":test <num>"), &params) == 0);
+
+        // Zero
+        CmdArgs args1 = {0};
+        TestAssert(cmd_param_parse_args(SV("0"), &params, &args1) == 0);
+        int64_t num = 999;
+        int err = cmd_get_arg_integer(&args1, SV("num"), &num);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(num, 0);
+
+        // INT64_MAX
+        CmdArgs args2 = {0};
+        TestAssert(cmd_param_parse_args(SV("9223372036854775807"), &params, &args2) == 0);
+        err = cmd_get_arg_integer(&args2, SV("num"), &num);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(num, 9223372036854775807LL);
+
+        // Leading/trailing whitespace
+        CmdArgs args3 = {0};
+        TestAssert(cmd_param_parse_args(SV("  123  "), &params, &args3) == 0);
+        err = cmd_get_arg_integer(&args3, SV("num"), &num);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(num, 123);
+    }
+
+    // Test 9: Integer followed by string - e.g., :take <count> <query>
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":take <count> <query>"), &params) == 0);
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_INTEGER);
+        TestExpectEquals(params.params[1].kind, CMD_PARAM_STRING);
+
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("5 .items[].name"), &params, &args) == 0);
+
+        int64_t count = 0;
+        int err = cmd_get_arg_integer(&args, SV("count"), &count);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(count, 5);
+
+        StringView query = {0};
+        err = cmd_get_arg_string(&args, SV("query"), &query);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals2(SV_equals, query, SV(".items[].name"));
+    }
+    // Test 9b: String followed by integer - e.g., :take <query> <count>
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":take <query> <count>"), &params) == 0);
+        TestExpectEquals(params.params[0].kind, CMD_PARAM_STRING);
+        TestExpectEquals(params.params[1].kind, CMD_PARAM_INTEGER);
+
+        {
+            CmdArgs args = {0};
+            TestAssert(cmd_param_parse_args(SV(".items[].name 5"), &params, &args) == 0);
+
+            int64_t count = 0;
+            int err = cmd_get_arg_integer(&args, SV("count"), &count);
+            TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+            TestExpectEquals(count, 5);
+
+            StringView query = {0};
+            err = cmd_get_arg_string(&args, SV("query"), &query);
+            TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+            TestExpectEquals2(SV_equals, query, SV(".items[].name"));
+        }
+        {
+            CmdArgs args = {0};
+            TestAssert(cmd_param_parse_args(SV("frazzle as 5"), &params, &args) == 0);
+
+            int64_t count = 0;
+            int err = cmd_get_arg_integer(&args, SV("count"), &count);
+            TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+            TestExpectEquals(count, 5);
+
+            StringView query = {0};
+            err = cmd_get_arg_string(&args, SV("query"), &query);
+            TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+            TestExpectEquals2(SV_equals, query, SV("frazzle as"));
+        }
+    }
+
+    // Test 10: Argument consumption tracking
+    {
+        CmdParams params = {0};
+        TestAssert(cmd_param_parse_signature(SV(":test <index>"), &params) == 0);
+
+        CmdArgs args = {0};
+        TestAssert(cmd_param_parse_args(SV("100"), &params, &args) == 0);
+
+        // First retrieval
+        int64_t index1 = 0;
+        int err = cmd_get_arg_integer(&args, SV("index"), &index1);
+        TestExpectEquals(err, CMD_ARG_ERROR_NONE);
+        TestExpectEquals(index1, 100);
+
+        // Second retrieval (already consumed)
+        int64_t index2 = 0;
+        err = cmd_get_arg_integer(&args, SV("index"), &index2);
+        TestExpectEquals(err, CMD_ARG_ERROR_MISSING_PARAM);
+    }
+
+    TESTEND();
+}
+
 TestFunction(TestCmdCompletion){
     TESTBEGIN();
 
@@ -6063,6 +6329,45 @@ TestFunction(TestCmdCompletion){
             TestExpectEquals(memcmp(&poss.params[0], &params.params[2], sizeof poss.params[0]), 0);
             TestExpectEquals2(SV_equals, token, SV("as"));
             TestExpectEquals((const void*)token.text, (const void*)(cmd_line.text+cmd_line.length-2));
+        }
+    }
+
+    {
+        StringView sig = SV(":test <foo> <count>");
+        CmdParams params = {0};
+        int err;
+        err = cmd_param_parse_signature(sig, &params);
+        TestAssertFalse(err);
+        {
+            StringView cmd_line = SV("test ");
+            CmdParams poss = {0};
+            StringView token = {0};
+            err = cmd_get_completion_params(cmd_line, &params, &poss, &token);
+            TestAssertFalse(err);
+            TestExpectEquals(poss.count, 2);
+            TestExpectEquals2(SV_equals, token, SV(""));
+            TestExpectEquals((const void*)token.text, (const void*)(cmd_line.text+cmd_line.length));
+        }
+        {
+            StringView cmd_line = SV("test frazzle as");
+            CmdParams poss = {0};
+            StringView token = {0};
+            err = cmd_get_completion_params(cmd_line, &params, &poss, &token);
+            TestAssertFalse(err);
+            TestExpectEquals(poss.count, 1);
+            TestExpectEquals(memcmp(&poss.params[0], &params.params[0], sizeof poss.params[0]), 0);
+            TestExpectEquals2(SV_equals, token, SV("frazzle as"));
+            TestExpectEquals((const void*)token.text, (const void*)(cmd_line.text+cmd_line.length-SV("frazzle as").length));
+        }
+        {
+            StringView cmd_line = SV("test frazzle as 12");
+            CmdParams poss = {0};
+            StringView token = {0};
+            err = cmd_get_completion_params(cmd_line, &params, &poss, &token);
+            TestAssertFalse(err);
+            TestExpectEquals(poss.count, 0);
+            TestExpectEquals2(SV_equals, token, SV(""));
+            TestExpectEquals((const void*)token.text, (const void*)(cmd_line.text+cmd_line.length));
         }
     }
     assert_all_freed();

@@ -2,6 +2,7 @@
 #define CMD_PARSE_C
 #include <string.h>
 #include "cmd_parse.h"
+#include "../parse_numbers.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -106,10 +107,14 @@ cmd_param_parse_signature(StringView sig, CmdParams* params){
             param->names[0] = (StringView){.length = len, .text = token_start};
             param->names[1] = (StringView){0, NULL};
 
-            // Determine kind based on name (exact match for "file" or "dir")
+            // Determine kind based on name
             StringView name = param->names[0];
             if(SV_equals(name, SV("file")) || SV_equals(name, SV("dir")))
                 param->kind = CMD_PARAM_PATH;
+            else if(SV_equals(name, SV("index")) || SV_equals(name, SV("depth")) ||
+                    SV_equals(name, SV("count")) || SV_equals(name, SV("number")) ||
+                    SV_equals(name, SV("num")))
+                param->kind = CMD_PARAM_INTEGER;
             else
                 param->kind = CMD_PARAM_STRING;
             param->optional = optional;
@@ -259,7 +264,7 @@ cmd_param_parse_args(StringView cmd_line, const CmdParams* params, CmdArgs* args
         StringView token = {.length = token_len, .text = token_start};
 
         // Check if this token matches any flag param
-        _Bool matched_flag = 0;
+        _Bool matched = 0;
         for(size_t i = 0; i < params->count; i++){
             const CmdParam* param = &params->params[i];
             if(param->kind != CMD_PARAM_FLAG) continue;
@@ -269,11 +274,25 @@ cmd_param_parse_args(StringView cmd_line, const CmdParams* params, CmdArgs* args
                 // Matched this flag
                 args->args[i].present = 1;
                 args->args[i].content = token;
-                matched_flag = 1;
+                matched = 1;
                 break;
             }
         }
-        if(matched_flag && non_flag_count){
+        if(!matched){
+            Int64Result ir = parse_int64(token.text, token.length);
+            if(!ir.errored){
+                for(size_t i = 0; i < params->count; i++){
+                    if(args->args[i].present) continue;
+                    const CmdParam* param = &params->params[i];
+                    if(param->kind != CMD_PARAM_INTEGER) continue;
+                    args->args[i].integer = ir.result;
+                    args->args[i].present = 1;
+                    matched = 1;
+                    break;
+                }
+            }
+        }
+        if(matched && non_flag_count){
             const char* first = non_flag_tokens[0];
             const char* last = non_flag_tokens[non_flag_count - 1];
             size_t total_len = (last + non_flag_lengths[non_flag_count - 1]) - first;
@@ -292,7 +311,7 @@ cmd_param_parse_args(StringView cmd_line, const CmdParams* params, CmdArgs* args
             non_flag_count = 0;
         }
 
-        if(!matched_flag){
+        if(!matched){
             // This is a non-flag token, save it for string/path args
             if(non_flag_count < MAX_NON_FLAGS){
                 non_flag_tokens[non_flag_count] = token_start;
@@ -379,6 +398,30 @@ cmd_get_arg_string(CmdArgs* args, StringView name, StringView* out){
                 return CMD_ARG_ERROR_MISSING;
             }
             *out = arg->content;
+            arg->consumed = 1;
+            return CMD_ARG_ERROR_NONE;
+        }
+    }
+    return CMD_ARG_ERROR_MISSING_PARAM;
+}
+
+CMD_PARSE_WARN_UNUSED
+static
+int
+cmd_get_arg_integer(CmdArgs* args, StringView name, int64_t* out){
+    for(size_t i = 0; i < args->count; i++){
+        CmdArg* arg = &args->args[i];
+        const CmdParam* param = arg->param;
+        if(arg->consumed) continue;
+        if(SV_equals(param->names[0], name) || SV_equals(param->names[1], name)){
+            if(param->kind != CMD_PARAM_INTEGER)
+                return CMD_ARG_ERROR_TYPE_ERROR;
+            if(!arg->present){
+                if(param->optional)
+                    return CMD_ARG_ERROR_MISSING_BUT_OPTIONAL;
+                return CMD_ARG_ERROR_MISSING;
+            }
+            *out = arg->integer;
             arg->consumed = 1;
             return CMD_ARG_ERROR_NONE;
         }
@@ -481,7 +524,7 @@ cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params,
         StringView token = {.length = token_len, .text = token_start};
 
         // Check if this token matches any flag param
-        _Bool matched_flag = 0;
+        _Bool matched = 0;
         for(size_t i = 0; i < params->count; i++){
             const CmdParam* param = &params->params[i];
             if(param->kind != CMD_PARAM_FLAG) continue;
@@ -491,11 +534,21 @@ cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params,
                 // Matched this flag
                 args->args[i].present = 1;
                 args->args[i].content = token;
-                matched_flag = 1;
+                matched = 1;
                 break;
             }
         }
-        if(matched_flag && non_flag_count){
+        if(!matched && !parse_int64(token.text, token.length).errored){
+            for(size_t i = 0; i < params->count; i++){
+                if(args->args[i].present) continue;
+                const CmdParam* param = &params->params[i];
+                if(param->kind != CMD_PARAM_INTEGER) continue;
+                args->args[i].present = 1;
+                matched = 1;
+                break;
+            }
+        }
+        if(matched && non_flag_count){
             StringView first = non_flag_tokens[0];
             StringView last = non_flag_tokens[non_flag_count-1];
             size_t total_len = (last.text + last.length) - first.text;
@@ -514,7 +567,7 @@ cmd_get_completion_params(StringView cmd_line, const CmdParams* restrict params,
             non_flag_count = 0;
         }
 
-        if(!matched_flag && non_flag_count < MAX_NON_FLAGS){
+        if(!matched && non_flag_count < MAX_NON_FLAGS){
             // This is a non-flag token, save it for string/path args
             non_flag_tokens[non_flag_count++] = (StringView){token_len, token_start};
         }
