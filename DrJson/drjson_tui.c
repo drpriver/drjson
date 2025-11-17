@@ -160,6 +160,8 @@ struct BitSet {
     size_t capacity;
 };
 
+enum {COMMAND_SIZE=256};
+
 // Main navigation state
 typedef struct JsonNav JsonNav;
 struct JsonNav {
@@ -197,16 +199,19 @@ struct JsonNav {
     LineEditor command_buffer;      // Command input buffer
     LineEditorHistory command_history; // Command history
     int tab_count;                  // Number of consecutive tabs pressed
-    char saved_command[256];        // Original command before tab completion
+    char saved_command[COMMAND_SIZE];        // Original command before tab completion
     size_t saved_command_len;       // Length of saved command
     size_t saved_prefix_len;
 
     // Completion menu
     _Bool in_completion_menu;       // Whether completion menu is showing
-    char completion_matches[64][256]; // Array of completion strings
-    int completion_count;           // Number of completions
-    int completion_selected;        // Currently selected completion index
-    int completion_scroll;          // Scroll offset for completion menu
+    struct {
+        char*  matches;       // Array of completion strings
+        size_t count;        // Number of completions
+        size_t capacity;
+    } completion;
+    ssize_t completion_selected;        // Currently selected completion index
+    ssize_t completion_scroll;          // Scroll offset for completion menu
 
     // Search state
     LineEditor search_buffer;       // Current search query
@@ -650,7 +655,7 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filena
     le_init(&nav->search_buffer, 256);
     le_history_init(&nav->search_history);
     nav->search_buffer.history = &nav->search_history;
-    le_init(&nav->command_buffer, 512);
+    le_init(&nav->command_buffer, COMMAND_SIZE);
     le_history_init(&nav->command_history);
     nav->command_buffer.history = &nav->command_history;
     le_init(&nav->edit_buffer, 512);
@@ -710,6 +715,8 @@ nav_free(JsonNav* nav){
     le_free(&nav->command_buffer);
     if(nav->focus_stack)
         nav->allocator.free(nav->allocator.user_pointer, nav->focus_stack, nav->focus_stack_capacity * sizeof *nav->focus_stack);
+    if(nav->completion.matches)
+        nav->allocator.free(nav->allocator.user_pointer, nav->completion.matches, nav->completion.capacity*COMMAND_SIZE);
     *nav = (JsonNav){0};
 }
 
@@ -4098,12 +4105,20 @@ cmd_path(JsonNav* nav, CmdArgs* args){
 static
 void
 nav_completion_add(JsonNav* nav, StringView name){
-    if(nav->completion_count >= 64) return;
+    if(nav->completion.count >= nav->completion.capacity){
+        size_t old_cap = nav->completion.capacity;
+        size_t new_cap = old_cap?old_cap*2:64;
+        char* p = nav->allocator.realloc(nav->allocator.user_pointer, nav->completion.matches, old_cap*COMMAND_SIZE, new_cap*COMMAND_SIZE);
+        if(!p) return;
+        nav->completion.matches = p;
+        nav->completion.capacity = new_cap;
+    }
     // Store the full command name
-    size_t copy_len = name.length < 255 ? name.length : 255;
-    memcpy(nav->completion_matches[nav->completion_count], name.text, copy_len);
-    nav->completion_matches[nav->completion_count][copy_len] = '\0';
-    nav->completion_count++;
+    size_t copy_len = name.length < COMMAND_SIZE-1 ? name.length : COMMAND_SIZE-1;
+    char* p = nav->completion.matches + nav->completion.count*COMMAND_SIZE;
+    memcpy(p, name.text, copy_len);
+    p[copy_len] = '\0';
+    nav->completion.count++;
 }
 
 static void nav_completion_add_path_completion(JsonNav* nav, StringView prefix);
@@ -4137,7 +4152,7 @@ nav_complete_command(JsonNav* nav){
         }
     }
 
-    nav->completion_count = 0;
+    nav->completion.count = 0;
 
     if(completing_command){
         // Complete command names using command table
@@ -4149,7 +4164,7 @@ nav_complete_command(JsonNav* nav){
                 nav_completion_add(nav, name);
             }
         }
-        if(nav->completion_count)
+        if(nav->completion.count)
             nav->saved_prefix_len = 0;
     }
     else {
@@ -4184,11 +4199,11 @@ nav_complete_command(JsonNav* nav){
                 break;
             }
         }
-        if(nav->completion_count){
+        if(nav->completion.count){
             nav->saved_prefix_len = completion_token.text - source.text;
         }
     }
-    if(!nav->completion_count) return 0;
+    if(!nav->completion.count) return 0;
 
     // Show completion menu
     nav->in_completion_menu = 1;
@@ -4196,7 +4211,7 @@ nav_complete_command(JsonNav* nav){
     nav->completion_scroll = 0;
 
     // Update buffer with first completion
-    const char* first = nav->completion_matches[0];
+    const char* first = nav->completion.matches;
     size_t first_len = strlen(first);
     size_t total_len = nav->saved_prefix_len + first_len;
     if(total_len < le->capacity){
@@ -4281,7 +4296,7 @@ nav_completion_add_path_completion(JsonNav* nav, StringView prefix){
         if(entry_len >= file_prefix_len && memcmp(entry->d_name, file_prefix, file_prefix_len) == 0){
 
             // Build the full completed path for this match
-            char completed[256];
+            char completed[COMMAND_SIZE];
             size_t completed_len = 0;
             if(prefix.length >= sizeof completed) return;
             memcpy(completed, prefix.text, prefix.length);
@@ -4313,11 +4328,11 @@ nav_completion_add_path_completion(JsonNav* nav, StringView prefix){
 static
 void
 nav_accept_completion(JsonNav* nav){
-    if(!nav->in_completion_menu || nav->completion_count == 0)
+    if(!nav->in_completion_menu || nav->completion.count == 0)
         return;
 
     LineEditor* le = &nav->command_buffer;
-    const char* completion = nav->completion_matches[nav->completion_selected];
+    const char* completion = &nav->completion.matches[nav->completion_selected*COMMAND_SIZE];
     size_t completion_len = strlen(completion);
     size_t total_len = completion_len + nav->saved_prefix_len;
 
@@ -4360,21 +4375,21 @@ nav_cancel_completion(JsonNav* nav){
 static
 void
 nav_completion_move(JsonNav* nav, int delta){
-    if(!nav->in_completion_menu || nav->completion_count == 0)
+    if(!nav->in_completion_menu || nav->completion.count == 0)
         return;
 
     nav->completion_selected += delta;
 
     // Wrap around
     if(nav->completion_selected < 0){
-        nav->completion_selected = nav->completion_count - 1;
+        nav->completion_selected = nav->completion.count - 1;
     }
-    else if(nav->completion_selected >= nav->completion_count){
+    else if(nav->completion_selected >= (ssize_t)nav->completion.count){
         nav->completion_selected = 0;
     }
 
     // Update the line editor buffer with the selected completion
-    const char* selected = nav->completion_matches[nav->completion_selected];
+    const char* selected = &nav->completion.matches[COMMAND_SIZE*nav->completion_selected];
     size_t selected_len = strlen(selected);
 
     size_t total_len = selected_len + nav->saved_prefix_len;
@@ -5923,14 +5938,14 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     }
 
     // Render completion menu if active (above command line)
-    if(nav->in_completion_menu && nav->completion_count > 0){
+    if(nav->in_completion_menu && nav->completion.count > 0){
         int visible_items = 10;
-        if(nav->completion_count < visible_items) visible_items = nav->completion_count;
+        if(nav->completion.count < (size_t)visible_items) visible_items = nav->completion.count;
 
         // Render up to visible_items above the bottom line
         for(int i = 0; i < visible_items; i++){
-            int match_idx = nav->completion_scroll + i;
-            if(match_idx >= nav->completion_count) break;
+            ssize_t match_idx = nav->completion_scroll + i;
+            if(match_idx >= (ssize_t)nav->completion.count) break;
 
             int y = screenh - 2 - visible_items + i;
             if(y < 1) break; // Don't overwrite status line
@@ -5944,7 +5959,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
             }
 
             drt_putc(drt, ' ');
-            drt_puts(drt, nav->completion_matches[match_idx], strlen(nav->completion_matches[match_idx]));
+            drt_puts(drt, &nav->completion.matches[match_idx*COMMAND_SIZE], strlen(&nav->completion.matches[match_idx*COMMAND_SIZE]));
             drt_putc(drt, ' ');
             drt_clear_to_end_of_row(drt);
             drt_pop_state(drt);

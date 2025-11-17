@@ -106,6 +106,7 @@
     X(TestCmdParamParseArgs) \
     X(TestCmdParamQuoting) \
     X(TestCmdCompletion) \
+    X(TestNavCompletion) \
 
 
 // Forward declarations of test functions
@@ -2767,7 +2768,7 @@ TestFunction(TestNavReinit){
     nav.tab_count = 3;
 
     // Allocate and populate line editors
-    le_init(&nav.command_buffer, 256);
+    le_init(&nav.command_buffer, COMMAND_SIZE);
     LongString test_cmd = LS("test command");
     int err = le_write(&nav.command_buffer, test_cmd.text, test_cmd.length);
     TestAssertFalse(err);
@@ -4994,7 +4995,35 @@ TestFunction(TestCmdCompletion){
             TestExpectEquals((const void*)token.text, (const void*)(cmd_line.text+cmd_line.length-2));
         }
     }
+    assert_all_freed();
+    TESTEND();
+}
 
+TestFunction(TestNavCompletion){
+    TESTBEGIN();
+    JsonNav nav = {
+        .allocator = get_test_allocator(),
+    };
+    le_init(&nav.command_buffer, COMMAND_SIZE);
+    int err;
+    err = le_write(&nav.command_buffer, "e", 1);
+    TestAssertFalse(err);
+    _Bool completion = nav_complete_command(&nav);
+    TestExpectTrue(completion);
+    nav_cancel_completion(&nav);
+    le_clear(&nav.command_buffer);
+    completion = nav_complete_command(&nav);
+    TestExpectTrue(completion);
+    TestExpectEquals(nav.completion.count, sizeof commands / sizeof commands[0]);
+    TestExpectEquals2(SV_equals, nav.command_buffer.sv, commands[0].name);
+    nav_completion_move(&nav, 1);
+    TestExpectEquals2(SV_equals, nav.command_buffer.sv, commands[1].name);
+    nav_completion_move(&nav, -2);
+    TestExpectEquals2(SV_equals, nav.command_buffer.sv, commands[sizeof commands / sizeof commands[0] - 1].name);
+    nav_cancel_completion(&nav);
+    TestExpectEquals2(SV_equals, nav.command_buffer.sv, SV(""));
+    nav_free(&nav);
+    assert_all_freed();
     TESTEND();
 }
 

@@ -175,7 +175,7 @@ StringView_cmp(const void* a, const void* b){
 static inline
 _Bool
 SV_starts_with(StringView haystack, StringView needle){
-    if(!needle.length) return 0;
+    if(!needle.length) return 1;
     if(needle.length > haystack.length) return 0;
     return memcmp(haystack.text, needle.text, needle.length) == 0;
 }
