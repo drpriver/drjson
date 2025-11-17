@@ -461,6 +461,7 @@ enum {
     DRJSON_PARSE_FLAG_NO_COPY_STRINGS = 0x2,
     DRJSON_PARSE_FLAG_INTERN_OBJECTS = 0x4,
     DRJSON_PARSE_FLAG_ERROR_ON_TRAILING = 0x8,
+    DRJSON_PARSE_FLAG_NDJSON = 0x10, // Parse newline-delimited JSON (multiple top-level values into array)
 };
 
 DRJSON_API
@@ -683,6 +684,12 @@ DRJSON_API
 DrJsonValue
 drjson_checked_query(const DrJsonContext* ctx, DrJsonValue v, int type, const char* query, size_t query_length);
 
+// Deep equality comparison
+// Returns 1 if values are deeply equal, 0 otherwise
+DRJSON_API
+int
+drjson_deep_eq(const DrJsonContext* ctx, DrJsonValue a, DrJsonValue b);
+
 //------------------------------------------------------------
 
 /////////////////////////
@@ -702,6 +709,7 @@ enum {
     DRJSON_APPEND_NEWLINE = 0x2,
     DRJSON_APPEND_ZERO    = 0x4,
     DRJSON_PRINT_BRACELESS = 0x8, // Omit outer braces for objects (for BRACELESS_OBJECT parsing)
+    DRJSON_PRINT_NDJSON = 0x10, // Print array as newline-delimited JSON
 };
 
 // Returns 0 on success, 1 on error.

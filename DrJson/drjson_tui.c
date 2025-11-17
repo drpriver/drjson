@@ -226,6 +226,7 @@ struct JsonNav {
     DrJsonStats stats;        // Computed statistics
     _Bool command_mode;       // In command mode (:w, :save, etc.)
     _Bool was_opened_with_braceless;  // Whether this file was opened with --braceless
+    _Bool was_opened_with_ndjson;     // Whether this file was opened with --ndjson
 
     // Message display
     char message[512];        // Message to display to user
@@ -2440,12 +2441,12 @@ static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 static const Command commands[] = {
     {SV("help"),    SV(":help"), SV("  Show help"),         cmd_help},
     {SV("stats"),   SV(":stats"), SV("  Show document statistics"), cmd_stats},
-    {SV("open"),    SV(":open [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("edit"),    SV(":edit [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("e"),       SV(":e [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("open"),    SV(":open [--braceless] [--ndjson] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("edit"),    SV(":edit [--braceless] [--ndjson] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("e"),       SV(":e [--braceless] [--ndjson] <file>"), SV("  Open JSON at <file>"), cmd_open},
     {SV("reload"),  SV(":reload"), SV("  Reload file from disk"), cmd_reload},
-    {SV("save"),    SV(":save [--braceless|--no-braceless] <file>"), SV("  Save JSON to <file>"), cmd_write},
-    {SV("write"),   SV(":write [--braceless|--no-braceless] <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("save"),    SV(":save [--braceless|--no-braceless] [--ndjson|--no-ndjson] <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("write"),   SV(":write [--braceless|--no-braceless] [--ndjson|--no-ndjson] <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("quit"),    SV(":quit"), SV("  Quit"),              cmd_quit},
     {SV("q"),       SV(":q"), SV("  Quit"),              cmd_quit},
     {SV("exit"),    SV(":exit"), SV("  Quit"),              cmd_quit},
@@ -2491,7 +2492,7 @@ enum {
 
 static
 int
-nav_load_file(JsonNav* nav, const char* filepath, _Bool use_braceless){
+nav_load_file(JsonNav* nav, const char* filepath, _Bool use_braceless, _Bool use_ndjson){
     LongString file_content = {0};
     if(read_file(filepath, &file_content) != 0){
         nav_set_messagef(nav, "Error: Could not read file '%s'", filepath);
@@ -2508,6 +2509,7 @@ nav_load_file(JsonNav* nav, const char* filepath, _Bool use_braceless){
     unsigned parse_flags = DRJSON_PARSE_FLAG_ERROR_ON_TRAILING;
     if(globals.intern) parse_flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
     if(use_braceless) parse_flags |= DRJSON_PARSE_FLAG_BRACELESS_OBJECT;
+    if(use_ndjson) parse_flags |= DRJSON_PARSE_FLAG_NDJSON;
     DrJsonValue new_root = drjson_parse(&pctx, parse_flags);
 
     if(new_root.kind == DRJSON_ERROR){
@@ -2540,6 +2542,7 @@ nav_load_file(JsonNav* nav, const char* filepath, _Bool use_braceless){
 
     nav->root = new_root;
     nav->was_opened_with_braceless = use_braceless;
+    nav->was_opened_with_ndjson = use_ndjson;
     nav_reinit(nav);
     drjson_gc(nav->jctx, &nav->root, 1);
 
@@ -2554,6 +2557,14 @@ cmd_open(JsonNav* nav, CmdArgs* args){
     int err = cmd_get_arg_bool_optional(args, SV("--braceless"), &use_braceless);
     if(err != CMD_ARG_ERROR_NONE){
         nav_set_messagef(nav, "Error parsing --braceless flag");
+        return CMD_ERROR;
+    }
+
+    // Get optional --ndjson flag
+    _Bool use_ndjson = 0;
+    err = cmd_get_arg_bool_optional(args, SV("--ndjson"), &use_ndjson);
+    if(err != CMD_ARG_ERROR_NONE){
+        nav_set_messagef(nav, "Error parsing --ndjson flag");
         return CMD_ERROR;
     }
 
@@ -2572,7 +2583,7 @@ cmd_open(JsonNav* nav, CmdArgs* args){
         return CMD_ERROR;
     }
 
-    if(nav_load_file(nav, filepath, use_braceless) != CMD_OK){
+    if(nav_load_file(nav, filepath, use_braceless, use_ndjson) != CMD_OK){
         return CMD_ERROR; // nav_load_file already set the message
     }
 
@@ -2582,7 +2593,7 @@ cmd_open(JsonNav* nav, CmdArgs* args){
     memcpy(nav->filename, filepath, expanded_len);
     nav->filename[expanded_len] = '\0';
 
-    nav_set_messagef(nav, "Opened '%s'%s", filepath, use_braceless ? " (braceless)" : "");
+    nav_set_messagef(nav, "Opened '%s'%s%s", filepath, use_braceless ? " (braceless)" : "", use_ndjson ? " (ndjson)" : "");
     return CMD_OK;
 }
 
@@ -2607,6 +2618,24 @@ cmd_write(JsonNav* nav, CmdArgs* args){
         braceless_specified = 1;
     }
 
+    // Check for --ndjson or --no-ndjson flags (they're alternatives)
+    _Bool use_ndjson = nav->was_opened_with_ndjson; // Default to current setting
+    _Bool ndjson_specified = 0;
+
+    _Bool flag_ndjson = 0;
+    err = cmd_get_arg_bool_optional(args, SV("--ndjson"), &flag_ndjson);
+    if(!err && flag_ndjson){
+        use_ndjson = 1;
+        ndjson_specified = 1;
+    }
+
+    _Bool flag_no_ndjson = 0;
+    err = cmd_get_arg_bool_optional(args, SV("--no-ndjson"), &flag_no_ndjson);
+    if(!err && flag_no_ndjson){
+        use_ndjson = 0;
+        ndjson_specified = 1;
+    }
+
     // Get required file argument
     StringView filepath_sv = {0};
     err = cmd_get_arg_string(args, SV("file"), &filepath_sv);
@@ -2629,7 +2658,7 @@ cmd_write(JsonNav* nav, CmdArgs* args){
         return CMD_ERROR;
     }
 
-    int print_err = drjson_print_value_fp(nav->jctx, fp, nav->root, 0, DRJSON_PRETTY_PRINT | (use_braceless ? DRJSON_PRINT_BRACELESS : 0));
+    int print_err = drjson_print_value_fp(nav->jctx, fp, nav->root, 0, DRJSON_PRETTY_PRINT | (use_braceless ? DRJSON_PRINT_BRACELESS : 0) | (use_ndjson ? DRJSON_PRINT_NDJSON : 0));
     int close_err = fclose(fp);
 
     if(print_err || close_err){
@@ -2637,7 +2666,32 @@ cmd_write(JsonNav* nav, CmdArgs* args){
         return CMD_ERROR;
     }
 
-    nav_set_messagef(nav, "Wrote to '%s'%s", filepath, braceless_specified ? (use_braceless ? " (braceless)" : " (with braces)") : "");
+    // Build message with format flags
+    char msg_suffix[128] = "";
+    if(braceless_specified || ndjson_specified){
+        msg_suffix[0] = ' ';
+        msg_suffix[1] = '(';
+        size_t pos = 2;
+        if(braceless_specified){
+            const char* braceless_str = use_braceless ? "braceless" : "with braces";
+            size_t len = strlen(braceless_str);
+            memcpy(msg_suffix + pos, braceless_str, len);
+            pos += len;
+        }
+        if(braceless_specified && ndjson_specified){
+            msg_suffix[pos++] = ',';
+            msg_suffix[pos++] = ' ';
+        }
+        if(ndjson_specified){
+            const char* ndjson_str = use_ndjson ? "ndjson" : "standard json";
+            size_t len = strlen(ndjson_str);
+            memcpy(msg_suffix + pos, ndjson_str, len);
+            pos += len;
+        }
+        msg_suffix[pos++] = ')';
+        msg_suffix[pos] = '\0';
+    }
+    nav_set_messagef(nav, "Wrote to '%s'%s", filepath, msg_suffix);
     return CMD_OK;
 }
 
@@ -3842,9 +3896,10 @@ cmd_reload(JsonNav* nav, CmdArgs* args){
         nav_set_messagef(nav, "Error: No file is currently open to reload.");
         return CMD_ERROR;
     }
-    // Remember the braceless flag so reload preserves it
+    // Remember the braceless and ndjson flags so reload preserves them
     _Bool was_braceless = nav->was_opened_with_braceless;
-    int err = nav_load_file(nav, nav->filename, was_braceless);
+    _Bool was_ndjson = nav->was_opened_with_ndjson;
+    int err = nav_load_file(nav, nav->filename, was_braceless, was_ndjson);
     if(err != CMD_OK)
         return CMD_ERROR;
     return CMD_OK;
@@ -7053,11 +7108,17 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
     };
 
     _Bool braceless = 0;
+    _Bool ndjson = 0;
     ArgToParse kw_args[] = {
         {
             .name = SV("--braceless"),
             .dest = ARGDEST(&braceless),
             .help = "Don't require opening and closing braces around the document",
+        },
+        {
+            .name = SV("--ndjson"),
+            .dest = ARGDEST(&ndjson),
+            .help = "Parse newline-delimited JSON (multiple top-level values into an array)",
         },
         {
             .name = SV("--intern-objects"),
@@ -7162,6 +7223,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
     };
     unsigned flags = DRJSON_PARSE_FLAG_NO_COPY_STRINGS | DRJSON_PARSE_FLAG_ERROR_ON_TRAILING;
     if(braceless) flags |= DRJSON_PARSE_FLAG_BRACELESS_OBJECT;
+    if(ndjson) flags |= DRJSON_PARSE_FLAG_NDJSON;
     if(globals.intern) flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
     DrJsonValue document = drjson_parse(&ctx, flags);
     if(document.kind == DRJSON_ERROR){
@@ -7174,6 +7236,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
     JsonNav nav;
     nav_init(&nav, jctx, document, jsonpath.text, allocator);
     nav.was_opened_with_braceless = braceless;  // Track initial file's braceless state
+    nav.was_opened_with_ndjson = ndjson;  // Track initial file's ndjson state
 
     // Count buffer for vim-style numeric prefixes
     LineEditor count_buffer;

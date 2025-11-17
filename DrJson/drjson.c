@@ -1082,6 +1082,48 @@ drjson_parse(DrJsonParseContext* ctx, unsigned flags){
         ctx->_copy_strings = 1;
     if(flags & DRJSON_PARSE_FLAG_INTERN_OBJECTS)
         ctx->_read_only_objects = 1;
+
+    // NDJSON mode: parse multiple top-level values into an array
+    if(flags & DRJSON_PARSE_FLAG_NDJSON){
+        DrJsonValue array = drjson_make_array(ctx->ctx);
+        for(;;){
+            drj_skip_whitespace(ctx);
+            if(ctx->cursor >= ctx->end)
+                break;
+
+            DrJsonValue value;
+            if(flags & DRJSON_PARSE_FLAG_BRACELESS_OBJECT){
+                // For braceless objects in NDJSON, parse line-by-line
+                // Find the next newline
+                size_t remaining = ctx->end - ctx->cursor;
+                const char* line_end = memchr(ctx->cursor, '\n', remaining);
+                if(!line_end)
+                    line_end = ctx->end;
+
+                // Temporarily limit the context to this line
+                const char* saved_end = ctx->end;
+                ctx->end = line_end;
+
+                value = drjson_parse_braceless_object(ctx);
+
+                // Restore the original end
+                ctx->end = saved_end;
+
+                // Skip the newline character
+                if(ctx->cursor < ctx->end && *ctx->cursor == '\n')
+                    ctx->cursor++;
+            }
+            else
+                value = drj_parse(ctx);
+
+            if(value.kind == DRJSON_ERROR)
+                return value;
+
+            drjson_array_push_item(ctx->ctx, array, value);
+        }
+        return array;
+    }
+
     DrJsonValue result;
     if(flags & DRJSON_PARSE_FLAG_BRACELESS_OBJECT)
         result = drjson_parse_braceless_object(ctx);
@@ -1824,6 +1866,108 @@ drjson_checked_query(const DrJsonContext* ctx, DrJsonValue v, int type, const ch
     return o;
 }
 
+DRJSON_API
+int
+drjson_deep_eq(const DrJsonContext* ctx, DrJsonValue a, DrJsonValue b){
+    // Different types are not equal, except for numeric types
+    if(a.kind != b.kind){
+        // Allow comparison between different numeric types
+        if((a.kind == DRJSON_INTEGER || a.kind == DRJSON_UINTEGER || a.kind == DRJSON_NUMBER) &&
+           (b.kind == DRJSON_INTEGER || b.kind == DRJSON_UINTEGER || b.kind == DRJSON_NUMBER)){
+
+            // INTEGER vs UINTEGER
+            if(a.kind == DRJSON_INTEGER && b.kind == DRJSON_UINTEGER){
+                if(a.integer < 0) return 0;
+                return (uint64_t)a.integer == b.uinteger;
+            }
+            if(a.kind == DRJSON_UINTEGER && b.kind == DRJSON_INTEGER){
+                if(b.integer < 0) return 0;
+                return a.uinteger == (uint64_t)b.integer;
+            }
+
+            // INTEGER vs NUMBER
+            if(a.kind == DRJSON_INTEGER && b.kind == DRJSON_NUMBER){
+                // Check if b is an integer value
+                if(b.number != (double)(int64_t)b.number) return 0;
+                return a.integer == (int64_t)b.number;
+            }
+            if(a.kind == DRJSON_NUMBER && b.kind == DRJSON_INTEGER){
+                if(a.number != (double)(int64_t)a.number) return 0;
+                return (int64_t)a.number == b.integer;
+            }
+
+            // UINTEGER vs NUMBER
+            if(a.kind == DRJSON_UINTEGER && b.kind == DRJSON_NUMBER){
+                if(b.number < 0) return 0;
+                if(b.number != (double)(uint64_t)b.number) return 0;
+                return a.uinteger == (uint64_t)b.number;
+            }
+            if(a.kind == DRJSON_NUMBER && b.kind == DRJSON_UINTEGER){
+                if(a.number < 0) return 0;
+                if(a.number != (double)(uint64_t)a.number) return 0;
+                return (uint64_t)a.number == b.uinteger;
+            }
+        }
+        return 0;
+    }
+
+    switch(a.kind){
+        case DRJSON_NULL:
+            return 1;
+        case DRJSON_BOOL:
+            return a.boolean == b.boolean;
+        case DRJSON_INTEGER:
+            return a.integer == b.integer;
+        case DRJSON_UINTEGER:
+            return a.uinteger == b.uinteger;
+        case DRJSON_NUMBER:
+            return a.number == b.number;
+        case DRJSON_STRING:{
+            const char *a_str, *b_str;
+            size_t a_len, b_len;
+            drj_get_str_and_len(ctx, a, &a_str, &a_len);
+            drj_get_str_and_len(ctx, b, &b_str, &b_len);
+            if(a_len != b_len) return 0;
+            return memcmp(a_str, b_str, a_len) == 0;
+        }
+        case DRJSON_ARRAY:
+        case DRJSON_ARRAY_VIEW:{
+            const DrJsonArray* adata = ctx->arrays.data;
+            const DrJsonArray* a_arr = &adata[a.array_idx];
+            const DrJsonArray* b_arr = &adata[b.array_idx];
+            if(a_arr->count != b_arr->count) return 0;
+            for(size_t i = 0; i < a_arr->count; i++){
+                if(!drjson_deep_eq(ctx, a_arr->array_items[i], b_arr->array_items[i]))
+                    return 0;
+            }
+            return 1;
+        }
+        case DRJSON_OBJECT:
+        case DRJSON_OBJECT_KEYS:
+        case DRJSON_OBJECT_VALUES:{
+            const DrJsonObject* odata = ctx->objects.data;
+            const DrJsonObject* a_obj = &odata[a.object_idx];
+            const DrJsonObject* b_obj = &odata[b.object_idx];
+            if(a_obj->count != b_obj->count) return 0;
+
+            // Check that all keys in a exist in b with equal values
+            DrJsonObjectPair* a_pairs = drj_obj_get_pairs(a_obj->object_items, a_obj->capacity);
+            for(size_t i = 0; i < a_obj->count; i++){
+                DrJsonAtom key = a_pairs[i].atom;
+                DrJsonValue a_val = a_pairs[i].value;
+                DrJsonValue b_val = drjson_object_get_item_atom(ctx, b, key);
+                if(b_val.kind == DRJSON_ERROR) return 0; // Key not found in b
+                if(!drjson_deep_eq(ctx, a_val, b_val)) return 0;
+            }
+            return 1;
+        }
+        case DRJSON_OBJECT_ITEMS:
+        case DRJSON_ERROR:
+        default:
+            return 0;
+    }
+}
+
 
 DRJSON_API
 int
@@ -2340,8 +2484,58 @@ drjson_print_value(const DrJsonContext* ctx, const DrJsonTextWriter* restrict wr
     buffer.writer = writer;
     buffer.errored = 0;
 
+    // Handle DRJSON_PRINT_NDJSON for arrays
+    if((flags & DRJSON_PRINT_NDJSON) && v.kind == DRJSON_ARRAY){
+        const DrJsonArray* adata = ctx->arrays.data;
+        const DrJsonArray* array = &adata[v.array_idx];
+        _Bool braceless = flags & DRJSON_PRINT_BRACELESS;
+        _Bool pretty = flags & DRJSON_PRETTY_PRINT;
+
+        for(size_t i = 0; i < array->count; i++){
+            if(i != 0)
+                drjson_buff_putc(&buffer, '\n');
+
+            DrJsonValue item = array->array_items[i];
+
+            // Handle braceless objects in NDJSON
+            if(braceless && item.kind == DRJSON_OBJECT){
+                const DrJsonObject* odata = ctx->objects.data;
+                const DrJsonObject* object = &odata[item.object_idx];
+                DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);
+
+                // In NDJSON mode, always print compactly (no pretty printing within lines)
+                // even if PRETTY flag is set, to maintain one value per line
+                for(size_t j = 0; j < object->count; j++){
+                    DrJsonObjectPair* o = &pairs[j];
+                    if(j != 0){
+                        drjson_buff_putc(&buffer, ',');
+                        if(pretty)
+                            drjson_buff_putc(&buffer, ' ');
+                    }
+                    DrjAtomStr s = drj_get_atom_str(&ctx->atoms, o->atom);
+                    drjson_buff_putc(&buffer, '"');
+                    drjson_buff_write(&buffer, s.pointer, s.length);
+                    drjson_buff_putc(&buffer, '"');
+                    drjson_buff_putc(&buffer, ':');
+                    if(pretty)
+                        drjson_buff_putc(&buffer, ' ');
+                    drjson_print_value_inner(ctx, &buffer, o->value);
+                }
+            }
+            else {
+                // Regular printing for non-object items or when not braceless
+                if(pretty){
+                    for(int ind = 0; ind < indent; ind++)
+                        drjson_buff_putc(&buffer, ' ');
+                    drjson_pretty_print_value_inner(ctx, &buffer, item, indent);
+                }
+                else
+                    drjson_print_value_inner(ctx, &buffer, item);
+            }
+        }
+    }
     // Handle DRJSON_PRINT_BRACELESS for objects
-    if((flags & DRJSON_PRINT_BRACELESS) && v.kind == DRJSON_OBJECT){
+    else if((flags & DRJSON_PRINT_BRACELESS) && v.kind == DRJSON_OBJECT){
         const DrJsonObject* odata = ctx->objects.data;
         const DrJsonObject* object = &odata[v.object_idx];
         DrJsonObjectPair* pairs = drj_obj_get_pairs(object->object_items, object->capacity);

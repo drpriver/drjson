@@ -136,6 +136,7 @@ main(int argc, const char* const* argv){
     LongString queries[100];
     enum {QUERY_KWARG=1};
     _Bool braceless = 0;
+    _Bool ndjson = 0;
     _Bool pretty = 0;
     _Bool interactive = 0;
     _Bool intern = 0;
@@ -160,6 +161,11 @@ main(int argc, const char* const* argv){
             .name = SV("--braceless"),
             .dest = ARGDEST(&braceless),
             .help = "Don't require opening and closing braces around the document",
+        },
+        {
+            .name = SV("--ndjson"),
+            .dest = ARGDEST(&ndjson),
+            .help = "Parse newline-delimited JSON (multiple top-level values into an array)",
         },
         {
             .name = SV("-p"),
@@ -282,6 +288,7 @@ main(int argc, const char* const* argv){
     };
     unsigned flags = DRJSON_PARSE_FLAG_NONE;
     if(braceless) flags |= DRJSON_PARSE_FLAG_BRACELESS_OBJECT;
+    if(ndjson) flags |= DRJSON_PARSE_FLAG_NDJSON;
     if(intern) flags |= DRJSON_PARSE_FLAG_INTERN_OBJECTS;
     flags |= DRJSON_PARSE_FLAG_NO_COPY_STRINGS;
     DrJsonValue document = drjson_parse(&ctx, flags);
@@ -433,7 +440,7 @@ main(int argc, const char* const* argv){
             return 1;
         }
     }
-    int err = drjson_print_value_fp(jctx, outfp, result, indent, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0)|(braceless?DRJSON_PRINT_BRACELESS:0));
+    int err = drjson_print_value_fp(jctx, outfp, result, indent, DRJSON_APPEND_NEWLINE|(pretty?DRJSON_PRETTY_PRINT:0)|(braceless?DRJSON_PRINT_BRACELESS:0)|(ndjson?DRJSON_PRINT_NDJSON:0));
     if(err){
         fprintf(stderr, "err when writing: %d\n", err);
     }

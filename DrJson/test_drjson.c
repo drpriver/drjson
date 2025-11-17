@@ -48,6 +48,8 @@ static TestFunc TestClearValue;
 static TestFunc TestArraySwap;
 static TestFunc TestArrayMove;
 static TestFunc TestObjectMove;
+static TestFunc TestNDJSON;
+static TestFunc TestNDJSONRoundTrip;
 
 int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestSimpleParsing);
@@ -75,6 +77,8 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestArraySwap);
     RegisterTest(TestArrayMove);
     RegisterTest(TestObjectMove);
+    RegisterTest(TestNDJSON);
+    RegisterTest(TestNDJSONRoundTrip);
     return test_main(argc, argv, NULL);
 }
 
@@ -2194,6 +2198,246 @@ TestFunction(TestObjectMove){
     DrJsonValue val_b = drjson_query(ctx, obj, "b", 1);
     TestAssertEquals(val_b.kind, DRJSON_INTEGER);
     TestAssertEquals(val_b.integer, 2);
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestNDJSON){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test 1: Basic NDJSON with multiple objects
+    {
+        const char* ndjson = "{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"age\":25}\n{\"name\":\"Charlie\",\"age\":35}";
+        DrJsonValue result = drjson_parse_string(ctx, ndjson, strlen(ndjson), DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(result.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, result), 3);
+
+        DrJsonValue obj0 = drjson_get_by_index(ctx, result, 0);
+        TestAssertEquals(obj0.kind, DRJSON_OBJECT);
+        DrJsonValue name0 = drjson_query(ctx, obj0, "name", 4);
+        StringView name0_str;
+        int err = drjson_get_str_and_len(ctx, name0, &name0_str.text, &name0_str.length);
+        TestAssertEquals(err, 0);
+        TestAssertEquals2(SV_equals, name0_str, SV("Alice"));
+
+        DrJsonValue obj1 = drjson_get_by_index(ctx, result, 1);
+        DrJsonValue age1 = drjson_query(ctx, obj1, "age", 3);
+        TestExpectTrue(age1.kind == DRJSON_INTEGER || age1.kind == DRJSON_UINTEGER);
+        int64_t age_val = (age1.kind == DRJSON_INTEGER) ? age1.integer : (int64_t)age1.uinteger;
+        TestExpectEquals(age_val, 25);
+    }
+
+    // Test 2: NDJSON with different value types
+    {
+        const char* ndjson = "42\n\"hello\"\ntrue\nnull\n[1,2,3]";
+        DrJsonValue result = drjson_parse_string(ctx, ndjson, strlen(ndjson), DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(result.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, result), 5);
+
+        DrJsonValue v0 = drjson_get_by_index(ctx, result, 0);
+        TestExpectTrue(v0.kind == DRJSON_INTEGER || v0.kind == DRJSON_UINTEGER);
+        int64_t v0_val = (v0.kind == DRJSON_INTEGER) ? v0.integer : (int64_t)v0.uinteger;
+        TestExpectEquals(v0_val, 42);
+
+        DrJsonValue v1 = drjson_get_by_index(ctx, result, 1);
+        TestAssertEquals(v1.kind, DRJSON_STRING);
+        StringView v1_str;
+        int err = drjson_get_str_and_len(ctx, v1, &v1_str.text, &v1_str.length);
+        TestAssertEquals(err, 0);
+        TestAssertEquals2(SV_equals, v1_str, SV("hello"));
+
+        DrJsonValue v2 = drjson_get_by_index(ctx, result, 2);
+        TestAssertEquals(v2.kind, DRJSON_BOOL);
+        TestAssertEquals(v2.boolean, 1);
+
+        DrJsonValue v3 = drjson_get_by_index(ctx, result, 3);
+        TestAssertEquals(v3.kind, DRJSON_NULL);
+
+        DrJsonValue v4 = drjson_get_by_index(ctx, result, 4);
+        TestAssertEquals(v4.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, v4), 3);
+    }
+
+    // Test 3: NDJSON with extra whitespace
+    {
+        const char* ndjson = "  {\"a\":1}  \n\n  {\"b\":2}  \n  {\"c\":3}  ";
+        DrJsonValue result = drjson_parse_string(ctx, ndjson, strlen(ndjson), DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(result.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, result), 3);
+    }
+
+    // Test 4: Empty NDJSON
+    {
+        const char* ndjson = "";
+        DrJsonValue result = drjson_parse_string(ctx, ndjson, strlen(ndjson), DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(result.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, result), 0);
+    }
+
+    // Test 5: Single value NDJSON
+    {
+        const char* ndjson = "{\"single\":true}";
+        DrJsonValue result = drjson_parse_string(ctx, ndjson, strlen(ndjson), DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(result.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, result), 1);
+    }
+
+    // Test 6: NDJSON with error should return error
+    {
+        const char* ndjson = "{\"valid\":1}\n{\"broken\":}\n{\"also\":2}";
+        DrJsonValue result = drjson_parse_string(ctx, ndjson, strlen(ndjson), DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(result.kind, DRJSON_ERROR);
+    }
+
+    // Test 7: NDJSON with braceless objects
+    {
+        const char* ndjson = "name: Alice, age: 30\nname: Bob, age: 25";
+        DrJsonValue result = drjson_parse_string(ctx, ndjson, strlen(ndjson),
+            DRJSON_PARSE_FLAG_NDJSON | DRJSON_PARSE_FLAG_BRACELESS_OBJECT);
+        TestAssertEquals(result.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, result), 2);
+
+        DrJsonValue obj0 = drjson_get_by_index(ctx, result, 0);
+        DrJsonValue name0 = drjson_query(ctx, obj0, "name", 4);
+        StringView name0_str;
+        int err = drjson_get_str_and_len(ctx, name0, &name0_str.text, &name0_str.length);
+        TestAssertEquals(err, 0);
+        TestAssertEquals2(SV_equals, name0_str, SV("Alice"));
+    }
+
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestNDJSONRoundTrip){
+    TESTBEGIN();
+    DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
+
+    // Test data with nested arrays to ensure proper handling
+    const char* input = "{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"age\":25,\"hobbies\":[\"golf\",\"surfing\"]}\n{\"name\":\"Charlie\",\"age\":35}";
+    DrJsonValue parsed = drjson_parse_string(ctx, input, strlen(input), DRJSON_PARSE_FLAG_NDJSON);
+    TestAssertEquals(parsed.kind, DRJSON_ARRAY);
+    int64_t array_len = drjson_len(ctx, parsed);
+    TestAssertEquals(array_len, 3);
+
+    char buffer[1024];
+    size_t printed = 0;
+    int err;
+    DrJsonValue reparsed;
+
+    // Test 1: NDJSON only (no flags)
+    {
+        err = drjson_print_value_mem(ctx, buffer, sizeof buffer, parsed, 0, DRJSON_PRINT_NDJSON, &printed);
+        TestAssertEquals(err, 0);
+
+        // Invariant: Should have (array_len - 1) newlines
+        int newline_count = 0;
+        for(size_t i = 0; i < printed; i++){
+            if(buffer[i] == '\n') newline_count++;
+        }
+        TestExpectEquals(newline_count, (int)array_len - 1);
+
+        // Round-trip test
+        reparsed = drjson_parse_string(ctx, buffer, printed, DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(reparsed.kind, DRJSON_ARRAY);
+        TestExpectTrue(drjson_deep_eq(ctx, parsed, reparsed));
+    }
+
+    // Test 2: NDJSON + PRETTY_PRINT
+    {
+        err = drjson_print_value_mem(ctx, buffer, sizeof buffer, parsed, 0,
+            DRJSON_PRINT_NDJSON | DRJSON_PRETTY_PRINT, &printed);
+        TestAssertEquals(err, 0);
+
+        // Invariant: Pretty printing in NDJSON should add newlines within each object/array
+        // But we need to ensure it's still parseable
+        reparsed = drjson_parse_string(ctx, buffer, printed, DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(reparsed.kind, DRJSON_ARRAY);
+        TestExpectTrue(drjson_deep_eq(ctx, parsed, reparsed));
+    }
+
+    // Test 3: NDJSON + BRACELESS
+    {
+        err = drjson_print_value_mem(ctx, buffer, sizeof buffer, parsed, 0,
+            DRJSON_PRINT_NDJSON | DRJSON_PRINT_BRACELESS, &printed);
+        TestAssertEquals(err, 0);
+
+        // Invariant: No '{' or '}' characters at top level (only in nested values)
+        // Check there are no braces at the start of lines
+        const char* brace_open = memchr(buffer, '{', printed);
+        // There might be braces in nested arrays/objects, but not at object level
+        // For our test data, hobbies array has no braces, so there should be none
+        if(brace_open){
+            // If there is a brace, it should be inside a nested structure, not at line start
+            // For this simple test, let's just verify the first char isn't a brace
+            TestExpectTrue(buffer[0] != '{');
+        }
+
+        // Invariant: Should have (array_len - 1) newlines
+        int newline_count = 0;
+        for(size_t i = 0; i < printed; i++){
+            if(buffer[i] == '\n') newline_count++;
+        }
+        TestExpectEquals(newline_count, (int)array_len - 1);
+
+        // Round-trip test with braceless parsing
+        reparsed = drjson_parse_string(ctx, buffer, printed,
+            DRJSON_PARSE_FLAG_NDJSON | DRJSON_PARSE_FLAG_BRACELESS_OBJECT);
+        TestAssertEquals(reparsed.kind, DRJSON_ARRAY);
+        TestExpectTrue(drjson_deep_eq(ctx, parsed, reparsed));
+    }
+
+    // Test 4: NDJSON + BRACELESS + PRETTY_PRINT
+    {
+        err = drjson_print_value_mem(ctx, buffer, sizeof buffer, parsed, 0,
+            DRJSON_PRINT_NDJSON | DRJSON_PRINT_BRACELESS | DRJSON_PRETTY_PRINT, &printed);
+        TestAssertEquals(err, 0);
+
+        // Invariant: Should have (array_len - 1) newlines (one value per line)
+        int newline_count = 0;
+        for(size_t i = 0; i < printed; i++){
+            if(buffer[i] == '\n') newline_count++;
+        }
+        TestExpectEquals(newline_count, (int)array_len - 1);
+
+        // Invariant: First character shouldn't be a brace
+        TestExpectTrue(buffer[0] != '{');
+
+        // Round-trip test
+        reparsed = drjson_parse_string(ctx, buffer, printed,
+            DRJSON_PARSE_FLAG_NDJSON | DRJSON_PARSE_FLAG_BRACELESS_OBJECT);
+        TestAssertEquals(reparsed.kind, DRJSON_ARRAY);
+        TestExpectTrue(drjson_deep_eq(ctx, parsed, reparsed));
+    }
+
+    // Test 5: NDJSON with non-object values (arrays, strings, numbers, etc.)
+    {
+        const char* mixed_input = "42\n\"hello\"\ntrue\nnull\n[1,2,3]\n{\"key\":\"value\"}";
+        DrJsonValue mixed_parsed = drjson_parse_string(ctx, mixed_input, strlen(mixed_input), DRJSON_PARSE_FLAG_NDJSON);
+        TestAssertEquals(mixed_parsed.kind, DRJSON_ARRAY);
+        TestAssertEquals(drjson_len(ctx, mixed_parsed), 6);
+
+        // NDJSON (no flags) - should handle all types
+        err = drjson_print_value_mem(ctx, buffer, sizeof buffer, mixed_parsed, 0, DRJSON_PRINT_NDJSON, &printed);
+        TestAssertEquals(err, 0);
+        reparsed = drjson_parse_string(ctx, buffer, printed, DRJSON_PARSE_FLAG_NDJSON);
+        TestExpectTrue(drjson_deep_eq(ctx, mixed_parsed, reparsed));
+
+        // NDJSON + PRETTY should also work with mixed types
+        err = drjson_print_value_mem(ctx, buffer, sizeof buffer, mixed_parsed, 0,
+            DRJSON_PRINT_NDJSON | DRJSON_PRETTY_PRINT, &printed);
+        TestAssertEquals(err, 0);
+        reparsed = drjson_parse_string(ctx, buffer, printed, DRJSON_PARSE_FLAG_NDJSON);
+        TestExpectTrue(drjson_deep_eq(ctx, mixed_parsed, reparsed));
+
+        // Note: NDJSON + BRACELESS only makes sense when ALL items are objects
+        // With mixed types, braceless would only affect the object items
+        // and non-object items would fail to parse with BRACELESS flag
+    }
 
     drjson_ctx_free_all(ctx);
     assert_all_freed();

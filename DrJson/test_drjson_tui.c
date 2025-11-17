@@ -5175,7 +5175,7 @@ TestFunction(TestBracelessReload){
     // Load file with braceless
     JsonNav nav;
     nav_init(&nav, ctx, drjson_make_null(), tmpfile, a);
-    int err = nav_load_file(&nav, tmpfile, true);
+    int err = nav_load_file(&nav, tmpfile, true, false);
     TestExpectEquals(err, CMD_OK);
     TestExpectTrue(nav.was_opened_with_braceless);
 
