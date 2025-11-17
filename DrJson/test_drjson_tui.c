@@ -70,6 +70,7 @@
     X(TestOperatorParsing) \
     X(TestLiteralParsing) \
     X(TestQueryCommand) \
+    X(TestLineNumberCommand) \
     X(TestFocusUnfocusCommands) \
     X(TestNavJumpToNthChild) \
     X(TestFocusStackOperations) \
@@ -2137,6 +2138,81 @@ TestFunction(TestQueryCommand){
 
     // Empty query should fail
     result = nav_execute_command(&nav, "query", 5);
+    TestExpectEquals(result, CMD_ERROR);
+
+    // Cleanup
+    nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+// Test line number command (:123 jumps to line 123)
+TestFunction(TestLineNumberCommand){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // Create JSON with enough items to test line jumping
+    LongString json = LS("{\"a\": 1, \"b\": 2, \"c\": 3, \"d\": 4, \"e\": 5, \"f\": 6, \"g\": 7, \"h\": 8, \"i\": 9, \"j\": 10}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
+
+    // Expand root to see all items
+    uint64_t root_id = nav_get_container_id(root);
+    bs_add(&nav.expanded, root_id, &nav.allocator);
+    nav_rebuild(&nav);
+
+    TestExpectTrue(nav.item_count > 0);
+    size_t initial_item_count = nav.item_count;
+
+    // Test jumping to line 1 (should be valid)
+    nav.cursor_pos = 0;
+    int result = nav_execute_command(&nav, "1", 1);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectEquals(nav.cursor_pos, 0); // Line 1 = index 0
+
+    // Test jumping to line 5 (should be valid)
+    result = nav_execute_command(&nav, "5", 1);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectEquals(nav.cursor_pos, 4); // Line 5 = index 4
+
+    // Test jumping to the last line
+    char line_buf[32];
+    int len = snprintf(line_buf, sizeof line_buf, "%zu", initial_item_count);
+    result = nav_execute_command(&nav, line_buf, len);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectEquals(nav.cursor_pos, initial_item_count - 1);
+
+    // Test jumping beyond the last line (should clamp to last line)
+    len = snprintf(line_buf, sizeof line_buf, "%zu", initial_item_count + 100);
+    result = nav_execute_command(&nav, line_buf, len);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectEquals(nav.cursor_pos, initial_item_count - 1); // Clamped to last line
+
+    // Test jumping to line 0 (should clamp to line 1)
+    result = nav_execute_command(&nav, "0", 1);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectEquals(nav.cursor_pos, 0); // Clamped to first line
+
+    // Test invalid input (non-numeric)
+    result = nav_execute_command(&nav, "abc", 3);
+    TestExpectEquals(result, CMD_ERROR);
+
+    // Test empty line number
+    result = nav_execute_command(&nav, "", 0);
+    TestExpectEquals(result, CMD_OK); // Empty command is OK, just does nothing
+
+    // Test very large number (overflow)
+    result = nav_execute_command(&nav, "99999999999999999999999999999", 29);
     TestExpectEquals(result, CMD_ERROR);
 
     // Cleanup

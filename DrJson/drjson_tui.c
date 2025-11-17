@@ -47,6 +47,7 @@ typedef long long ssize_t;
 #include "drjson.h"
 // Access to private APIs
 #include "drjson.c"
+#include "parse_numbers.h"
 #define DRE_API static
 #include "TUI/dre.c"
 #include "argument_parsing.h"
@@ -4542,6 +4543,71 @@ nav_execute_command(JsonNav* nav, const char* command, size_t command_len){
 
     strip_whitespace(&command, &command_len);
     if(command_len == 0) return CMD_OK;
+
+    // Check if command is purely numeric (for :123 style line jumps)
+    _Bool is_numeric = 1;
+    for(size_t i = 0; i < command_len; i++){
+        if(command[i] < '0' || command[i] > '9'){
+            is_numeric = 0;
+            break;
+        }
+    }
+
+    if(is_numeric){
+        // Parse as line number (1-based for user convenience)
+        Uint64Result parse_result = parse_uint64(command, command_len);
+
+        if(parse_result.errored){
+            const char* err_msg = "Invalid line number";
+            switch(parse_result.errored){
+                case PARSENUMBER_INVALID_CHARACTER:
+                    err_msg = "Invalid character in line number";
+                    break;
+                case PARSENUMBER_OVERFLOWED_VALUE:
+                    err_msg = "Line number too large";
+                    break;
+                case PARSENUMBER_UNEXPECTED_END:
+                    err_msg = "Empty line number";
+                    break;
+                default:
+                    break;
+            }
+            nav_set_messagef(nav, "%s: %.*s", err_msg, (int)command_len, command);
+            return CMD_ERROR;
+        }
+
+        // Clamp to valid range
+        uint64_t line_num = parse_result.result;
+        if(line_num < 1){
+            line_num = 1;
+        }
+
+        // Convert to 0-based index
+        size_t target_pos = (size_t)(line_num - 1);
+
+        // Clamp to maximum
+        if(target_pos >= nav->item_count){
+            if(nav->item_count > 0){
+                target_pos = nav->item_count - 1;
+            }
+            else {
+                target_pos = 0;
+            }
+        }
+
+        // Jump to the line
+        nav->cursor_pos = target_pos;
+
+        // Adjust scroll to show the line (try to center it with reasonable offset)
+        if(target_pos >= 10){
+            nav->scroll_offset = target_pos - 10;
+        }
+        else {
+            nav->scroll_offset = 0;
+        }
+
+        return CMD_OK;
+    }
 
     // Parse command and arguments
     const char* arg_start = NULL;
