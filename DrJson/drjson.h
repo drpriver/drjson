@@ -476,6 +476,29 @@ drjson_parse_string(DrJsonContext* ctx, const char* text, size_t length, unsigne
 
 //------------------------------------------------------------
 
+///////////////////////
+// Array and Object ops
+//
+
+// Works on both arrays and array-likes (array view, object keys view, object
+// values view, etc.)
+// A negative idx means to idx from the back (last item is at -1).
+DRJSON_API
+DrJsonValue
+drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx);
+
+// -1 if invalid error
+DRJSON_API
+int64_t
+drjson_len(const DrJsonContext* ctx, DrJsonValue v);
+
+// empties an array or object
+DRJSON_API
+int
+drjson_clear(const DrJsonContext* ctx, DrJsonValue v);
+
+//------------------------------------------------------------
+
 /////////////
 // Object ops
 //
@@ -516,6 +539,20 @@ DRJSON_API
 int // 0 on success, 1 if key already exists, index out of bounds, or error
 drjson_object_insert_item_at_index(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom key, DrJsonValue item, size_t index);
 
+// Move an item from one index to another in an object (changes insertion order).
+// The item at from_idx is removed and inserted at to_idx.
+DRJSON_API
+int // 0 on success, 1 on error
+drjson_object_move_item(const DrJsonContext* ctx, DrJsonValue object, size_t from_idx, size_t to_idx);
+
+static inline
+int64_t
+drjson_object_len(const DrJsonContext* ctx, DrJsonValue v){
+    if(v.kind != DRJSON_OBJECT)
+        return -1;
+    return drjson_len(ctx, v);
+}
+
 //------------------------------------------------------------
 
 ////////////
@@ -554,34 +591,21 @@ DRJSON_API
 int // 0 on success, 1 on error
 drjson_array_move_item(const DrJsonContext* ctx, DrJsonValue array, size_t from_idx, size_t to_idx);
 
-// Move an item from one index to another in an object (changes insertion order).
-// The item at from_idx is removed and inserted at to_idx.
-DRJSON_API
-int // 0 on success, 1 on error
-drjson_object_move_item(const DrJsonContext* ctx, DrJsonValue object, size_t from_idx, size_t to_idx);
-
-//------------------------------------------------------------
-
-///////////////////////
-// Array and Object ops
-//
-
-// Works on both arrays and array-likes (array view, object keys view, object
-// values view, etc.)
-// A negative idx means to idx from the back (last item is at -1).
-DRJSON_API
-DrJsonValue
-drjson_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx);
-
-// -1 if invalid error
-DRJSON_API
+static inline
 int64_t
-drjson_len(const DrJsonContext* ctx, DrJsonValue v);
+drjson_array_len(const DrJsonContext* ctx, DrJsonValue v){
+    if(v.kind != DRJSON_ARRAY && v.kind != DRJSON_ARRAY_VIEW)
+        return -1;
+    return drjson_len(ctx, v);
+}
 
-// empties an array or object
-DRJSON_API
-int
-drjson_clear(const DrJsonContext* ctx, DrJsonValue v);
+static inline
+DrJsonValue
+drjson_array_get_by_index(const DrJsonContext* ctx, DrJsonValue v, int64_t idx){
+    if(v.kind != DRJSON_ARRAY)
+        return drjson_make_error(DRJSON_ERROR_TYPE_ERROR, "call to array_get_by_index for non-array");
+    return drjson_get_by_index(ctx, v, idx);
+}
 
 //------------------------------------------------------------
 
@@ -738,11 +762,48 @@ DRJSON_WARN_UNUSED
 int
 drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t length, DrJsonAtom* outatom);
 
-#if 0 // to be implemented
+// Unescape a JSON string (convert escape sequences like \n, \t, \", \\ to actual characters)
+// escaped: input string with JSON escape sequences
+// length: length of escaped string
+// outstring: output buffer (must have at least 'length' bytes available)
+// outlength: will be set to actual output length (always <= length)
+// Returns: 0 on success, 1 on error
+// Note: Uses SIMD (SSE2/NEON) when available, otherwise SWAR for performance
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
-drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength);
-#endif
+drjson_unescape_string(const char* restrict escaped, size_t length, char* restrict outstring, size_t* restrict outlength);
+
+// Normalize user input from TUI editor (liberal unescape + strict escape in single pass)
+// This handles user input where:
+//   - Valid escape sequences (\n, \t, \", \\, etc.) are preserved as-is
+//   - Invalid escape sequences (\x, etc.) have the backslash escaped
+//   - Unescaped special characters (quotes, control chars) are escaped
+// input: raw user input string
+// length: length of input string
+// outstring: output buffer (must have at least 'length * 2' bytes available for worst case)
+// outlength: will be set to actual output length
+// Returns: 0 on success, 1 on error
+// Example: "foo\nbar" -> "foo\nbar" (valid escape preserved)
+//          "foo\xbar" -> "foo\\xbar" (invalid escape, backslash escaped)
+//          "foo"bar" -> "foo\"bar" (unescaped quote escaped)
+DRJSON_API
+DRJSON_WARN_UNUSED
+int
+drjson_normalize_user_input(const char* restrict input, size_t length, char* restrict outstring, size_t* restrict outlength);
+
+// Normalize user input and atomize it in one operation
+// This is the common pattern: normalize user input from editor/UI, then intern it
+// Handles memory allocation internally for the normalization buffer
+// ctx: DrJson context for allocation and atom table
+// input: raw user input string
+// length: length of input string
+// outatom: will be set to the atomized result
+// Returns: 0 on success, 1 on error
+DRJSON_API
+DRJSON_WARN_UNUSED
+int
+drjson_normalize_and_atomize(DrJsonContext* ctx, const char* restrict input, size_t length, DrJsonAtom* outatom);
 
 //
 // Implements mark+sweep gc for objects and arrays in the ctx.

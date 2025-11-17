@@ -2433,7 +2433,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move, cmd_stats, cmd_search;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move, cmd_stats, cmd_search, cmd_stringify, cmd_parse;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -2459,6 +2459,8 @@ static const Command commands[] = {
     {SV("path"),    SV(":path"), SV("  Yank (copy) current item's JSON path to clipboard"), cmd_path},
     {SV("focus"),   SV(":focus"), SV("  Focus on the current array or object (Ctrl-O to go back)"), cmd_focus},
     {SV("search"),  SV(":search [--values-only] [--query] <pattern>"), SV("  Search for pattern (use 'n' and 'N' to navigate)"), cmd_search},
+    {SV("stringify"), SV(":stringify"), SV("  Convert current value to string"), cmd_stringify},
+    {SV("parse"),   SV(":parse"), SV("  Parse current string as JSON value"), cmd_parse},
     {SV("sort"),    SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
     {SV("filter"),  SV(":filter <query>"), SV("  Filter array/object based on a query"), cmd_filter},
     {SV("move"),    SV(":move <index>"), SV("  Move current item to <index>"), cmd_move},
@@ -3059,13 +3061,14 @@ macos_copy_to_clipboard(const char* text, size_t len){
 }
 #endif
 
-#if defined(_WIN32) || defined(__APPLE__)
-// In-memory buffer for Windows and macOS clipboard
-typedef struct {
+// In-memory buffer for printing values
+typedef struct MemBuffer MemBuffer;
+struct MemBuffer {
+    DrJsonAllocator a;
     char* data;
     size_t size;
     size_t capacity;
-} MemBuffer;
+};
 
 static
 int
@@ -3079,7 +3082,7 @@ membuf_write(void* user_data, const void* data, size_t len){
         if(new_cap < needed) new_cap = needed;
         if(new_cap < 1024) new_cap = 1024;
 
-        char* new_data = realloc(buf->data, new_cap);
+        char* new_data = buf->a.realloc(buf->a.user_pointer, buf->data, buf->capacity, new_cap);
         if(!new_data) return -1;
 
         buf->data = new_data;
@@ -3090,7 +3093,16 @@ membuf_write(void* user_data, const void* data, size_t len){
     buf->size += len;
     return 0;
 }
-#endif
+
+static inline
+void
+membuf_destroy(MemBuffer* buf){
+    if(buf->data)
+        buf->a.free(buf->a.user_pointer, buf->data, buf->capacity);
+    buf->data = NULL;
+    buf->size = 0;
+    buf->capacity = 0;
+}
 
 // Read text from system clipboard into LongString
 // Returns 0 on success, -1 on failure
@@ -3257,7 +3269,7 @@ cmd_yank(JsonNav* nav, CmdArgs* args){
 
     #ifdef _WIN32
     // Windows: use in-memory buffer
-    MemBuffer buf = {0};
+    MemBuffer buf = {.a = nav->allocator};
     DrJsonTextWriter writer = {
         .up = &buf,
         .write = membuf_write,
@@ -3266,19 +3278,19 @@ cmd_yank(JsonNav* nav, CmdArgs* args){
     int print_err = drjson_print_value(nav->jctx, &writer, yank_value, 0, print_flags);
 
     if(print_err){
-        free(buf.data);
+        membuf_destroy(&buf);
         nav_set_messagef(nav, "Error: Could not serialize value");
         return CMD_ERROR;
     }
 
     if(buf.size > 10*1024*1024){  // 10MB limit
-        free(buf.data);
+        membuf_destroy(&buf);
         nav_set_messagef(nav, "Error: Value too large to yank");
         return CMD_ERROR;
     }
 
     int result = copy_to_clipboard(buf.data, buf.size);
-    free(buf.data);
+    membuf_destroy(&buf);
 
     if(result != 0){
         nav_set_messagef(nav, "Error: Could not copy to clipboard");
@@ -3287,7 +3299,7 @@ cmd_yank(JsonNav* nav, CmdArgs* args){
 
     #elif defined(__APPLE__)
     // macOS: use in-memory buffer and native clipboard API
-    MemBuffer buf = {0};
+    MemBuffer buf = {.a=nav->allocator};
     DrJsonTextWriter writer = {
         .up = &buf,
         .write = membuf_write,
@@ -3296,20 +3308,20 @@ cmd_yank(JsonNav* nav, CmdArgs* args){
     int print_err = drjson_print_value(nav->jctx, &writer, yank_value, 0, print_flags | DRJSON_APPEND_ZERO);
 
     if(print_err){
-        free(buf.data);
+        membuf_destroy(&buf);
         nav_set_messagef(nav, "Error: Could not serialize value");
         return CMD_ERROR;
     }
 
     if(0)
     if(buf.size > 10*1024*1024){  // 10MB limit
-        free(buf.data);
+        membuf_destroy(&buf);
         nav_set_messagef(nav, "Error: Value too large to yank");
         return CMD_ERROR;
     }
 
     int result = macos_copy_to_clipboard(buf.data, buf.size);
-    free(buf.data);
+    membuf_destroy(&buf);
 
     if(result != 0){
         nav_set_messagef(nav, "Error: Could not copy to clipboard");
@@ -3640,6 +3652,191 @@ cmd_search(JsonNav* nav, CmdArgs* args){
     const char* values_str = values_only ? " (values only)" : "";
     nav_set_messagef(nav, "%s search: %.*s%s", mode_str, (int)pattern_sv.length, pattern_sv.text, values_str);
 
+    return CMD_OK;
+}
+
+static
+int
+cmd_stringify(JsonNav* nav, CmdArgs* args){
+    (void)args;
+
+    if(nav->item_count == 0){
+        nav_set_messagef(nav, "Error: Nothing to stringify");
+        return CMD_ERROR;
+    }
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+
+    // Can't stringify the root if it has no parent
+    if(nav->cursor_pos == 0 && item->depth == 0){
+        nav_set_messagef(nav, "Error: Cannot stringify root value");
+        return CMD_ERROR;
+    }
+
+    // Print value to string
+    MemBuffer buf = {.a=nav->allocator};
+    DrJsonTextWriter writer = {
+        .up = &buf,
+        .write = membuf_write,
+    };
+
+    int print_err = drjson_print_value(nav->jctx, &writer, item->value, 0, 0);
+    if(print_err || !buf.data){
+        if(buf.data) membuf_destroy(&buf);
+        nav_set_messagef(nav, "Error: Failed to convert value to string");
+        return CMD_ERROR;
+    }
+
+    // Create string value
+    DrJsonValue string_value = drjson_make_string(nav->jctx, buf.data, buf.size);
+    membuf_destroy(&buf);
+
+    if(string_value.kind == DRJSON_ERROR){
+        nav_set_messagef(nav, "Error: Failed to create string value");
+        return CMD_ERROR;
+    }
+
+    // Find parent and replace value
+    NavItem* parent = NULL;
+    for(size_t i = nav->cursor_pos; i > 0; i--){
+        if(nav->items[i - 1].depth < item->depth){
+            parent = &nav->items[i - 1];
+            break;
+        }
+    }
+
+    if(!parent){
+        nav_set_messagef(nav, "Error: Cannot find parent container");
+        return CMD_ERROR;
+    }
+
+    // Replace value in parent
+    if(parent->value.kind == DRJSON_ARRAY){
+        int err = drjson_array_set_by_index(nav->jctx, parent->value, item->index, string_value);
+        if(err){
+            nav_set_messagef(nav, "Error: Failed to set array element");
+            return CMD_ERROR;
+        }
+    }
+    else if(parent->value.kind == DRJSON_OBJECT){
+        int err = drjson_object_set_item_atom(nav->jctx, parent->value, item->key, string_value);
+        if(err){
+            nav_set_messagef(nav, "Error: Failed to set object item");
+            return CMD_ERROR;
+        }
+    }
+    else {
+        nav_set_messagef(nav, "Error: Parent is not a container");
+        return CMD_ERROR;
+    }
+
+    // Rebuild navigation
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+
+    nav_set_messagef(nav, "Value converted to string");
+    return CMD_OK;
+}
+
+static
+int
+cmd_parse(JsonNav* nav, CmdArgs* args){
+    (void)args;
+
+    if(nav->item_count == 0){
+        nav_set_messagef(nav, "Error: Nothing to parse");
+        return CMD_ERROR;
+    }
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+
+    // Can't parse the root if it has no parent
+    if(nav->cursor_pos == 0 && item->depth == 0){
+        nav_set_messagef(nav, "Error: Cannot parse root value");
+        return CMD_ERROR;
+    }
+
+    // Value must be a string
+    if(item->value.kind != DRJSON_STRING){
+        nav_set_messagef(nav, "Error: Value is not a string");
+        return CMD_ERROR;
+    }
+
+    // Get string content
+    const char* str;
+    size_t str_len;
+    int err = drjson_get_str_and_len(nav->jctx, item->value, &str, &str_len);
+    if(err){
+        nav_set_messagef(nav, "Error: Failed to get string content");
+        return CMD_ERROR;
+    }
+
+    // Unescape the string (handles \n, \t, \", \\, \uXXXX, etc.)
+    // Allocate buffer for unescaped string (always <= original length)
+    char* unescaped = nav->allocator.alloc(nav->allocator.user_pointer, str_len);
+    if(!unescaped){
+        nav_set_messagef(nav, "Error: Failed to allocate memory for unescaping");
+        return CMD_ERROR;
+    }
+
+    size_t unescaped_len;
+    err = drjson_unescape_string(str, str_len, unescaped, &unescaped_len);
+    if(err){
+        nav->allocator.free(nav->allocator.user_pointer, unescaped, str_len);
+        nav_set_messagef(nav, "Error: Invalid escape sequences in string");
+        return CMD_ERROR;
+    }
+
+    // Parse unescaped string as JSON
+    DrJsonValue parsed_value = drjson_parse_string(nav->jctx, unescaped, unescaped_len, 0);
+
+    // Free the unescaped buffer
+    nav->allocator.free(nav->allocator.user_pointer, unescaped, str_len);
+
+    if(parsed_value.kind == DRJSON_ERROR){
+        nav_set_messagef(nav, "Error: Invalid JSON in string: %s", parsed_value.err_mess);
+        return CMD_ERROR;
+    }
+
+    // Find parent and replace value
+    NavItem* parent = NULL;
+    for(size_t i = nav->cursor_pos; i > 0; i--){
+        if(nav->items[i - 1].depth < item->depth){
+            parent = &nav->items[i - 1];
+            break;
+        }
+    }
+
+    if(!parent){
+        nav_set_messagef(nav, "Error: Cannot find parent container");
+        return CMD_ERROR;
+    }
+
+    // Replace value in parent
+    if(parent->value.kind == DRJSON_ARRAY){
+        int err = drjson_array_set_by_index(nav->jctx, parent->value, item->index, parsed_value);
+        if(err){
+            nav_set_messagef(nav, "Error: Failed to set array element");
+            return CMD_ERROR;
+        }
+    }
+    else if(parent->value.kind == DRJSON_OBJECT){
+        int err = drjson_object_set_item_atom(nav->jctx, parent->value, item->key, parsed_value);
+        if(err){
+            nav_set_messagef(nav, "Error: Failed to set object item");
+            return CMD_ERROR;
+        }
+    }
+    else {
+        nav_set_messagef(nav, "Error: Parent is not a container");
+        return CMD_ERROR;
+    }
+
+    // Rebuild navigation
+    nav->needs_rebuild = 1;
+    nav_rebuild(nav);
+
+    nav_set_messagef(nav, "String parsed to value");
     return CMD_OK;
 }
 
@@ -6732,7 +6929,7 @@ int
 parse_as_string(DrJsonContext* jctx, const char* txt, size_t len, DrJsonAtom* outatom){
     strip_whitespace(&txt, &len);
     if(!len || (*txt != '"' && *txt != '\''))
-        return drjson_atomize(jctx, txt, len, outatom);
+        return drjson_normalize_and_atomize(jctx, txt, len, outatom);
     DrJsonParseContext pctx = {
         .cursor = txt,
         .begin = txt,
@@ -6747,7 +6944,7 @@ parse_as_string(DrJsonContext* jctx, const char* txt, size_t len, DrJsonAtom* ou
         *outatom = new_value.atom;
         return 0;
     }
-    return drjson_atomize(jctx, txt, len, outatom);
+    return drjson_normalize_and_atomize(jctx, txt, len, outatom);
 }
 
 static
@@ -6769,7 +6966,7 @@ parse_as_value(DrJsonContext* jctx, const char* txt, size_t len, DrJsonValue* ou
     if(pctx.cursor != pctx.end){
         if(len && (*txt != '"' && *txt != '\'') && new_value.kind == DRJSON_STRING){
             DrJsonAtom at;
-            int err = drjson_atomize(jctx, txt, len, &at);
+            int err = drjson_normalize_and_atomize(jctx, txt, len, &at);
             if(err) return err;
             new_value = drjson_atom_to_value(at);
         }

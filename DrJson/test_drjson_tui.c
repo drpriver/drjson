@@ -75,6 +75,9 @@
     X(TestJumpListAcrossFocus) \
     X(TestFocusCommands) \
     X(TestSearchCommand) \
+    X(TestStringifyCommand) \
+    X(TestParseCommand) \
+    X(TestStringifyParseRoundtrip) \
     X(TestNavJumpToNthChild) \
     X(TestComplexQueryPaths) \
     X(TestStripWhitespace) \
@@ -172,7 +175,7 @@ TestFunction(TestNumericParsing){
         LongString pattern = LS("3.14");
         DoubleResult res = parse_double(pattern.text, pattern.length);
         TestExpectSuccess(res);
-        TestExpectTrue(res.result > 3.13 && res.result < 3.15);
+        TestExpect(res.result, ==, 3.14);
     }
 
     // Test non-numeric pattern (should fail)
@@ -588,7 +591,7 @@ TestFunction(TestLineEditorWordOperations){
     // Delete word backward from end
     le_delete_word_backward(&le);
     // Should delete "test" but leave the space before it
-    TestExpectTrue(le.length < text.length);
+    TestExpect(le.length, <, text.length);
     TestExpectEquals2(SV_equals, le.sv, SV("hello world "));
 
     le_free(&le);
@@ -764,7 +767,7 @@ TestFunction(TestNavigationJumps){
     // Jump to prev sibling
     old_cursor = nav.cursor_pos;
     nav_jump_to_prev_sibling(&nav);
-    TestExpectTrue(nav.cursor_pos <= old_cursor); // Should move back or stay
+    TestExpect(nav.cursor_pos, <=, old_cursor); // Should move back or stay
 
     // Cleanup
     nav_free(&nav);
@@ -814,7 +817,7 @@ TestFunction(TestExpandCollapseRecursive){
         nav_rebuild(&nav);
 
         // Should have fewer items after collapse
-        TestExpectTrue(nav.item_count <= nav.item_count);
+        TestExpect(nav.item_count, <=, nav.item_count);
     }
 
     // Cleanup
@@ -1109,7 +1112,7 @@ TestFunction(TestMessageHandling){
     nav_set_messagef(&nav, "%s", long_msg);
     TestExpectTrue(nav.message_length > 0);
     // Should be truncated to fit in message buffer (512 bytes)
-    TestExpectTrue(nav.message_length < sizeof nav.message);
+    TestExpect(nav.message_length, <, sizeof nav.message);
 
     drjson_ctx_free_all(ctx);
     assert_all_freed();
@@ -1133,7 +1136,7 @@ TestFunction(TestLineEditorEdgeCases){
     for(size_t i = 0; i < 20; i++){
         le_append_char(&le, 'y');
     }
-    TestExpectTrue(le.length < le.capacity);
+    TestExpect(le.length, <, le.capacity);
 
     // Delete from empty position
     le_clear(&le);
@@ -1161,7 +1164,7 @@ TestFunction(TestLineEditorEdgeCases){
     le_clear(&le);
     le_write(&le, "   ", 3);
     le_delete_word_backward(&le);
-    TestExpectTrue(le.length < 3);
+    TestExpect(le.length, <, 3);
 
     le_free(&le);
     assert_all_freed();
@@ -1323,11 +1326,11 @@ TestFunction(TestValueComparison){
     DrJsonValue obj_val = drjson_parse_string(ctx, obj_json.text, obj_json.length, 0);
 
     // Test type ordering
-    TestExpectTrue(compare_values(null_val, bool_val, ctx) < 0);
-    TestExpectTrue(compare_values(bool_val, int_val, ctx) < 0);
-    TestExpectTrue(compare_values(int_val, str_val, ctx) < 0);
-    TestExpectTrue(compare_values(str_val, arr_val, ctx) < 0);
-    TestExpectTrue(compare_values(arr_val, obj_val, ctx) < 0);
+    TestExpect(compare_values(null_val, bool_val, ctx), <, 0);
+    TestExpect(compare_values(bool_val, int_val, ctx), <, 0);
+    TestExpect(compare_values(int_val, str_val, ctx), <, 0);
+    TestExpect(compare_values(str_val, arr_val, ctx), <, 0);
+    TestExpect(compare_values(arr_val, obj_val, ctx), <, 0);
 
     // Test same types
     TestExpectEquals(compare_values(null_val, null_val, ctx), 0);
@@ -1335,23 +1338,23 @@ TestFunction(TestValueComparison){
     // Test booleans
     DrJsonValue bool_false = drjson_make_bool(0);
     DrJsonValue bool_true = drjson_make_bool(1);
-    TestExpectTrue(compare_values(bool_false, bool_true, ctx) < 0);
+    TestExpect(compare_values(bool_false, bool_true, ctx), <, 0);
     TestExpectTrue(compare_values(bool_true, bool_false, ctx) > 0);
 
     // Test numbers
     DrJsonValue int1 = drjson_make_int(10);
     DrJsonValue int2 = drjson_make_int(20);
-    TestExpectTrue(compare_values(int1, int2, ctx) < 0);
+    TestExpect(compare_values(int1, int2, ctx), <, 0);
     TestExpectTrue(compare_values(int2, int1, ctx) > 0);
     TestExpectEquals(compare_values(int1, int1, ctx), 0);
 
     DrJsonValue uint1 = drjson_make_uint(100);
     DrJsonValue uint2 = drjson_make_uint(200);
-    TestExpectTrue(compare_values(uint1, uint2, ctx) < 0);
+    TestExpect(compare_values(uint1, uint2, ctx), <, 0);
 
     DrJsonValue num1 = drjson_make_number(3.14);
     DrJsonValue num2 = drjson_make_number(2.71);
-    TestExpectTrue(compare_values(num2, num1, ctx) < 0);
+    TestExpect(compare_values(num2, num1, ctx), <, 0);
 
     // Test strings
     DrJsonAtom apple_atom, banana_atom;
@@ -1361,7 +1364,7 @@ TestFunction(TestValueComparison){
     TestAssertFalse(atom_err);
     DrJsonValue str_a = drjson_atom_to_value(apple_atom);
     DrJsonValue str_b = drjson_atom_to_value(banana_atom);
-    TestExpectTrue(compare_values(str_a, str_b, ctx) < 0);
+    TestExpect(compare_values(str_a, str_b, ctx), <, 0);
     TestExpectTrue(compare_values(str_b, str_a, ctx) > 0);
     TestExpectEquals(compare_values(str_a, str_a, ctx), 0);
 
@@ -1373,14 +1376,14 @@ TestFunction(TestValueComparison){
     TestAssertFalse(atom_err);
     DrJsonValue str_short = drjson_atom_to_value(a_atom);
     DrJsonValue str_long = drjson_atom_to_value(aa_atom);
-    TestExpectTrue(compare_values(str_short, str_long, ctx) < 0);
+    TestExpect(compare_values(str_short, str_long, ctx), <, 0);
 
     // Test arrays by length
     LongString arr_small_json = LS("[1]");
     LongString arr_large_json = LS("[1,2,3,4,5]");
     DrJsonValue arr_small = drjson_parse_string(ctx, arr_small_json.text, arr_small_json.length, 0);
     DrJsonValue arr_large = drjson_parse_string(ctx, arr_large_json.text, arr_large_json.length, 0);
-    TestExpectTrue(compare_values(arr_small, arr_large, ctx) < 0);
+    TestExpect(compare_values(arr_small, arr_large, ctx), <, 0);
 
     drjson_ctx_free_all(ctx);
     assert_all_freed();
@@ -1460,7 +1463,7 @@ TestFunction(TestParseAsValue){
     err = parse_as_value(ctx, "3.14", 4, &result);
     TestExpectEquals(err, 0);
     TestExpectEquals((int)result.kind, DRJSON_NUMBER);
-    TestExpectTrue(result.number > 3.13 && result.number < 3.15);
+    TestExpect(result.number, ==, 3.14);
 
     // Parse boolean
     err = parse_as_value(ctx, "true", 4, &result);
@@ -1714,7 +1717,7 @@ TestFunction(TestSortingArrays){
     DrJsonValue elem5 = drjson_get_by_index(ctx, sorted, 5);
 
     // First element should be smaller than last
-    TestExpectTrue(compare_values(elem0, elem5, ctx) < 0);
+    TestExpect(compare_values(elem0, elem5, ctx), <, 0);
 
     // Test descending sort
     result = nav_execute_command(&nav, "sort desc", 9);
@@ -1805,7 +1808,7 @@ TestFunction(TestFilteringArrays){
 
         // Should have fewer items (only truthy ones)
         int64_t filtered_len = drjson_len(ctx, filtered);
-        TestExpectTrue(filtered_len < 6);
+        TestExpect(filtered_len, <, 6);
     }
 
     // Cleanup
@@ -1848,7 +1851,7 @@ TestFunction(TestFilteringObjects){
 
         // Should have fewer items (only truthy ones)
         int64_t filtered_len = drjson_len(ctx, filtered);
-        TestExpectTrue(filtered_len <= 3);
+        TestExpect(filtered_len, <=, 3);
     }
 
     // Cleanup
@@ -2024,7 +2027,7 @@ TestFunction(TestLiteralParsing){
     result = parse_literal(ctx, test, test + 4, &val);
     TestExpectTrue(result != NULL);
     TestExpectEquals((int)val.kind, DRJSON_NUMBER);
-    TestExpectTrue(val.number > 3.13 && val.number < 3.15);
+    TestExpect(val.number, ==, 3.14);
 
     // Parse null
     test = "null";
@@ -2255,7 +2258,7 @@ TestFunction(TestValuesOnlySearch){
     }
 
     // Should find "test" only as value (in "name": "test")
-    TestExpectTrue(matches_values < matches_all); // Should be fewer matches than normal search
+    TestExpect(matches_values, <, matches_all); // Should be fewer matches than normal search
     TestExpectEquals(matches_values, 1); // Should still find the value match
 
     // Cleanup
@@ -2459,7 +2462,7 @@ TestFunction(TestFocusCommands){
 
         // Root should now be the "outer" object (different from old root)
         TestExpectEquals((int)nav.root.kind, DRJSON_OBJECT);
-        TestExpectTrue(memcmp(&nav.root, &old_root, sizeof(DrJsonValue)) != 0);
+        TestExpect(memcmp(&nav.root, &old_root, sizeof(DrJsonValue)), != , 0);
     }
 
     // Cleanup
@@ -2519,6 +2522,502 @@ TestFunction(TestSearchCommand){
     TestExpectTrue(nav.search_numeric.is_numeric);
     TestExpectTrue(nav.search_numeric.is_integer);
     TestExpectEquals(nav.search_numeric.int_value, 25);
+
+    // Cleanup
+    nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestStringifyCommand){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // Create test JSON with various value types in an array
+    LongString json = LS("[42, true, null, {\"name\": \"Alice\", \"age\": 30}, [1, 2, 3]]");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_ARRAY);
+
+    JsonNav nav;
+    nav_init(&nav, ctx, root, "", a);
+
+    // Expand the root array
+    uint64_t root_id = nav_get_container_id(root);
+    bs_add(&nav.expanded, root_id, &a);
+    nav_rebuild(&nav);
+
+    // Position cursor on first element (42)
+    nav.cursor_pos = 1; // Index 0 is the array itself
+    NavItem* item = &nav.items[nav.cursor_pos];
+    TestExpectTrue((int)item->value.kind == DRJSON_INTEGER || (int)item->value.kind == DRJSON_UINTEGER);
+
+    // Stringify the number
+    int result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+
+    // After stringify, the value should be a string
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_STRING);
+
+    // Get the string content
+    const char* str;
+    size_t str_len;
+    int err = drjson_get_str_and_len(ctx, item->value, &str, &str_len);
+    TestExpectEquals(err, 0);
+    StringView sv = {str_len, str};
+    TestExpectEquals2(SV_equals, sv, SV("42"));
+
+    // Position on boolean (true)
+    nav.cursor_pos = 2;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_BOOL);
+
+    // Stringify the boolean
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_STRING);
+    err = drjson_get_str_and_len(ctx, item->value, &str, &str_len);
+    TestExpectEquals(err, 0);
+    sv = (StringView){str_len, str};
+    TestExpectEquals2(SV_equals, sv, SV("true"));
+
+    // Position on null
+    nav.cursor_pos = 3;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_NULL);
+
+    // Stringify null
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_STRING);
+    err = drjson_get_str_and_len(ctx, item->value, &str, &str_len);
+    TestExpectEquals(err, 0);
+    sv = (StringView){str_len, str};
+    TestExpectEquals2(SV_equals, sv, SV("null"));
+
+    // Position on object
+    nav.cursor_pos = 4;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_OBJECT);
+
+    // Stringify the object
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_STRING);
+    err = drjson_get_str_and_len(ctx, item->value, &str, &str_len);
+    TestExpectEquals(err, 0);
+    // Should contain the object as JSON string (exact format may vary)
+    TestExpectTrue(str_len > 10); // Should be something like {"name":"Alice","age":30}
+
+    // Position on array
+    nav.cursor_pos = 5;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_ARRAY);
+
+    // Stringify the array
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_STRING);
+    err = drjson_get_str_and_len(ctx, item->value, &str, &str_len);
+    TestExpectEquals(err, 0);
+    sv = (StringView){str_len, str};
+    TestExpectEquals2(SV_equals, sv, SV("[1,2,3]"));
+
+    // Test error case: cannot stringify root
+    nav.cursor_pos = 0;
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_ERROR);
+
+    // Cleanup
+    nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestParseCommand){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // Test parsing number string
+    {
+        LongString json = LS("[\"42\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_OK);
+
+        DrJsonValue arr_elem = drjson_get_by_index(ctx, root, 0);
+        TestExpectTrue((int)arr_elem.kind == DRJSON_INTEGER || (int)arr_elem.kind == DRJSON_UINTEGER);
+        nav_free(&nav);
+    }
+
+    // Test parsing boolean string
+    {
+        LongString json = LS("[\"true\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_OK);
+
+        nav_rebuild(&nav);
+        NavItem* item = &nav.items[nav.cursor_pos];
+        TestExpectEquals((int)item->value.kind, DRJSON_BOOL);
+        TestExpectEquals(item->value.boolean, 1);
+        nav_free(&nav);
+    }
+
+    // Test parsing null string
+    {
+        LongString json = LS("[\"null\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_OK);
+
+        nav_rebuild(&nav);
+        NavItem* item = &nav.items[nav.cursor_pos];
+        TestExpectEquals((int)item->value.kind, DRJSON_NULL);
+        nav_free(&nav);
+    }
+
+    // Test parsing object string with escaped quotes
+    {
+        LongString json = LS("[\"{\\\"name\\\":\\\"Alice\\\"}\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_OK);
+
+        DrJsonValue arr_elem = drjson_get_by_index(ctx, root, 0);
+        TestExpectEquals((int)arr_elem.kind, DRJSON_OBJECT);
+        nav_free(&nav);
+    }
+
+    // Test parsing array string
+    {
+        LongString json = LS("[\"[1,2,3]\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_OK);
+
+        nav_rebuild(&nav);
+        NavItem* item = &nav.items[nav.cursor_pos];
+        TestExpectEquals((int)item->value.kind, DRJSON_ARRAY);
+        nav_free(&nav);
+    }
+
+    // Test parsing bare identifier (DrJson extension)
+    {
+        LongString json = LS("[\"invalid\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        // "invalid" is a valid bare identifier in DrJson format, so it parses as a string
+        TestExpectEquals(result, CMD_OK);
+
+        nav_rebuild(&nav);
+        NavItem* item = &nav.items[nav.cursor_pos];
+        TestExpectEquals((int)item->value.kind, DRJSON_STRING);
+        nav_free(&nav);
+    }
+
+    // Test parsing string with escape sequences (newlines, tabs, etc.)
+    {
+        // String contains: {"text":"Line1\\nLine2\\tTabbed"} with double-escaped sequences
+        // After unescape: {"text":"Line1\nLine2\tTabbed"} with single escapes
+        // After parse: object with text field (DrJson keeps escapes internally)
+        LongString json = LS("[\"{\\\"text\\\":\\\"Line1\\\\\\\\nLine2\\\\\\\\tTabbed\\\"}\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_OK);
+
+        // Verify it parsed as an object
+        DrJsonValue arr_elem = drjson_get_by_index(ctx, root, 0);
+        TestExpectEquals((int)arr_elem.kind, DRJSON_OBJECT);
+
+        // Get the "text" field - DrJson keeps escape sequences internally
+        DrJsonValue text_val = drjson_object_get_item(ctx, arr_elem, "text", 4);
+        TestExpectEquals((int)text_val.kind, DRJSON_STRING);
+        const char* text_str;
+        size_t text_len;
+        int err = drjson_get_str_and_len(ctx, text_val, &text_str, &text_len);
+        TestExpectEquals(err, 0);
+        // String should be: Line1\\nLine2\\tTabbed (with double backslashes preserved)
+        TestExpectEquals(text_len, (size_t)22);
+        TestExpectTrue(text_str[5] == '\\');
+        TestExpectTrue(text_str[6] == '\\');
+        TestExpectTrue(text_str[7] == 'n');
+        TestExpectTrue(text_str[13] == '\\');
+        TestExpectTrue(text_str[14] == '\\');
+        TestExpectTrue(text_str[15] == 't');
+
+        nav_free(&nav);
+    }
+
+    // Test parsing string with unicode escape
+    {
+        // String contains: {"emoji":"\\uD83D\\uDE00"} with double-escaped unicode
+        // After unescape: {"emoji":"\uD83D\uDE00"} with single escapes (valid JSON)
+        // After parse: object with emoji field containing UTF-8 encoded emoji
+        LongString json = LS("[\"{\\\"emoji\\\":\\\"\\\\\\\\uD83D\\\\\\\\uDE00\\\"}\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_OK);
+
+        DrJsonValue arr_elem = drjson_get_by_index(ctx, root, 0);
+        TestExpectEquals((int)arr_elem.kind, DRJSON_OBJECT);
+
+        nav_free(&nav);
+    }
+
+    // Test error case: trying to parse non-string value
+    {
+        LongString json = LS("[123]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_ERROR);
+        nav_free(&nav);
+    }
+
+    // Test error case: invalid escape sequence in string
+    {
+        // String with invalid escape \x (single backslash-x is not valid JSON)
+        LongString json = LS("[\"Invalid\\x\"]");
+        DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+        JsonNav nav;
+        nav_init(&nav, ctx, root, "", a);
+        uint64_t root_id = nav_get_container_id(root);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 1;
+        int result = nav_execute_command(&nav, "parse", 5);
+        TestExpectEquals(result, CMD_ERROR); // Should fail due to invalid escape
+        nav_free(&nav);
+    }
+
+    // Cleanup
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestStringifyParseRoundtrip){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // Create test JSON with various value types in an array
+    LongString json = LS("[42, 3.14, true, false, null, {\"x\": 10, \"y\": 20}, [1, 2, 3]]");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_ARRAY);
+
+    JsonNav nav;
+    nav_init(&nav, ctx, root, "", a);
+
+    // Expand the root array
+    uint64_t root_id = nav_get_container_id(root);
+    bs_add(&nav.expanded, root_id, &a);
+    nav_rebuild(&nav);
+
+    // Test roundtrip on integer (42)
+    nav.cursor_pos = 1;
+    NavItem* item = &nav.items[nav.cursor_pos];
+    TestExpectTrue((int)item->value.kind == DRJSON_INTEGER || (int)item->value.kind == DRJSON_UINTEGER);
+    int64_t original_int = (item->value.kind == DRJSON_INTEGER) ? item->value.integer : (int64_t)item->value.uinteger;
+
+    // Stringify
+    int result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_STRING);
+
+    // Parse back
+    result = nav_execute_command(&nav, "parse", 5);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectTrue((int)item->value.kind == DRJSON_INTEGER || (int)item->value.kind == DRJSON_UINTEGER);
+    if(item->value.kind == DRJSON_INTEGER)
+        TestExpectEquals(item->value.integer, original_int);
+    else
+        TestExpectEquals((int64_t)item->value.uinteger, original_int);
+
+    // Test roundtrip on float (3.14)
+    nav.cursor_pos = 2;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_NUMBER);
+    double original_double = item->value.number;
+
+    // Stringify
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+
+    // Parse back
+    result = nav_execute_command(&nav, "parse", 5);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_NUMBER);
+    TestExpect(item->value.number, ==, original_double);
+
+    // Test roundtrip on boolean (true)
+    nav.cursor_pos = 3;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_BOOL);
+    TestExpectEquals(item->value.boolean, 1);
+
+    // Stringify
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+
+    // Parse back
+    result = nav_execute_command(&nav, "parse", 5);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_BOOL);
+    TestExpectEquals(item->value.boolean, 1);
+
+    // Test roundtrip on null
+    nav.cursor_pos = 5;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_NULL);
+
+    // Stringify
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+
+    // Parse back
+    result = nav_execute_command(&nav, "parse", 5);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_NULL);
+
+    // Test roundtrip on object
+    nav.cursor_pos = 6;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_OBJECT);
+
+    // Stringify
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+
+    // Parse back
+    result = nav_execute_command(&nav, "parse", 5);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_OBJECT);
+    // Verify the object still has the correct keys
+    DrJsonValue x_val = drjson_object_get_item(ctx, item->value, "x", 1);
+    TestExpectTrue((int)x_val.kind == DRJSON_INTEGER || (int)x_val.kind == DRJSON_UINTEGER);
+
+    // Test roundtrip on array
+    nav.cursor_pos = 7;
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_ARRAY);
+
+    // Stringify
+    result = nav_execute_command(&nav, "stringify", 9);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+
+    // Parse back
+    result = nav_execute_command(&nav, "parse", 5);
+    TestExpectEquals(result, CMD_OK);
+    nav_rebuild(&nav);
+    item = &nav.items[nav.cursor_pos];
+    TestExpectEquals((int)item->value.kind, DRJSON_ARRAY);
+    int64_t arr_len = drjson_len(ctx, item->value);
+    TestExpectEquals((int)arr_len, 3);
 
     // Cleanup
     nav_free(&nav);
@@ -2809,7 +3308,7 @@ TestFunction(TestNavJumpToParent){
         nav_jump_to_parent(&nav, 0);
 
         // Should have moved to shallower depth
-        TestExpectTrue(nav.items[nav.cursor_pos].depth < deep_depth);
+        TestExpect(nav.items[nav.cursor_pos].depth, <, deep_depth);
 
         // Jump again
         int parent_depth = nav.items[nav.cursor_pos].depth;
@@ -2817,7 +3316,7 @@ TestFunction(TestNavJumpToParent){
 
         // Should be even shallower
         if(parent_depth > 0){
-            TestExpectTrue(nav.items[nav.cursor_pos].depth < parent_depth);
+            TestExpect(nav.items[nav.cursor_pos].depth, <, parent_depth);
         }
     }
 
@@ -2867,7 +3366,7 @@ TestFunction(TestNavNavigateToPath){
     size_t result_idx = nav_navigate_to_path(&nav, 0, &path);
 
     // Should have navigated somewhere
-    TestExpectTrue(result_idx < nav.item_count);
+    TestExpect(result_idx, <, nav.item_count);
 
     // Try empty path (should return same index)
     DrJsonPath empty_path = {0};
@@ -2958,26 +3457,26 @@ TestFunction(TestDrjToDoubleForSort){
     // Test DRJSON_NUMBER
     DrJsonValue num = drjson_make_number(3.14);
     double d = drj_to_double_for_sort(num);
-    TestExpectTrue(d > 3.13 && d < 3.15);
+    TestExpect(d, ==, 3.14);
 
     // Test DRJSON_INTEGER
     DrJsonValue int_val = drjson_make_int(-42);
     d = drj_to_double_for_sort(int_val);
-    TestExpectTrue(d == -42.0);
+    TestExpect(d, ==, -42.0);
 
     // Test DRJSON_UINTEGER
     DrJsonValue uint_val = drjson_make_uint(100);
     d = drj_to_double_for_sort(uint_val);
-    TestExpectTrue(d == 100.0);
+    TestExpect(d, ==, 100.0);
 
     // Test non-numeric (should return 0.0)
     DrJsonValue null_val = drjson_make_null();
     d = drj_to_double_for_sort(null_val);
-    TestExpectTrue(d == 0.0);
+    TestExpect(d, ==, 0.0);
 
     DrJsonValue bool_val = drjson_make_bool(1);
     d = drj_to_double_for_sort(bool_val);
-    TestExpectTrue(d == 0.0);
+    TestExpect(d, ==, 0.0);
 
     assert_all_freed();
     TESTEND();
@@ -3450,13 +3949,13 @@ TestFunction(TestGetTypeRank){
     int arr_rank = get_type_rank(arr_val);
     int obj_rank = get_type_rank(obj_val);
 
-    TestExpectTrue(null_rank < bool_rank);
-    TestExpectTrue(bool_rank < int_rank);
+    TestExpect(null_rank, <, bool_rank);
+    TestExpect(bool_rank, <, int_rank);
     TestExpectEquals(int_rank, num_rank); // All numbers same rank
     TestExpectEquals(int_rank, uint_rank); // All numbers same rank
-    TestExpectTrue(int_rank < str_rank);
-    TestExpectTrue(str_rank < arr_rank);
-    TestExpectTrue(arr_rank < obj_rank);
+    TestExpect(int_rank, <, str_rank);
+    TestExpect(str_rank, <, arr_rank);
+    TestExpect(arr_rank, <, obj_rank);
 
     // Specific expected values
     TestExpectEquals(null_rank, 0);

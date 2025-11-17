@@ -32,6 +32,8 @@ static TestFunc TestPrettyPrint;
 static TestFunc TestBracelessPrint;
 static TestFunc TestTrailingContent;
 static TestFunc TestEscape;
+static TestFunc TestUnescape;
+static TestFunc TestNormalizeInput;
 static TestFunc TestObject;
 static TestFunc TestPathParse;
 static TestFunc TestObjectDeletion;
@@ -57,6 +59,8 @@ int main(int argc, char*_Nullable*_Nonnull argv){
     RegisterTest(TestBracelessPrint);
     RegisterTest(TestTrailingContent);
     RegisterTest(TestEscape);
+    RegisterTest(TestUnescape);
+    RegisterTest(TestNormalizeInput);
     RegisterTest(TestObject);
     RegisterTest(TestPathParse);
     RegisterTest(TestObjectDeletion);
@@ -469,6 +473,301 @@ TestFunction(TestEscape){
     }
     drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestUnescape){
+    TESTBEGIN();
+
+    char output[256];
+    size_t out_len;
+    int err;
+
+    // Test 1: Simple escape sequences
+    {
+        const char* input = "Hello\\nWorld\\t!";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 13); // 11 chars + newline + tab
+        TestAssertEquals(output[5], '\n');
+        TestAssertEquals(output[11], '\t');
+    }
+
+    // Test 2: Quote and backslash escapes
+    {
+        const char* input = "Say \\\"Hello\\\" with\\\\backslash";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        const char* expected = "Say \"Hello\" with\\backslash";
+        TestExpectEquals2(str_eq, output, expected);
+    }
+
+    // Test 3: All basic escape sequences
+    {
+        const char* input = "\\b\\f\\n\\r\\t\\\"\\\\\\/";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 8);
+        TestAssertEquals(output[0], '\b');
+        TestAssertEquals(output[1], '\f');
+        TestAssertEquals(output[2], '\n');
+        TestAssertEquals(output[3], '\r');
+        TestAssertEquals(output[4], '\t');
+        TestAssertEquals(output[5], '"');
+        TestAssertEquals(output[6], '\\');
+        TestAssertEquals(output[7], '/');
+    }
+
+    // Test 4: Unicode escape (Basic Multilingual Plane)
+    {
+        const char* input = "\\u0041\\u0042\\u0043"; // ABC
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 3);
+        output[out_len] = '\0'; // null terminate for comparison
+        TestExpectEquals2(str_eq, output, "ABC");
+    }
+
+    // Test 5: Unicode escape (non-ASCII)
+    {
+        const char* input = "\\u00A9"; // © copyright symbol
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        // UTF-8 encoding of U+00A9 is 0xC2 0xA9
+        TestAssertEquals((int)out_len, 2);
+        TestAssertEquals((unsigned char)output[0], 0xC2);
+        TestAssertEquals((unsigned char)output[1], 0xA9);
+    }
+
+    // Test 6: UTF-16 surrogate pair (emoji)
+    {
+        const char* input = "\\uD83D\\uDE00"; // 😀 grinning face
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        // UTF-8 encoding of U+1F600 is 0xF0 0x9F 0x98 0x80
+        TestAssertEquals((int)out_len, 4);
+        TestAssertEquals((unsigned char)output[0], 0xF0);
+        TestAssertEquals((unsigned char)output[1], 0x9F);
+        TestAssertEquals((unsigned char)output[2], 0x98);
+        TestAssertEquals((unsigned char)output[3], 0x80);
+    }
+
+    // Test 7: The problematic JSON object string from our use case
+    {
+        const char* input = "{\\\"name\\\":\\\"Alice\\\"}";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        output[out_len] = '\0'; // null terminate for comparison
+        TestExpectEquals2(str_eq, output, "{\"name\":\"Alice\"}");
+    }
+
+    // Test 8: No escapes (SIMD/SWAR fast path)
+    {
+        const char* input = "NoEscapesHereJustPlainText1234567890ABCDEFGHIJKLMNOP";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, (int)strlen(input));
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, input);
+    }
+
+    // Test 9: Error cases - trailing backslash
+    {
+        const char* input = "Hello\\";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 1); // Should return error
+    }
+
+    // Test 10: Error cases - invalid escape
+    {
+        const char* input = "Hello\\x";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 1); // Should return error
+    }
+
+    // Test 11: Error cases - incomplete unicode escape
+    {
+        const char* input = "\\u00";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 1); // Should return error
+    }
+
+    // Test 12: Error cases - invalid hex digit
+    {
+        const char* input = "\\u00GG";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 1); // Should return error
+    }
+
+    // Test 13: Empty string
+    {
+        const char* input = "";
+        err = drjson_unescape_string(input, 0, output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 0);
+    }
+
+    // Test 14: Mixed content with escape in the middle (triggers SIMD then scalar)
+    {
+        const char* input = "0123456789ABCDEF\\n0123456789ABCDEF";
+        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals(output[16], '\n');
+        TestAssertEquals((int)out_len, 33); // 32 chars + 1 newline
+    }
+
+    assert_all_freed();
+    TESTEND();
+}
+
+TestFunction(TestNormalizeInput){
+    TESTBEGIN();
+    char output[1024];
+    size_t out_len;
+    int err;
+
+    // Test 1: Valid escape sequence - should pass through
+    {
+        const char* input = "foo\\nbar";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 8);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\nbar");
+    }
+
+    // Test 2: Invalid escape sequence - backslash should be escaped
+    {
+        const char* input = "foo\\xbar";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 9); // foo\\xbar = 9 chars
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\\\xbar");
+    }
+
+    // Test 3: Unescaped quote - should be escaped
+    {
+        const char* input = "foo\"bar";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 8); // foo\"bar = 8 chars
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\\"bar");
+    }
+
+    // Test 4: Valid escaped quote - should pass through
+    {
+        const char* input = "foo\\\"bar";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 8);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\\"bar");
+    }
+
+    // Test 5: Valid escaped backslash - should pass through
+    {
+        const char* input = "foo\\\\bar";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 8);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\\\bar");
+    }
+
+    // Test 6: All valid escape sequences
+    {
+        const char* input = "\\n\\t\\r\\b\\f\\\"\\\\\\/";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 16);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "\\n\\t\\r\\b\\f\\\"\\\\\\/");
+    }
+
+    // Test 7: Valid unicode escape
+    {
+        const char* input = "foo\\u1234bar";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 12);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\u1234bar");
+    }
+
+    // Test 8: Invalid unicode escape (not enough digits)
+    {
+        const char* input = "foo\\u12gz";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        // Backslash should be escaped: foo\\u12gz
+        TestAssertEquals((int)out_len, 10);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\\\u12gz");
+    }
+
+    // Test 9: Invalid unicode escape (non-hex digit immediately)
+    {
+        const char* input = "foo\\uXYZW";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        // Backslash should be escaped: foo\\uXYZW
+        TestAssertEquals((int)out_len, 10);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\\\uXYZW");
+    }
+
+    // Test 10: Trailing backslash - should be escaped
+    {
+        const char* input = "foo\\";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 5); // foo\\ = 5 chars
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "foo\\\\");
+    }
+
+    // Test 11: Empty string
+    {
+        const char* input = "";
+        err = drjson_normalize_user_input(input, 0, output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 0);
+    }
+
+    // Test 12: Only normal characters
+    {
+        const char* input = "HelloWorld123";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 13);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "HelloWorld123");
+    }
+
+    // Test 13: Multiple quotes
+    {
+        const char* input = "a\"b\"c\"d";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        TestAssertEquals((int)out_len, 10); // a\"b\"c\"d = 10 chars
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "a\\\"b\\\"c\\\"d");
+    }
+
+    // Test 14: Mixed valid and invalid escapes
+    {
+        const char* input = "valid\\nnext\\xinvalid";
+        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        TestAssertEquals(err, 0);
+        // valid\nnext\\xinvalid
+        TestAssertEquals((int)out_len, 21);
+        output[out_len] = '\0';
+        TestExpectEquals2(str_eq, output, "valid\\nnext\\\\xinvalid");
+    }
+
     assert_all_freed();
     TESTEND();
 }
@@ -1610,15 +1909,15 @@ TestFunction(TestFloatPrinting){
 
     DrJsonValue elem0 = drjson_get_by_index(ctx, reparsed_arr, 0);
     TestAssertEquals(elem0.kind, DRJSON_NUMBER);
-    TestAssert(elem0.number == 1.1);
+    TestAssertEquals(elem0.number, 1.1);
 
     DrJsonValue elem1 = drjson_get_by_index(ctx, reparsed_arr, 1);
     TestAssertEquals(elem1.kind, DRJSON_NUMBER);
-    TestAssert(elem1.number == 2.2);
+    TestAssertEquals(elem1.number, 2.2);
 
     DrJsonValue elem2 = drjson_get_by_index(ctx, reparsed_arr, 2);
     TestAssertEquals(elem2.kind, DRJSON_NUMBER);
-    TestAssert(elem2.number == 3.3);
+    TestAssertEquals(elem2.number, 3.3);
 
     drjson_gc(ctx, 0, 0);
     drjson_ctx_free_all(ctx);

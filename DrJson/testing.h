@@ -381,6 +381,36 @@ register_test(StringView test_name, TestFunc* func, enum TestCaseFlags flags){
 // a bad idea anyway.
 
   //
+  // TestExpect
+  // ----------------
+  // Expects lhs binop rhs, using the given binop operator
+  //
+#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
+  #define TestExpect(lhs, binop, rhs) do {\
+          __auto_type _lhs = lhs; \
+          typeof(lhs) _rhs = rhs; \
+          TEST_stats.executed++;\
+          if (!(_lhs binop _rhs)) {\
+              TEST_stats.failures++; \
+              TestReport("Test condition failed");\
+              TestReport("%s " #binop " %s", #lhs, #rhs); \
+              TestPrintValue(#lhs, _lhs);\
+              TestPrintValue(#rhs, _rhs);\
+              }\
+          }while(0)
+#else
+  #define TestExpect(lhs, binop, rhs) do {\
+          TEST_stats.executed++;\
+          if (!((lhs) binop (rhs))) {\
+              TEST_stats.failures++; \
+              TestReport("Test condition failed");\
+              TestReport("%s " #binop " %s", #lhs, #rhs); \
+              TestPrintValue(#lhs, lhs);\
+              TestPrintValue(#rhs, rhs);\
+              }\
+          }while(0)
+#endif
+  //
   // TestExpectEquals
   // ----------------
   // Expects lhs == rhs, using the == operator

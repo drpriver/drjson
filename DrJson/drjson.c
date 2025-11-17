@@ -21,6 +21,20 @@ typedef long long ssize_t;
 #include <windows.h>
 #endif
 
+#ifndef DRJ_HAVE_SIMD
+    #if defined(__SSE2__) || (defined(_M_X64) && !defined(__clang__))
+        #define DRJ_HAVE_SIMD 1
+        #define DRJ_SIMD_WIDTH 16
+        #include <emmintrin.h>
+    #elif defined(__ARM_NEON) || defined(__aarch64__)
+        #define DRJ_HAVE_SIMD 1
+        #define DRJ_SIMD_WIDTH 16
+        #include <arm_neon.h>
+    #else
+        #define DRJ_HAVE_SIMD 0
+    #endif
+#endif
+
 #include "../compiler_warnings.h"
 #ifndef DRJSON_API
 
@@ -2911,15 +2925,364 @@ drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t 
     return err;
 }
 
-#if 0
+// Unescape a JSON string (convert \n, \t, \", \\, etc to actual characters)
+// Returns: 0 on success, 1 on error
+// outstring must have at least 'length' bytes available
+// *outlength will be set to actual output length (always <= length)
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
-drjson_unescape_string(const DrJsonAllocator* restrict allocator, const char* restrict unescaped, size_t length, char*_Nullable restrict *_Nonnull restrict outstring, size_t* restrict outlength){
-    if(!length) return 1;
-    // TODO
-    return 1;
-}
+drjson_unescape_string(const char* restrict escaped, size_t length, char* restrict outstring, size_t* restrict outlength){
+    if(!outlength) return 1;
+    if(!length){
+        *outlength = 0;
+        return 0;
+    }
+    if(!escaped || !outstring) return 1;
+
+    size_t in_pos = 0;
+    size_t out_pos = 0;
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__)
+    // SIMD path: scan for backslashes in 16-byte chunks
+
+    #if DRJ_HAVE_SIMD
+    // Process 16 bytes at a time looking for backslashes
+    while(in_pos + DRJ_SIMD_WIDTH <= length){
+        #if defined(__SSE2__) || (defined(_M_X64) && !defined(__clang__))
+            __m128i chunk = _mm_loadu_si128((const __m128i*)(escaped + in_pos));
+            __m128i backslash = _mm_set1_epi8('\\');
+            __m128i cmp = _mm_cmpeq_epi8(chunk, backslash);
+            int mask = _mm_movemask_epi8(cmp);
+        #elif defined(__ARM_NEON) || defined(__aarch64__)
+            uint8x16_t chunk = vld1q_u8((const uint8_t*)(escaped + in_pos));
+            uint8x16_t backslash = vdupq_n_u8('\\');
+            uint8x16_t cmp = vceqq_u8(chunk, backslash);
+            // Extract mask from comparison
+            uint64_t mask_parts[2];
+            vst1q_u8((uint8_t*)mask_parts, cmp);
+            int mask = 0;
+            for(int i = 0; i < 16; i++){
+                if(((uint8_t*)mask_parts)[i])
+                    mask |= (1 << i);
+            }
+        #endif
+
+        if(mask == 0){
+            // No backslashes in this chunk, copy directly
+            #if defined(__SSE2__) || (defined(_M_X64) && !defined(__clang__))
+                _mm_storeu_si128((__m128i*)(outstring + out_pos), chunk);
+            #else
+                vst1q_u8((uint8_t*)(outstring + out_pos), chunk);
+            #endif
+            in_pos += DRJ_SIMD_WIDTH;
+            out_pos += DRJ_SIMD_WIDTH;
+        }
+        else {
+            // Found backslash(es), handle byte by byte
+            break;
+        }
+    }
+    #endif
+#else
+    // SWAR path: scan for backslashes in 8-byte chunks using bit tricks
+    #if defined(__LP64__) || defined(_WIN64)
+    while(in_pos + 8 <= length){
+        uint64_t chunk;
+        drj_memcpy(&chunk, escaped + in_pos, 8);
+
+        // Find backslashes using "has zero byte" trick
+        // XOR with backslash pattern, then detect zeros
+        uint64_t backslash_pattern = 0x5C5C5C5C5C5C5C5CULL; // '\\' repeated
+        uint64_t xored = chunk ^ backslash_pattern;
+
+        // Detect if any byte is zero: (x - 0x01...) & ~x & 0x80...
+        uint64_t has_zero = (xored - 0x0101010101010101ULL) & ~xored & 0x8080808080808080ULL;
+
+        if(has_zero == 0){
+            // No backslashes, copy 8 bytes directly
+            drj_memcpy(outstring + out_pos, &chunk, 8);
+            in_pos += 8;
+            out_pos += 8;
+        }
+        else {
+            // Found backslash, handle byte by byte
+            break;
+        }
+    }
+    #endif
 #endif
+
+    // Scalar path: process remaining bytes or bytes with backslashes
+    while(in_pos < length){
+        char c = escaped[in_pos++];
+
+        if(c != '\\'){
+            outstring[out_pos++] = c;
+            continue;
+        }
+
+        // Handle escape sequence
+        if(in_pos >= length) return 1; // Trailing backslash
+
+        char escape = escaped[in_pos++];
+        switch(escape){
+            case '"':  outstring[out_pos++] = '"'; break;
+            case '\\': outstring[out_pos++] = '\\'; break;
+            case '/':  outstring[out_pos++] = '/'; break;
+            case 'b':  outstring[out_pos++] = '\b'; break;
+            case 'f':  outstring[out_pos++] = '\f'; break;
+            case 'n':  outstring[out_pos++] = '\n'; break;
+            case 'r':  outstring[out_pos++] = '\r'; break;
+            case 't':  outstring[out_pos++] = '\t'; break;
+            case 'u': {
+                // Unicode escape: \uXXXX
+                if(in_pos + 4 > length) return 1;
+
+                // Parse 4 hex digits
+                uint32_t codepoint = 0;
+                for(int i = 0; i < 4; i++){
+                    char hex = escaped[in_pos++];
+                    uint32_t digit;
+                    if(hex >= '0' && hex <= '9')
+                        digit = hex - '0';
+                    else if(hex >= 'a' && hex <= 'f')
+                        digit = hex - 'a' + 10;
+                    else if(hex >= 'A' && hex <= 'F')
+                        digit = hex - 'A' + 10;
+                    else
+                        return 1; // Invalid hex digit
+                    codepoint = (codepoint << 4) | digit;
+                }
+
+                // Handle UTF-16 surrogate pairs
+                if(codepoint >= 0xD800 && codepoint <= 0xDBFF){
+                    // High surrogate, expect low surrogate
+                    if(in_pos + 6 > length || escaped[in_pos] != '\\' || escaped[in_pos+1] != 'u')
+                        return 1;
+                    in_pos += 2;
+
+                    uint32_t low_surrogate = 0;
+                    for(int i = 0; i < 4; i++){
+                        char hex = escaped[in_pos++];
+                        uint32_t digit;
+                        if(hex >= '0' && hex <= '9')
+                            digit = hex - '0';
+                        else if(hex >= 'a' && hex <= 'f')
+                            digit = hex - 'a' + 10;
+                        else if(hex >= 'A' && hex <= 'F')
+                            digit = hex - 'A' + 10;
+                        else
+                            return 1;
+                        low_surrogate = (low_surrogate << 4) | digit;
+                    }
+
+                    if(low_surrogate < 0xDC00 || low_surrogate > 0xDFFF)
+                        return 1; // Invalid low surrogate
+
+                    // Combine surrogates into codepoint
+                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low_surrogate - 0xDC00);
+                }
+
+                // Encode as UTF-8
+                if(codepoint <= 0x7F){
+                    outstring[out_pos++] = (char)codepoint;
+                }
+                else if(codepoint <= 0x7FF){
+                    outstring[out_pos++] = (char)(0xC0 | (codepoint >> 6));
+                    outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                }
+                else if(codepoint <= 0xFFFF){
+                    outstring[out_pos++] = (char)(0xE0 | (codepoint >> 12));
+                    outstring[out_pos++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                    outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                }
+                else if(codepoint <= 0x10FFFF){
+                    outstring[out_pos++] = (char)(0xF0 | (codepoint >> 18));
+                    outstring[out_pos++] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+                    outstring[out_pos++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                    outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                }
+                else {
+                    return 1; // Invalid codepoint
+                }
+                break;
+            }
+            default:
+                return 1; // Invalid escape sequence
+        }
+    }
+
+    *outlength = out_pos;
+    return 0;
+}
+
+// Normalize user input by doing liberal unescape + strict escape in single pass
+// This handles user input from TUI where:
+// - Valid escape sequences (\n, \t, etc.) should be preserved
+// - Invalid escape sequences (\x) should have backslash escaped
+// - Unescaped special chars (") should be escaped
+// Returns: 0 on success, 1 on error
+// outstring must have at least 'length * 2' bytes available (worst case)
+// *outlength will be set to actual output length
+DRJSON_API
+DRJSON_WARN_UNUSED
+int
+drjson_normalize_user_input(const char* restrict input, size_t length, char* restrict outstring, size_t* restrict outlength){
+    if(!outlength) return 1;
+    if(!length){
+        *outlength = 0;
+        return 0;
+    }
+    if(!input || !outstring) return 1;
+
+    size_t in_pos = 0;
+    size_t out_pos = 0;
+
+    while(in_pos < length){
+        char c = input[in_pos];
+
+        if(c == '\\'){
+            // Check if this is a valid escape sequence
+            if(in_pos + 1 < length){
+                char next = input[in_pos + 1];
+                // Check for valid JSON escape characters
+                if(next == '"' || next == '\\' || next == '/' ||
+                   next == 'b' || next == 'f' || next == 'n' ||
+                   next == 'r' || next == 't'){
+                    // Valid escape sequence - pass through as-is
+                    outstring[out_pos++] = c;
+                    outstring[out_pos++] = next;
+                    in_pos += 2;
+                    continue;
+                }
+                else if(next == 'u'){
+                    // Unicode escape sequence \uXXXX
+                    // Validate that we have 4 hex digits
+                    if(in_pos + 5 < length){
+                        int valid = 1;
+                        for(int i = 0; i < 4; i++){
+                            char hex = input[in_pos + 2 + i];
+                            if(!((hex >= '0' && hex <= '9') ||
+                                 (hex >= 'a' && hex <= 'f') ||
+                                 (hex >= 'A' && hex <= 'F'))){
+                                valid = 0;
+                                break;
+                            }
+                        }
+                        if(valid){
+                            // Valid unicode escape - pass through
+                            outstring[out_pos++] = '\\';
+                            outstring[out_pos++] = 'u';
+                            outstring[out_pos++] = input[in_pos + 2];
+                            outstring[out_pos++] = input[in_pos + 3];
+                            outstring[out_pos++] = input[in_pos + 4];
+                            outstring[out_pos++] = input[in_pos + 5];
+                            in_pos += 6;
+                            continue;
+                        }
+                    }
+                    // Invalid unicode escape - fall through to escape the backslash
+                }
+                // Invalid escape sequence - escape the backslash
+                outstring[out_pos++] = '\\';
+                outstring[out_pos++] = '\\';
+                in_pos++;
+                continue;
+            }
+            else {
+                // Trailing backslash - escape it
+                outstring[out_pos++] = '\\';
+                outstring[out_pos++] = '\\';
+                in_pos++;
+                continue;
+            }
+        }
+        else if(c == '"'){
+            // Unescaped quote - needs escaping
+            outstring[out_pos++] = '\\';
+            outstring[out_pos++] = '"';
+            in_pos++;
+        }
+        else if((unsigned char)c < 32){
+            // Control character - escape it
+            switch(c){
+                case '\b':
+                    outstring[out_pos++] = '\\';
+                    outstring[out_pos++] = 'b';
+                    break;
+                case '\f':
+                    outstring[out_pos++] = '\\';
+                    outstring[out_pos++] = 'f';
+                    break;
+                case '\n':
+                    outstring[out_pos++] = '\\';
+                    outstring[out_pos++] = 'n';
+                    break;
+                case '\r':
+                    outstring[out_pos++] = '\\';
+                    outstring[out_pos++] = 'r';
+                    break;
+                case '\t':
+                    outstring[out_pos++] = '\\';
+                    outstring[out_pos++] = 't';
+                    break;
+                default:{
+                    // Other control chars - use \u00xx format
+                    const char* const hex = "0123456789abcdef";
+                    outstring[out_pos++] = '\\';
+                    outstring[out_pos++] = 'u';
+                    outstring[out_pos++] = '0';
+                    outstring[out_pos++] = '0';
+                    outstring[out_pos++] = hex[((unsigned char)c & 0xf0) >> 4];
+                    outstring[out_pos++] = hex[((unsigned char)c & 0xf)];
+                    break;
+                }
+            }
+            in_pos++;
+        }
+        else {
+            // Normal character - pass through
+            outstring[out_pos++] = c;
+            in_pos++;
+        }
+    }
+
+    *outlength = out_pos;
+    return 0;
+}
+
+// Normalize user input and atomize it in one operation
+// This is the common pattern: normalize user input from editor/UI, then intern it
+// Handles memory allocation internally for the normalization buffer
+// Returns: 0 on success, 1 on error
+DRJSON_API
+DRJSON_WARN_UNUSED
+int
+drjson_normalize_and_atomize(DrJsonContext* ctx, const char* restrict input, size_t length, DrJsonAtom* outatom){
+    if(!outatom) return 1;
+    if(!length){
+        return drjson_atomize(ctx, "", 0, outatom);
+    }
+    if(!input) return 1;
+
+    // Allocate buffer for normalization (worst case: length * 2)
+    size_t buffer_size = length * 2;
+    char* normalized = drj_alloc(ctx, buffer_size);
+    if(!normalized) return 1;
+
+    size_t normalized_len;
+    int err = drjson_normalize_user_input(input, length, normalized, &normalized_len);
+    if(err){
+        drj_free(ctx, normalized, buffer_size);
+        return err;
+    }
+
+    // Atomize the normalized string
+    err = drjson_atomize(ctx, normalized, normalized_len, outatom);
+    drj_free(ctx, normalized, buffer_size);
+    return err;
+}
 
 DRJSON_API
 void
@@ -3546,6 +3909,10 @@ drjson_intern_value(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
 }
 
 
+#ifdef DRJ_HAVE_SIMD
+#undef DRJ_HAVE_SIMD
+#undef DRJ_SIMD_WIDTH
+#endif
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
