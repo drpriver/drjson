@@ -74,6 +74,7 @@
     X(TestJumpList) \
     X(TestJumpListAcrossFocus) \
     X(TestFocusCommands) \
+    X(TestSearchCommand) \
     X(TestNavJumpToNthChild) \
     X(TestComplexQueryPaths) \
     X(TestStripWhitespace) \
@@ -2460,6 +2461,64 @@ TestFunction(TestFocusCommands){
         TestExpectEquals((int)nav.root.kind, DRJSON_OBJECT);
         TestExpectTrue(memcmp(&nav.root, &old_root, sizeof(DrJsonValue)) != 0);
     }
+
+    // Cleanup
+    nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+// Test :search command
+TestFunction(TestSearchCommand){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // Create test JSON with nested structure
+    LongString json = LS("{\"users\": [{\"name\": \"Alice\", \"age\": 30}, {\"name\": \"Bob\", \"age\": 25}], \"count\": 2, \"active\": true}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav;
+    nav_init(&nav, ctx, root, "", a);
+
+    // Test basic recursive search
+    int result = nav_execute_command(&nav, "search Alice", 12);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectEquals((int)nav.search_mode, SEARCH_RECURSIVE);
+    TestExpectEquals(nav.search_values_only, 0);
+
+    // Should have found "Alice" and positioned cursor there
+    // Verify search is active and can use 'n' to find next
+    TestExpectTrue(nav.search_buffer.length > 0);
+
+    // Test values-only search
+    nav.cursor_pos = 0;
+    result = nav_execute_command(&nav, "search --values-only Alice", 26);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectEquals((int)nav.search_mode, SEARCH_RECURSIVE);
+    TestExpectEquals(nav.search_values_only, 1);
+
+    // Test query search
+    nav.cursor_pos = 0;
+    result = nav_execute_command(&nav, "search --query users[0].name Alice", 35);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectEquals((int)nav.search_mode, SEARCH_QUERY);
+
+    // Test error: no pattern
+    result = nav_execute_command(&nav, "search", 6);
+    TestExpectEquals(result, CMD_ERROR);
+
+    // Test numeric search
+    nav.cursor_pos = 0;
+    result = nav_execute_command(&nav, "search 25", 9);
+    TestExpectEquals(result, CMD_OK);
+    TestExpectTrue(nav.search_numeric.is_numeric);
+    TestExpectTrue(nav.search_numeric.is_integer);
+    TestExpectEquals(nav.search_numeric.int_value, 25);
 
     // Cleanup
     nav_free(&nav);

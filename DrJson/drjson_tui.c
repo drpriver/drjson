@@ -2433,7 +2433,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move, cmd_stats;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move, cmd_stats, cmd_search;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -2458,6 +2458,7 @@ static const Command commands[] = {
     {SV("query"),   SV(":query <path>"), SV("  Navigate to path (e.g., foo.bar[0].baz)"), cmd_query},
     {SV("path"),    SV(":path"), SV("  Yank (copy) current item's JSON path to clipboard"), cmd_path},
     {SV("focus"),   SV(":focus"), SV("  Focus on the current array or object (Ctrl-O to go back)"), cmd_focus},
+    {SV("search"),  SV(":search [--values-only] [--query] <pattern>"), SV("  Search for pattern (use 'n' and 'N' to navigate)"), cmd_search},
     {SV("sort"),    SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
     {SV("filter"),  SV(":filter <query>"), SV("  Filter array/object based on a query"), cmd_filter},
     {SV("move"),    SV(":move <index>"), SV("  Move current item to <index>"), cmd_move},
@@ -3576,6 +3577,69 @@ cmd_focus(JsonNav* nav, CmdArgs* args){
     nav_reinit(nav);
 
     nav_set_messagef(nav, "Focused on new root. Use Ctrl-O to go back.");
+    return CMD_OK;
+}
+
+static
+int
+cmd_search(JsonNav* nav, CmdArgs* args){
+    // Get optional --values-only flag
+    _Bool values_only = 0;
+    int err = cmd_get_arg_bool(args, SV("--values-only"), &values_only);
+    if(err != CMD_ARG_ERROR_NONE && err != CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+        nav_set_messagef(nav, "Error parsing --values-only flag");
+        return CMD_ERROR;
+    }
+
+    // Get optional --query flag
+    _Bool use_query = 0;
+    err = cmd_get_arg_bool(args, SV("--query"), &use_query);
+    if(err != CMD_ARG_ERROR_NONE && err != CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+        nav_set_messagef(nav, "Error parsing --query flag");
+        return CMD_ERROR;
+    }
+
+    // Get required pattern argument
+    StringView pattern_sv = {0};
+    err = cmd_get_arg_string(args, SV("pattern"), &pattern_sv);
+    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+        nav_set_messagef(nav, "Error: No search pattern provided");
+        return CMD_ERROR;
+    }
+    if(err != CMD_ARG_ERROR_NONE){
+        nav_set_messagef(nav, "Error parsing pattern");
+        return CMD_ERROR;
+    }
+
+    // Determine search mode
+    enum SearchMode mode = use_query ? SEARCH_QUERY : SEARCH_RECURSIVE;
+
+    // Set values-only flag
+    nav->search_values_only = values_only;
+
+    // Set up search using helper
+    if(nav_setup_search(nav, pattern_sv.text, pattern_sv.length, mode) != 0){
+        if(use_query){
+            nav_set_messagef(nav, "Error: Invalid query search pattern");
+        }
+        else {
+            nav_set_messagef(nav, "Error: Search pattern too long");
+        }
+        return CMD_ERROR;
+    }
+
+    // Record jump before searching
+    nav_record_jump(nav);
+
+    // Perform search
+    nav_search_recursive(nav);
+    nav_center_cursor(nav, globals.screenh);
+
+    // Set message based on mode
+    const char* mode_str = use_query ? "Query" : "Recursive";
+    const char* values_str = values_only ? " (values only)" : "";
+    nav_set_messagef(nav, "%s search: %.*s%s", mode_str, (int)pattern_sv.length, pattern_sv.text, values_str);
+
     return CMD_OK;
 }
 
