@@ -64,6 +64,7 @@
     X(TestSortingObjects) \
     X(TestFilteringArrays) \
     X(TestFilteringObjects) \
+    X(TestFlattenCommand) \
     X(TestTruthiness) \
     X(TestNavRebuildRecursive) \
     X(TestOperatorParsing) \
@@ -1856,6 +1857,211 @@ TestFunction(TestFilteringObjects){
 
     // Cleanup
     nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+// Test flatten command
+TestFunction(TestFlattenCommand){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // Test 1: Shallow flatten (depth=1, default)
+    {
+        LongString json = LS("[[1, 2], [3, 4], [5, 6]]");
+        DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
+        TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, arr, "", a);
+        uint64_t root_id = nav_get_container_id(arr);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 0;
+        int result = nav_execute_command(&nav, "flatten", 7);
+        TestExpectEquals(result, CMD_OK);
+
+        // Should flatten to [1, 2, 3, 4, 5, 6]
+        DrJsonValue flattened = nav.root;
+        TestExpectEquals((int)flattened.kind, DRJSON_ARRAY);
+        TestExpectEquals(drjson_len(ctx, flattened), 6);
+
+        // Verify elements
+        DrJsonValue elem0 = drjson_get_by_index(ctx, flattened, 0);
+        TestExpectTrue(elem0.kind == DRJSON_INTEGER || elem0.kind == DRJSON_UINTEGER);
+        int64_t val0 = (elem0.kind == DRJSON_INTEGER) ? elem0.integer : (int64_t)elem0.uinteger;
+        TestExpectEquals(val0, 1);
+
+        DrJsonValue elem5 = drjson_get_by_index(ctx, flattened, 5);
+        TestExpectTrue(elem5.kind == DRJSON_INTEGER || elem5.kind == DRJSON_UINTEGER);
+        int64_t val5 = (elem5.kind == DRJSON_INTEGER) ? elem5.integer : (int64_t)elem5.uinteger;
+        TestExpectEquals(val5, 6);
+
+        nav_free(&nav);
+    }
+
+    // Test 2: Deep flatten (depth=-1, infinite)
+    {
+        LongString json = LS("[[[1]], [[2]], [3, [4, 5]]]");
+        DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
+        TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, arr, "", a);
+        uint64_t root_id = nav_get_container_id(arr);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 0;
+        int result = nav_execute_command(&nav, "flatten -1", 10);
+        TestExpectEquals(result, CMD_OK);
+
+        // Should fully flatten to [1, 2, 3, 4, 5]
+        DrJsonValue flattened = nav.root;
+        TestExpectEquals((int)flattened.kind, DRJSON_ARRAY);
+        TestExpectEquals(drjson_len(ctx, flattened), 5);
+
+        // Verify all are integers
+        for(int64_t i = 0; i < 5; i++){
+            DrJsonValue elem = drjson_get_by_index(ctx, flattened, i);
+            TestExpectTrue(elem.kind == DRJSON_INTEGER || elem.kind == DRJSON_UINTEGER);
+            int64_t val = (elem.kind == DRJSON_INTEGER) ? elem.integer : (int64_t)elem.uinteger;
+            TestExpectEquals(val, i + 1);
+        }
+
+        nav_free(&nav);
+    }
+
+    // Test 3: Partial depth (depth=2)
+    {
+        LongString json = LS("[[[1, 2]], [[3, 4]]]");
+        DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
+        TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, arr, "", a);
+        uint64_t root_id = nav_get_container_id(arr);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 0;
+        int result = nav_execute_command(&nav, "flatten 2", 9);
+        TestExpectEquals(result, CMD_OK);
+
+        // Should flatten 2 levels: [[1,2],[3,4]] -> [1,2,3,4]
+        DrJsonValue flattened = nav.root;
+        TestExpectEquals((int)flattened.kind, DRJSON_ARRAY);
+        TestExpectEquals(drjson_len(ctx, flattened), 4);
+
+        nav_free(&nav);
+    }
+
+    // Test 4: Non-array elements preserved
+    {
+        LongString json = LS("[1, [2, 3], \"hello\", [4, 5]]");
+        DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
+        TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, arr, "", a);
+        uint64_t root_id = nav_get_container_id(arr);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 0;
+        int result = nav_execute_command(&nav, "flatten", 7);
+        TestExpectEquals(result, CMD_OK);
+
+        // Should be: [1, 2, 3, "hello", 4, 5]
+        DrJsonValue flattened = nav.root;
+        TestExpectEquals((int)flattened.kind, DRJSON_ARRAY);
+        TestExpectEquals(drjson_len(ctx, flattened), 6);
+
+        // Verify string is preserved
+        DrJsonValue elem3 = drjson_get_by_index(ctx, flattened, 3);
+        TestExpectEquals((int)elem3.kind, DRJSON_STRING);
+
+        nav_free(&nav);
+    }
+
+    // Test 5: Empty array
+    {
+        LongString json = LS("[]");
+        DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
+        TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, arr, "", a);
+        uint64_t root_id = nav_get_container_id(arr);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 0;
+        int result = nav_execute_command(&nav, "flatten", 7);
+        TestExpectEquals(result, CMD_OK);
+
+        // Should still be empty
+        DrJsonValue flattened = nav.root;
+        TestExpectEquals((int)flattened.kind, DRJSON_ARRAY);
+        TestExpectEquals(drjson_len(ctx, flattened), 0);
+
+        nav_free(&nav);
+    }
+
+    // Test 6: Error on non-array
+    {
+        LongString json = LS("{\"a\": 1}");
+        DrJsonValue obj = drjson_parse_string(ctx, json.text, json.length, 0);
+        TestExpectEquals((int)obj.kind, DRJSON_OBJECT);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, obj, "", a);
+        uint64_t root_id = nav_get_container_id(obj);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        nav.cursor_pos = 0;
+        int result = nav_execute_command(&nav, "flatten", 7);
+        TestExpectEquals(result, CMD_ERROR);
+
+        nav_free(&nav);
+    }
+
+    // Test 7: Preserve expanded state
+    {
+        LongString json = LS("[[1, 2], [3, 4]]");
+        DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
+        TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
+
+        JsonNav nav;
+        nav_init(&nav, ctx, arr, "", a);
+
+        // Expand the root array
+        uint64_t root_id = nav_get_container_id(arr);
+        bs_add(&nav.expanded, root_id, &a);
+        nav_rebuild(&nav);
+
+        // Verify it's expanded before flattening
+        TestExpectTrue(bs_contains(&nav.expanded, root_id));
+
+        nav.cursor_pos = 0;
+        int result = nav_execute_command(&nav, "flatten", 7);
+        TestExpectEquals(result, CMD_OK);
+
+        // After flattening, the new array should still be expanded
+        DrJsonValue flattened = nav.root;
+        uint64_t new_id = nav_get_container_id(flattened);
+        TestExpectTrue(bs_contains(&nav.expanded, new_id));
+
+        nav_free(&nav);
+    }
+
+    // Cleanup
     drjson_ctx_free_all(ctx);
     assert_all_freed();
     TESTEND();

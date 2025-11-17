@@ -2433,7 +2433,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move, cmd_stats, cmd_search, cmd_stringify, cmd_parse;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_flatten, cmd_move, cmd_stats, cmd_search, cmd_stringify, cmd_parse;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -2463,6 +2463,7 @@ static const Command commands[] = {
     {SV("parse"),   SV(":parse"), SV("  Parse current string as JSON value"), cmd_parse},
     {SV("sort"),    SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
     {SV("filter"),  SV(":filter <query>"), SV("  Filter array/object based on a query"), cmd_filter},
+    {SV("flatten"), SV(":flatten [<depth>]"), SV("  Flatten nested arrays (default depth=1, use -1 for full)"), cmd_flatten},
     {SV("move"),    SV(":move <index>"), SV("  Move current item to <index>"), cmd_move},
 };
 
@@ -4455,6 +4456,99 @@ cmd_filter(JsonNav* nav, CmdArgs* args){
 
     nav_reinit(nav);
     nav_set_messagef(nav, "Filtered to %lld items.", (long long)filtered_count);
+    return CMD_OK;
+}
+
+// Helper function for flattening arrays recursively
+static
+void
+flatten_array_recursive(DrJsonContext* ctx, DrJsonValue src, DrJsonValue dest, int64_t depth){
+    int64_t len = drjson_len(ctx, src);
+    for(int64_t i = 0; i < len; i++){
+        DrJsonValue elem = drjson_get_by_index(ctx, src, i);
+        if(elem.kind == DRJSON_ARRAY && (depth == -1 || depth > 0)){
+            int64_t next_depth = (depth == -1) ? -1 : depth - 1;
+            flatten_array_recursive(ctx, elem, dest, next_depth);
+        }
+        else {
+            drjson_array_push_item(ctx, dest, elem);
+        }
+    }
+}
+
+static
+int
+cmd_flatten(JsonNav* nav, CmdArgs* args){
+    if(nav->item_count == 0){
+        nav_set_messagef(nav, "Error: Nothing to flatten.");
+        return CMD_ERROR;
+    }
+
+    // Parse optional depth argument (default: 1)
+    int64_t depth = 1;
+    StringView depth_sv = {0};
+    int err = cmd_get_arg_string(args, SV("depth"), &depth_sv);
+    if(err == CMD_ARG_ERROR_NONE){
+        Int64Result parse_result = parse_int64(depth_sv.text, depth_sv.length);
+        if(parse_result.errored || parse_result.result < -1){
+            nav_set_messagef(nav, "Error: Invalid depth (use positive number or -1 for infinite).");
+            return CMD_ERROR;
+        }
+        depth = parse_result.result;
+    }
+
+    NavItem* item = &nav->items[nav->cursor_pos];
+    DrJsonValue val = item->value;
+
+    if(val.kind != DRJSON_ARRAY){
+        nav_set_messagef(nav, "Error: Can only flatten arrays.");
+        return CMD_ERROR;
+    }
+
+    // Remember if the array was expanded
+    uint64_t old_container_id = nav_get_container_id(val);
+    _Bool was_expanded = bs_contains(&nav->expanded, old_container_id);
+
+    // Create flattened array
+    DrJsonValue flattened = drjson_make_array(nav->jctx);
+    flatten_array_recursive(nav->jctx, val, flattened, depth);
+
+    int64_t result_len = drjson_len(nav->jctx, flattened);
+
+    // Restore expanded state BEFORE rebuild so children are visible
+    if(was_expanded){
+        uint64_t new_container_id = nav_get_container_id(flattened);
+        bs_add(&nav->expanded, new_container_id, &nav->allocator);
+    }
+
+    // Replace in parent or root
+    size_t parent_idx = nav_find_parent(nav, nav->cursor_pos);
+    if(parent_idx == SIZE_MAX){
+        // This is the root, replace it
+        nav_record_jump(nav);
+        nav->root = flattened;
+        nav_reinit(nav);
+    }
+    else {
+        // Replace in parent container
+        NavItem* parent_item = &nav->items[parent_idx];
+        if(parent_item->value.kind == DRJSON_OBJECT){
+            drjson_object_set_item_atom(nav->jctx, parent_item->value, item->key, flattened);
+        }
+        else if(parent_item->value.kind == DRJSON_ARRAY){
+            drjson_array_set_by_index(nav->jctx, parent_item->value, item->index, flattened);
+        }
+        item->value = flattened;
+        nav->needs_rebuild = 1;
+        nav_rebuild(nav);
+    }
+
+    if(depth == -1){
+        nav_set_messagef(nav, "Array fully flattened to %lld elements.", (long long)result_len);
+    }
+    else {
+        nav_set_messagef(nav, "Array flattened (depth=%lld) to %lld elements.", (long long)depth, (long long)result_len);
+    }
     return CMD_OK;
 }
 
