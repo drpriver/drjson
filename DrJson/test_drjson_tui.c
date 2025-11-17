@@ -42,7 +42,6 @@
     X(TestPathBuilding) \
     X(TestNavContainsMatch) \
     X(TestNavigationTreeLogic) \
-    X(TestFocusStack) \
     X(TestUTF8DisplayWidth) \
     X(TestNavigationJumps) \
     X(TestExpandCollapseRecursive) \
@@ -73,9 +72,9 @@
     X(TestLineNumberCommand) \
     X(TestValuesOnlySearch) \
     X(TestJumpList) \
-    X(TestFocusUnfocusCommands) \
+    X(TestJumpListAcrossFocus) \
+    X(TestFocusCommands) \
     X(TestNavJumpToNthChild) \
-    X(TestFocusStackOperations) \
     X(TestComplexQueryPaths) \
     X(TestStripWhitespace) \
     X(TestNavJumpToParent) \
@@ -700,46 +699,6 @@ TestFunction(TestNavigationTreeLogic){
     TestExpectTrue(id1 != id3);
 
     drjson_ctx_free_all(ctx);
-    assert_all_freed();
-    TESTEND();
-}
-
-// Test focus stack
-TestFunction(TestFocusStack){
-    TESTBEGIN();
-
-    DrJsonAllocator a = get_test_allocator();
-    DrJsonContext* ctx = drjson_create_ctx(a);
-    TestAssert(ctx != NULL);
-
-    LongString json = LS("{\"a\": {\"b\": {\"c\": 1}}}");
-    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-
-    JsonNav nav = {
-        .jctx = ctx,
-        .root = root,
-        .allocator = a,
-    };
-
-    // Initially focused on root
-    TestExpectEquals(nav.focus_stack_count, 0);
-
-    DrJsonValue inner = drjson_query(ctx, root, "a", 1);
-    TestAssertNotEqual((int)inner.kind, DRJSON_ERROR);
-    nav_focus_stack_push(&nav, root);
-    nav.root = inner;
-
-    TestExpectEquals(nav.focus_stack_count, 1);
-
-    // Pop focus
-    nav.root = nav_focus_stack_pop(&nav);
-    TestExpectEquals(nav.focus_stack_count, 0);
-    TestExpectTrue(drjson_eq(nav.root, root));
-
-    // Cleanup
-    nav_free(&nav);
-    drjson_ctx_free_all(ctx);
-
     assert_all_freed();
     TESTEND();
 }
@@ -2461,8 +2420,8 @@ TestFunction(TestJumpList){
     TESTEND();
 }
 
-// Test focus/unfocus commands
-TestFunction(TestFocusUnfocusCommands){
+// Test focus command
+TestFunction(TestFocusCommands){
     TESTBEGIN();
 
     DrJsonAllocator a = get_test_allocator();
@@ -2491,30 +2450,125 @@ TestFunction(TestFocusUnfocusCommands){
 
     // Ensure we're on a container
     if(nav_is_container(nav.items[nav.cursor_pos].value)){
+        DrJsonValue old_root = nav.root;
+
         // Focus on it
         int result = nav_execute_command(&nav, "focus", 5);
         TestExpectEquals(result, CMD_OK);
 
-        // Focus stack should have one item
-        TestExpectEquals(nav.focus_stack_count, 1);
-
-        // Root should now be the "outer" object
+        // Root should now be the "outer" object (different from old root)
         TestExpectEquals((int)nav.root.kind, DRJSON_OBJECT);
-
-        // Unfocus should go back
-        result = nav_execute_command(&nav, "unfocus", 7);
-        TestExpectEquals(result, CMD_OK);
-
-        // Focus stack should be empty
-        TestExpectEquals(nav.focus_stack_count, 0);
-
-        // Root should be original
-        TestExpectEquals((int)nav.root.kind, DRJSON_OBJECT);
+        TestExpectTrue(memcmp(&nav.root, &old_root, sizeof(DrJsonValue)) != 0);
     }
 
-    // Unfocus when already at top should fail
-    int result = nav_execute_command(&nav, "unfocus", 7);
-    TestExpectEquals(result, CMD_ERROR);
+    // Cleanup
+    nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+// Test jump list across focus/unfocus (root changes)
+TestFunction(TestJumpListAcrossFocus){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // Create nested JSON: {"level1": {"level2": {"level3": "value"}}, "other": "data"}
+    LongString json = LS("{\"level1\": {\"a\": 1, \"b\": 2, \"c\": 3}, \"level2\": {\"x\": 10, \"y\": 20}, \"level3\": {\"foo\": 100, \"bar\": 200}}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
+
+    // Expand root
+    uint64_t root_id = nav_get_container_id(root);
+    bs_add(&nav.expanded, root_id, &a);
+    nav_rebuild(&nav);
+
+    // Navigate to level1 key (should be at some position)
+    nav.cursor_pos = 1;  // Assuming level1 is at position 1
+    NavItem* item = &nav.items[nav.cursor_pos];
+    TestExpectTrue(item->key.bits != 0);  // Should be a key
+
+    // Record this position before focusing
+    nav_record_jump(&nav);
+    DrJsonValue saved_root = nav.root;
+    size_t pos_before_focus = nav.cursor_pos;
+
+    // Focus on level1
+    int result = nav_execute_command(&nav, "focus", 5);
+    TestExpectEquals(result, CMD_OK);
+
+    // Root should have changed
+    TestExpectTrue(memcmp(&nav.root, &saved_root, sizeof(DrJsonValue)) != 0);
+
+    // Navigate to something in the focused view
+    nav.cursor_pos = 2;  // Some position in focused view
+    nav_record_jump(&nav);
+
+    // Now jump back with Ctrl-O - should restore old root and position
+    nav_jump_older(&nav);
+
+    // Should be back at the original root and position
+    TestExpectTrue(memcmp(&nav.root, &saved_root, sizeof(DrJsonValue)) == 0);
+    TestExpectEquals(nav.cursor_pos, pos_before_focus);
+
+    // Jump forward again - should restore focused root
+    nav_jump_newer(&nav);
+    TestExpectTrue(memcmp(&nav.root, &saved_root, sizeof(DrJsonValue)) != 0);
+    TestExpectEquals(nav.cursor_pos, 2);
+
+    // Test multiple focus levels
+    nav.jump_list.count = 0;
+    nav.jump_list.current = 0;
+    nav.root = root;
+    nav_reinit(&nav);
+
+    // Expand root
+    bs_add(&nav.expanded, root_id, &a);
+    nav_rebuild(&nav);
+
+    // Record position at root
+    nav.cursor_pos = 1;
+    nav_record_jump(&nav);  // [root:1]
+    DrJsonValue root1 = nav.root;
+
+    // Focus on level1
+    result = nav_execute_command(&nav, "focus", 5);
+    TestExpectEquals(result, CMD_OK);
+    nav.cursor_pos = 1;
+    nav_record_jump(&nav);  // [root:1, level1:1]
+    DrJsonValue root2 = nav.root;
+
+    // Navigate to another position in level1
+    nav.cursor_pos = 2;
+    nav_record_jump(&nav);  // [root:1, level1:1, level1:2]
+
+    // Jump back twice - should go to level1:1
+    nav_jump_older(&nav);  // -> level1:1
+    TestExpectEquals(nav.cursor_pos, 1);
+    TestExpectTrue(memcmp(&nav.root, &root2, sizeof(DrJsonValue)) == 0);
+
+    // Jump back once more - should restore original root
+    nav_jump_older(&nav);  // -> root:1
+    TestExpectEquals(nav.cursor_pos, 1);
+    TestExpectTrue(memcmp(&nav.root, &root1, sizeof(DrJsonValue)) == 0);
+
+    // Jump forward twice - should go back through the focus levels
+    nav_jump_newer(&nav);  // -> level1:1
+    TestExpectTrue(memcmp(&nav.root, &root2, sizeof(DrJsonValue)) == 0);
+    TestExpectEquals(nav.cursor_pos, 1);
+
+    nav_jump_newer(&nav);  // -> level1:2
+    TestExpectTrue(memcmp(&nav.root, &root2, sizeof(DrJsonValue)) == 0);
+    TestExpectEquals(nav.cursor_pos, 2);
 
     // Cleanup
     nav_free(&nav);
@@ -2566,58 +2620,6 @@ TestFunction(TestNavJumpToNthChild){
         nav_jump_to_nth_child(&nav, 6);
         TestExpectTrue(nav.cursor_pos >= 0);
     }
-
-    // Cleanup
-    nav_free(&nav);
-    drjson_ctx_free_all(ctx);
-    assert_all_freed();
-    TESTEND();
-}
-
-// Test focus stack operations
-TestFunction(TestFocusStackOperations){
-    TESTBEGIN();
-
-    DrJsonAllocator a = get_test_allocator();
-    DrJsonContext* ctx = drjson_create_ctx(a);
-    TestAssert(ctx != NULL);
-
-    JsonNav nav = {
-        .jctx = ctx,
-        .allocator = a,
-    };
-
-    DrJsonValue val1 = drjson_make_int(42);
-    DrJsonValue val2 = drjson_make_int(84);
-    DrJsonValue val3 = drjson_make_int(126);
-
-    // Push values
-    nav_focus_stack_push(&nav, val1);
-    TestExpectEquals(nav.focus_stack_count, 1);
-
-    nav_focus_stack_push(&nav, val2);
-    TestExpectEquals(nav.focus_stack_count, 2);
-
-    nav_focus_stack_push(&nav, val3);
-    TestExpectEquals(nav.focus_stack_count, 3);
-
-    // Pop in reverse order
-    DrJsonValue popped = nav_focus_stack_pop(&nav);
-    TestExpectEquals((int)popped.kind, DRJSON_INTEGER);
-    TestExpectEquals(popped.integer, 126);
-    TestExpectEquals(nav.focus_stack_count, 2);
-
-    popped = nav_focus_stack_pop(&nav);
-    TestExpectEquals(popped.integer, 84);
-    TestExpectEquals(nav.focus_stack_count, 1);
-
-    popped = nav_focus_stack_pop(&nav);
-    TestExpectEquals(popped.integer, 42);
-    TestExpectEquals(nav.focus_stack_count, 0);
-
-    // Pop from empty should return error
-    popped = nav_focus_stack_pop(&nav);
-    TestExpectEquals((int)popped.kind, DRJSON_ERROR);
 
     // Cleanup
     nav_free(&nav);

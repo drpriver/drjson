@@ -155,6 +155,13 @@ struct NavItem {
     int64_t index;            // Array/object index (if key.bits==0/!=0), or flat row index (if is_flat_view), -1 if neither
 };
 
+// Jump list entry (stores path and root for jump navigation)
+typedef struct JumpEntry JumpEntry;
+struct JumpEntry {
+    DrJsonPath path;            // Path to jump position
+    DrJsonValue root;           // Root the path is relative to
+};
+
 typedef struct BitSet BitSet;
 struct BitSet {
     uint64_t* ids;
@@ -279,14 +286,9 @@ struct JsonNav {
 
     LineEditor edit_buffer;         // Buffer for editing value
 
-    // Focus mode
-    DrJsonValue* focus_stack;
-    size_t focus_stack_count;
-    size_t focus_stack_capacity;
-
-    // Jump list (stores paths to allow jumps across expand/collapse)
+    // Jump list (stores paths and roots to allow jumps across expand/collapse and focus changes)
     struct {
-        DrJsonPath* paths;          // Array of paths to jump positions
+        JumpEntry* entries;         // Array of jump entries
         size_t count;               // Number of jumps in list
         size_t capacity;            // Allocated capacity
         size_t current;             // Current position in jump list (0 = oldest)
@@ -697,9 +699,6 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filena
     le_history_init(&nav->command_history);
     nav->command_buffer.history = &nav->command_history;
     le_init(&nav->edit_buffer, 512);
-    nav->focus_stack = NULL;
-    nav->focus_stack_count = 0;
-    nav->focus_stack_capacity = 0;
     nav_rebuild(nav);
 }
 
@@ -753,10 +752,8 @@ nav_free(JsonNav* nav){
     le_free(&nav->search_buffer);
     le_history_free(&nav->search_history);
     le_free(&nav->command_buffer);
-    if(nav->focus_stack)
-        nav->allocator.free(nav->allocator.user_pointer, nav->focus_stack, nav->focus_stack_capacity * sizeof *nav->focus_stack);
-    if(nav->jump_list.paths)
-        nav->allocator.free(nav->allocator.user_pointer, nav->jump_list.paths, nav->jump_list.capacity * sizeof *nav->jump_list.paths);
+    if(nav->jump_list.entries)
+        nav->allocator.free(nav->allocator.user_pointer, nav->jump_list.entries, nav->jump_list.capacity * sizeof *nav->jump_list.entries);
     if(nav->completion.matches)
         nav->allocator.free(nav->allocator.user_pointer, nav->completion.matches, nav->completion.capacity*COMMAND_SIZE);
     *nav = (JsonNav){0};
@@ -848,32 +845,33 @@ nav_record_jump(JsonNav* nav){
     }
 
     // We're at or past the end of the list
-    // Don't record if we're already at this position (avoid duplicates)
+    // Don't record if we're already at this position and root (avoid duplicates)
     if(nav->jump_list.count > 0){
         size_t check_idx = nav->jump_list.current < nav->jump_list.count ? nav->jump_list.current : nav->jump_list.count - 1;
-        DrJsonPath* existing_path = &nav->jump_list.paths[check_idx];
-        // Compare paths
-        if(existing_path->count == current_path.count){
+        JumpEntry* existing = &nav->jump_list.entries[check_idx];
+        // Compare paths and roots
+        _Bool same_root = (memcmp(&existing->root, &nav->root, sizeof(DrJsonValue)) == 0);
+        if(same_root && existing->path.count == current_path.count){
             _Bool same = 1;
             for(size_t i = 0; i < current_path.count; i++){
-                if(existing_path->segments[i].kind != current_path.segments[i].kind){
+                if(existing->path.segments[i].kind != current_path.segments[i].kind){
                     same = 0;
                     break;
                 }
-                if(existing_path->segments[i].kind == DRJSON_PATH_KEY){
-                    if(existing_path->segments[i].key.bits != current_path.segments[i].key.bits){
+                if(existing->path.segments[i].kind == DRJSON_PATH_KEY){
+                    if(existing->path.segments[i].key.bits != current_path.segments[i].key.bits){
                         same = 0;
                         break;
                     }
                 }
                 else {
-                    if(existing_path->segments[i].index != current_path.segments[i].index){
+                    if(existing->path.segments[i].index != current_path.segments[i].index){
                         same = 0;
                         break;
                     }
                 }
             }
-            if(same) return; // Already at this path
+            if(same) return; // Already at this path and root
         }
     }
 
@@ -881,14 +879,15 @@ nav_record_jump(JsonNav* nav){
     if(nav->jump_list.count >= nav->jump_list.capacity){
         size_t old_capacity = nav->jump_list.capacity;
         size_t new_capacity = old_capacity ? old_capacity * 2 : 32;
-        DrJsonPath* new_paths = nav->allocator.realloc(nav->allocator.user_pointer, nav->jump_list.paths, old_capacity * sizeof *new_paths, new_capacity * sizeof *new_paths);
-        if(!new_paths) return; // Allocation failed
-        nav->jump_list.paths = new_paths;
+        JumpEntry* new_entries = nav->allocator.realloc(nav->allocator.user_pointer, nav->jump_list.entries, old_capacity * sizeof *new_entries, new_capacity * sizeof *new_entries);
+        if(!new_entries) return; // Allocation failed
+        nav->jump_list.entries = new_entries;
         nav->jump_list.capacity = new_capacity;
     }
 
-    // Add current path
-    nav->jump_list.paths[nav->jump_list.count] = current_path;
+    // Add current entry (path and root)
+    nav->jump_list.entries[nav->jump_list.count].path = current_path;
+    nav->jump_list.entries[nav->jump_list.count].root = nav->root;
     nav->jump_list.count++;
     // Current should now be "past the end" since we're about to jump to a new position
     nav->jump_list.current = nav->jump_list.count;
@@ -924,9 +923,19 @@ nav_jump_older(JsonNav* nav){
         return; // Already at oldest (index 0)
     }
 
+    // Get the target entry
+    JumpEntry* target = &nav->jump_list.entries[nav->jump_list.current];
+
+    // Check if we need to restore a different root
+    _Bool same_root = (memcmp(&target->root, &nav->root, sizeof(DrJsonValue)) == 0);
+    if(!same_root){
+        // Restore the root and rebuild
+        nav->root = target->root;
+        nav_reinit(nav);
+    }
+
     // Navigate to the stored path from root (index 0)
-    const DrJsonPath* target_path = &nav->jump_list.paths[nav->jump_list.current];
-    size_t target_idx = nav_navigate_to_path(nav, 0, target_path);
+    size_t target_idx = nav_navigate_to_path(nav, 0, &target->path);
     nav->cursor_pos = target_idx;
 }
 
@@ -943,9 +952,19 @@ nav_jump_newer(JsonNav* nav){
 
     nav->jump_list.current++;
 
+    // Get the target entry
+    JumpEntry* target = &nav->jump_list.entries[nav->jump_list.current];
+
+    // Check if we need to restore a different root
+    _Bool same_root = (memcmp(&target->root, &nav->root, sizeof(DrJsonValue)) == 0);
+    if(!same_root){
+        // Restore the root and rebuild
+        nav->root = target->root;
+        nav_reinit(nav);
+    }
+
     // Navigate to the stored path from root (index 0)
-    const DrJsonPath* target_path = &nav->jump_list.paths[nav->jump_list.current];
-    size_t target_idx = nav_navigate_to_path(nav, 0, target_path);
+    size_t target_idx = nav_navigate_to_path(nav, 0, &target->path);
     nav->cursor_pos = target_idx;
 }
 
@@ -2414,7 +2433,7 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move, cmd_stats;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move, cmd_stats;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
@@ -2438,8 +2457,7 @@ static const Command commands[] = {
     {SV("paste"),   SV(":paste"), SV("  Paste from clipboard"), cmd_paste},
     {SV("query"),   SV(":query <path>"), SV("  Navigate to path (e.g., foo.bar[0].baz)"), cmd_query},
     {SV("path"),    SV(":path"), SV("  Yank (copy) current item's JSON path to clipboard"), cmd_path},
-    {SV("focus"),   SV(":focus"), SV("  Focus on the current array or object"), cmd_focus},
-    {SV("unfocus"), SV(":unfocus"), SV("  Return to the previous (less focused) view"), cmd_unfocus},
+    {SV("focus"),   SV(":focus"), SV("  Focus on the current array or object (Ctrl-O to go back)"), cmd_focus},
     {SV("sort"),    SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
     {SV("filter"),  SV(":filter <query>"), SV("  Filter array/object based on a query"), cmd_filter},
     {SV("move"),    SV(":move <index>"), SV("  Move current item to <index>"), cmd_move},
@@ -2493,16 +2511,33 @@ nav_load_file(JsonNav* nav, const char* filepath, _Bool use_braceless){
         drjson_get_line_column(&pctx, &line, &col);
         nav_set_messagef(nav, "Error parsing '%s': %s at line %zu col %zu", filepath, new_root.err_mess, line, col);
         free((void*)file_content.text);
-        drjson_gc(nav->jctx, &nav->root, 1);
+
+        // Keep jump list roots alive during GC
+        DrJsonValue* gc_roots = nav->allocator.alloc(nav->allocator.user_pointer, (nav->jump_list.count + 1) * sizeof(DrJsonValue));
+        if(gc_roots){
+            gc_roots[0] = nav->root;
+            for(size_t i = 0; i < nav->jump_list.count; i++){
+                gc_roots[i + 1] = nav->jump_list.entries[i].root;
+            }
+            drjson_gc(nav->jctx, gc_roots, nav->jump_list.count + 1);
+            nav->allocator.free(nav->allocator.user_pointer, gc_roots, (nav->jump_list.count + 1) * sizeof(DrJsonValue));
+        }
+        else {
+            drjson_gc(nav->jctx, &nav->root, 1);
+        }
         return CMD_ERROR;
     }
 
     free((void*)file_content.text); // done with this now
+
+    // Clear jump list since we're loading a new file
+    nav->jump_list.count = 0;
+    nav->jump_list.current = 0;
+
     nav->root = new_root;
     nav->was_opened_with_braceless = use_braceless;
     nav_reinit(nav);
-    nav->focus_stack_count = 0;
-    drjson_gc(nav->jctx, &nav->root, 1); // Free the old root and other garbage
+    drjson_gc(nav->jctx, &nav->root, 1);
 
     return CMD_OK;
 }
@@ -3515,30 +3550,6 @@ cmd_query(JsonNav* nav, CmdArgs* args){
 }
 
 static
-void
-nav_focus_stack_push(JsonNav* nav, DrJsonValue val){
-    if(nav->focus_stack_count >= nav->focus_stack_capacity){
-        size_t old_size = nav->focus_stack_capacity * sizeof *nav->focus_stack;
-        size_t new_cap = nav->focus_stack_capacity ? nav->focus_stack_capacity * 2 : 8;
-        size_t new_size = new_cap * sizeof *nav->focus_stack;
-        DrJsonValue* new_stack = nav->allocator.realloc(nav->allocator.user_pointer, nav->focus_stack, old_size, new_size);
-        if(!new_stack) return; // allocation failure
-        nav->focus_stack = new_stack;
-        nav->focus_stack_capacity = new_cap;
-    }
-    nav->focus_stack[nav->focus_stack_count++] = val;
-}
-
-static
-DrJsonValue
-nav_focus_stack_pop(JsonNav* nav){
-    if(nav->focus_stack_count == 0){
-        return drjson_make_error(DRJSON_ERROR_INDEX_ERROR, "focus stack empty");
-    }
-    return nav->focus_stack[--nav->focus_stack_count];
-}
-
-static
 int
 cmd_focus(JsonNav* nav, CmdArgs* args){
     (void)args;
@@ -3561,37 +3572,10 @@ cmd_focus(JsonNav* nav, CmdArgs* args){
     // Record jump before changing focus
     nav_record_jump(nav);
 
-    nav_focus_stack_push(nav, nav->root);
     nav->root = item->value;
     nav_reinit(nav);
 
-    nav_set_messagef(nav, "Focused on new root. Use :unfocus or 'F' to go back.");
-    if(0) LOG("nav->focus_stack_count: %zu\n", nav->focus_stack_count);
-    return CMD_OK;
-}
-
-static
-int
-cmd_unfocus(JsonNav* nav, CmdArgs* args){
-    (void)args;
-    if(0) LOG("nav->focus_stack_count: %zu\n", nav->focus_stack_count);
-
-    if(nav->focus_stack_count == 0){
-        nav_set_messagef(nav, "Error: Already at the top-level view");
-        return CMD_ERROR;
-    }
-
-    DrJsonValue prev_root = nav_focus_stack_pop(nav);
-    if(prev_root.kind == DRJSON_ERROR){
-        // This shouldn't happen with the count check, but just in case.
-        nav_set_messagef(nav, "Error: Invalid focus stack state");
-        return CMD_ERROR;
-    }
-
-    nav->root = prev_root;
-    nav_reinit(nav);
-
-    nav_set_messagef(nav, "Unfocused, returned to previous view.");
+    nav_set_messagef(nav, "Focused on new root. Use Ctrl-O to go back.");
     return CMD_OK;
 }
 
@@ -4176,6 +4160,9 @@ cmd_filter(JsonNav* nav, CmdArgs* args){
     int64_t original_len = drjson_len(nav->jctx, val);
     int64_t filtered_count = 0;
 
+    // Record jump before changing root
+    nav_record_jump(nav);
+
     if(val.kind == DRJSON_ARRAY){
         DrJsonValue new_array = drjson_make_array(nav->jctx);
         for(int64_t i = 0; i < original_len; i++){
@@ -4187,7 +4174,6 @@ cmd_filter(JsonNav* nav, CmdArgs* args){
                 filtered_count++;
             }
         }
-        nav_focus_stack_push(nav, nav->root);
         nav->root = new_array;
     }
     else { // DRJSON_OBJECT
@@ -4204,7 +4190,6 @@ cmd_filter(JsonNav* nav, CmdArgs* args){
                 filtered_count++;
             }
         }
-        nav_focus_stack_push(nav, nav->root);
         nav->root = new_obj;
     }
 
@@ -7485,12 +7470,6 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                 break;
             }
 
-            case 'F':{
-                CmdArgs empty_args = {0};
-                cmd_unfocus(&nav, &empty_args);
-                break;
-            }
-
             case UP:
             case 'k':
             case 'K':
@@ -7543,6 +7522,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
 
             case HOME:
             case 'g':
+                nav_record_jump(&nav);
                 nav.cursor_pos = 0;
                 nav_ensure_cursor_visible(&nav, globals.screenh);
                 break;
@@ -7550,6 +7530,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
             case END:
             case 'G':
                 // Go to end
+                nav_record_jump(&nav);
                 if(nav.item_count > 0)
                     nav.cursor_pos = nav.item_count - 1;
                 nav_ensure_cursor_visible(&nav, globals.screenh);
@@ -7606,11 +7587,6 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
 
             case LEFT:
             case 'h':
-                if(nav.cursor_pos == 0){
-                    CmdArgs empty_args = {0};
-                    cmd_unfocus(&nav, &empty_args);
-                    break;
-                }
                 // Jump to parent container and collapse it
                 nav_jump_to_parent(&nav, 1);
                 nav_ensure_cursor_visible(&nav, globals.screenh);
