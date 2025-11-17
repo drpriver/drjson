@@ -162,6 +162,32 @@ struct BitSet {
 
 enum {COMMAND_SIZE=256};
 
+// Statistics about JSON document
+typedef struct DrJsonStats DrJsonStats;
+struct DrJsonStats {
+    uint64_t total_values;
+    uint64_t object_count;
+    uint64_t array_count;
+    uint64_t string_count;
+    uint64_t integer_count;
+    uint64_t uinteger_count;
+    uint64_t number_count;
+    uint64_t bool_count;
+    uint64_t null_count;
+    uint64_t error_count;
+
+    uint32_t max_depth;
+    uint32_t current_depth;
+
+    uint64_t total_array_elements;
+    uint64_t total_object_keys;
+    uint32_t largest_array;
+    uint32_t largest_object;
+
+    uint64_t total_string_bytes;
+    uint64_t unique_keys;
+};
+
 // Main navigation state
 typedef struct JsonNav JsonNav;
 struct JsonNav {
@@ -188,6 +214,8 @@ struct JsonNav {
     const StringView* help_lines;
     size_t help_lines_count;
     int help_page;            // Current help page (0-based)
+    _Bool show_stats;         // Show statistics modal
+    DrJsonStats stats;        // Computed statistics
     _Bool command_mode;       // In command mode (:w, :save, etc.)
     _Bool was_opened_with_braceless;  // Whether this file was opened with --braceless
 
@@ -674,6 +702,7 @@ nav_reinit(JsonNav* nav){
     nav->needs_rebuild = 1;
     nav->message_length = 0;
     nav->show_help = 0;
+    nav->show_stats = 0;
     nav->command_mode = 0;
     nav->pending_key = 0;
 
@@ -2185,12 +2214,13 @@ struct Command {
     StringView short_help;
     CommandHandler* handler;
 };
-static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move;
+static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, cmd_yank, cmd_paste, cmd_query, cmd_path, cmd_focus, cmd_unfocus, cmd_wq, cmd_reload, cmd_sort, cmd_filter, cmd_move, cmd_stats;
 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
 static const Command commands[] = {
     {SV("help"),    SV(":help"), SV("  Show help"),         cmd_help},
+    {SV("stats"),   SV(":stats"), SV("  Show document statistics"), cmd_stats},
     {SV("open"),    SV(":open [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
     {SV("edit"),    SV(":edit [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
     {SV("e"),       SV(":e [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
@@ -2399,6 +2429,102 @@ cmd_help(JsonNav* nav, CmdArgs* args){
         nav->help_lines_count = cmd_helps_count;
         nav->help_page = 0;
     }
+    return CMD_OK;
+}
+
+static
+void
+collect_stats_recursive(DrJsonValue value, DrJsonStats* stats, DrJsonContext* ctx){
+    stats->total_values++;
+
+    if(stats->current_depth > stats->max_depth){
+        stats->max_depth = stats->current_depth;
+    }
+
+    switch(value.kind){
+        case DRJSON_OBJECT:{
+            stats->object_count++;
+            DrJsonValue items = drjson_object_items(value);
+            int64_t items_len = drjson_len(ctx, items);
+            int64_t count = items_len / 2;  // items contains key-value pairs
+            stats->total_object_keys += count;
+            if((uint32_t)count > stats->largest_object){
+                stats->largest_object = (uint32_t)count;
+            }
+
+            stats->current_depth++;
+            for(int64_t i = 0; i < items_len; i += 2){
+                DrJsonValue k = drjson_get_by_index(ctx, items, i);
+                DrJsonValue v = drjson_get_by_index(ctx, items, i + 1);
+                // Count the key string bytes
+                collect_stats_recursive(k, stats, ctx);
+                // Recurse through the value
+                collect_stats_recursive(v, stats, ctx);
+            }
+            stats->current_depth--;
+            break;
+        }
+        case DRJSON_ARRAY:{
+            stats->array_count++;
+            int64_t count = drjson_len(ctx, value);
+            stats->total_array_elements += count;
+            if((uint32_t)count > stats->largest_array){
+                stats->largest_array = (uint32_t)count;
+            }
+
+            stats->current_depth++;
+            for(int64_t i = 0; i < count; i++){
+                DrJsonValue child = drjson_get_by_index(ctx, value, i);
+                collect_stats_recursive(child, stats, ctx);
+            }
+            stats->current_depth--;
+            break;
+        }
+        case DRJSON_STRING:{
+            stats->string_count++;
+            const char* str = NULL;
+            size_t len = 0;
+            if(!drjson_get_atom_str_and_length(ctx, value.atom, &str, &len)){
+                stats->total_string_bytes += len;
+            }
+            break;
+        }
+        case DRJSON_INTEGER:
+            stats->integer_count++;
+            break;
+        case DRJSON_UINTEGER:
+            stats->uinteger_count++;
+            break;
+        case DRJSON_NUMBER:
+            stats->number_count++;
+            break;
+        case DRJSON_BOOL:
+            stats->bool_count++;
+            break;
+        case DRJSON_NULL:
+            stats->null_count++;
+            break;
+        case DRJSON_ERROR:
+            stats->error_count++;
+            break;
+        default:
+            break;
+    }
+}
+
+static
+int
+cmd_stats(JsonNav* nav, CmdArgs* args){
+    (void)args;
+
+    // Collect statistics
+    nav->stats = (DrJsonStats){0};
+    collect_stats_recursive(nav->root, &nav->stats, nav->jctx);
+
+    // Note: unique_keys is not easily accessible from public API
+    nav->stats.unique_keys = 0;
+
+    nav->show_stats = 1;
     return CMD_OK;
 }
 
@@ -5395,6 +5521,203 @@ nav_render_help(Drt* drt, int screenw, int screenh, int page, int*_Nullable out_
     drt_puts(drt, "┘", 3);
 }
 
+// Format a number with thousands separators (commas)
+static
+void
+format_number_with_commas(char* buf, size_t buf_size, uint64_t value){
+    char temp[32];
+    int len = snprintf(temp, sizeof temp, "%llu", (unsigned long long)value);
+    if(len <= 0 || len >= (int)sizeof temp){
+        snprintf(buf, buf_size, "%llu", (unsigned long long)value);
+        return;
+    }
+
+    int comma_count = (len - 1) / 3;
+    int total_len = len + comma_count;
+
+    if(total_len >= (int)buf_size){
+        snprintf(buf, buf_size, "%llu", (unsigned long long)value);
+        return;
+    }
+
+    int src = len - 1;
+    int dst = total_len;
+    buf[dst--] = '\0';
+
+    for(int i = 0; src >= 0; i++){
+        if(i > 0 && i % 3 == 0){
+            buf[dst--] = ',';
+        }
+        buf[dst--] = temp[src--];
+    }
+}
+
+static
+void
+nav_render_stats(Drt* drt, int screenw, int screenh, const DrJsonStats* stats){
+    // Build the stats content as an array of lines
+    char lines_buffer[4096];
+    char* buf = lines_buffer;
+    size_t remaining = sizeof lines_buffer;
+
+    #define APPEND_LINE(fmt, ...) do { \
+        int n = snprintf(buf, remaining, fmt, ##__VA_ARGS__); \
+        if(n > 0 && (size_t)n < remaining){ \
+            buf += n; \
+            remaining -= n; \
+        } \
+    } while(0)
+
+    char num_buf[32];
+
+    APPEND_LINE("Document Overview\n");
+    APPEND_LINE("─────────────────────────────────────\n");
+    format_number_with_commas(num_buf, sizeof num_buf, stats->total_values);
+    APPEND_LINE("  Total Values:           %s\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->max_depth);
+    APPEND_LINE("  Max Depth:              %s\n", num_buf);
+    APPEND_LINE("\n");
+    APPEND_LINE("Value Type Breakdown\n");
+    APPEND_LINE("─────────────────────────────────────\n");
+    format_number_with_commas(num_buf, sizeof num_buf, stats->object_count);
+    APPEND_LINE("  Objects:                %s\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->array_count);
+    APPEND_LINE("  Arrays:                 %s\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->string_count);
+    APPEND_LINE("  Strings:                %s\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->integer_count);
+    APPEND_LINE("  Integers:               %s\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->uinteger_count);
+    APPEND_LINE("  Unsigned Integers:      %s\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->number_count);
+    APPEND_LINE("  Numbers (float):        %s\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->bool_count);
+    APPEND_LINE("  Booleans:               %s\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->null_count);
+    APPEND_LINE("  Nulls:                  %s\n", num_buf);
+    if(stats->error_count > 0){
+        format_number_with_commas(num_buf, sizeof num_buf, stats->error_count);
+        APPEND_LINE("  Errors:                 %s\n", num_buf);
+    }
+    APPEND_LINE("\n");
+    APPEND_LINE("Structure Details\n");
+    APPEND_LINE("─────────────────────────────────────\n");
+    format_number_with_commas(num_buf, sizeof num_buf, stats->largest_object);
+    APPEND_LINE("  Largest Object:         %s keys\n", num_buf);
+    format_number_with_commas(num_buf, sizeof num_buf, stats->largest_array);
+    APPEND_LINE("  Largest Array:          %s elements\n", num_buf);
+    if(stats->object_count > 0){
+        double avg_obj_size = (double)stats->total_object_keys / stats->object_count;
+        APPEND_LINE("  Avg Object Size:        %.1f keys\n", avg_obj_size);
+    }
+    if(stats->array_count > 0){
+        double avg_arr_len = (double)stats->total_array_elements / stats->array_count;
+        APPEND_LINE("  Avg Array Length:       %.1f elements\n", avg_arr_len);
+    }
+    APPEND_LINE("\n");
+    APPEND_LINE("Memory\n");
+    APPEND_LINE("─────────────────────────────────────\n");
+    format_number_with_commas(num_buf, sizeof num_buf, stats->total_string_bytes);
+    APPEND_LINE("  Total String Bytes:     %s\n", num_buf);
+    APPEND_LINE("\n");
+    APPEND_LINE("Press ESC or q to close\n");
+
+    #undef APPEND_LINE
+
+    // Split into lines
+    StringView stat_lines[64];
+    int line_count = 0;
+    const char* line_start = lines_buffer;
+    for(const char* p = lines_buffer; p < buf && line_count < 64; p++){
+        if(*p == '\n'){
+            stat_lines[line_count].text = line_start;
+            stat_lines[line_count].length = p - line_start;
+            line_count++;
+            line_start = p + 1;
+        }
+    }
+
+    // Find max width
+    int max_width = 0;
+    for(int i = 0; i < line_count; i++){
+        int width = utf8_display_width(stat_lines[i].text, stat_lines[i].length);
+        if(width > max_width) max_width = width;
+    }
+
+    // Calculate box dimensions
+    int box_width = max_width + 4;  // +4 for borders and padding
+    int box_height = line_count + 2;  // +2 for top and bottom borders
+    int start_y = (screenh - box_height) / 2;
+    if(start_y < 1) start_y = 1;
+    int start_x = (screenw - box_width) / 2;
+    if(start_x < 0) start_x = 0;
+
+    // Draw top border
+    drt_move(drt, start_x, start_y);
+    drt_puts(drt, "┌", 3);
+    for(int x = 0; x < box_width - 2; x++){
+        drt_puts(drt, "─", 3);
+    }
+    drt_puts(drt, "┐", 3);
+
+    // Draw content lines
+    for(int i = 0; i < line_count && start_y + i + 1 < screenh; i++){
+        drt_move(drt, start_x, start_y + i + 1);
+        drt_puts(drt, "│", 3);
+        drt_putc(drt, ' ');
+
+        // Highlight section headers (lines that are not data lines)
+        _Bool is_header = 0;
+        if(stat_lines[i].length > 0){
+            // Check if line contains a colon (data lines have colons)
+            _Bool has_colon = 0;
+            _Bool has_dash = 0;
+            for(size_t j = 0; j < stat_lines[i].length; j++){
+                if(stat_lines[i].text[j] == ':') has_colon = 1;
+                // UTF-8 for box drawing horizontal (0xE2 0x94 0x80)
+                if(j + 2 < stat_lines[i].length &&
+                   (unsigned char)stat_lines[i].text[j] == 0xE2 &&
+                   (unsigned char)stat_lines[i].text[j+1] == 0x94 &&
+                   (unsigned char)stat_lines[i].text[j+2] == 0x80){
+                    has_dash = 1;
+                }
+            }
+            // Header if no colon (section titles) or has dashes (separator lines)
+            if(!has_colon || has_dash){
+                is_header = 1;
+            }
+        }
+
+        if(is_header){
+            drt_push_state(drt);
+            drt_set_style(drt, DRT_STYLE_BOLD);
+        }
+
+        drt_puts_utf8(drt, stat_lines[i].text, stat_lines[i].length);
+
+        if(is_header){
+            drt_pop_state(drt);
+        }
+
+        // Padding and right border
+        int content_width = utf8_display_width(stat_lines[i].text, stat_lines[i].length);
+        int padding = box_width - 2 - 1 - content_width;
+        for(int p = 0; p < padding; p++){
+            drt_putc(drt, ' ');
+        }
+        drt_puts(drt, "│", 3);
+    }
+
+    // Draw bottom border
+    int bottom_y = start_y + line_count + 1;
+    drt_move(drt, start_x, bottom_y);
+    drt_puts(drt, "└", 3);
+    for(int x = 0; x < box_width - 2; x++){
+        drt_puts(drt, "─", 3);
+    }
+    drt_puts(drt, "┘", 3);
+}
+
 static
 void
 build_command_helps(void){
@@ -6316,6 +6639,11 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
             nav_render_help(&globals.drt, globals.screenw, globals.screenh, nav.help_page, NULL, nav.help_lines, nav.help_lines_count);
         }
 
+        // Render stats overlay if active
+        if(nav.show_stats){
+            nav_render_stats(&globals.drt, globals.screenw, globals.screenh, &nav.stats);
+        }
+
         drt_paint(&globals.drt);
 
         int c = 0, cx = 0, cy = 0, magnitude = 0;
@@ -6355,6 +6683,14 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                     le_clear(&count_buffer);
                     continue;
             }
+        }
+
+        // If stats is showing, handle input
+        if(nav.show_stats){
+            if(kmod) continue;
+            // Any key closes stats
+            nav.show_stats = 0;
+            continue;
         }
 
         // Handle search input mode
