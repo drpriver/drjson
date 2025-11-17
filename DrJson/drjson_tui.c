@@ -3688,9 +3688,8 @@ cmd_stringify(JsonNav* nav, CmdArgs* args){
     }
 
     // Create string value
-    DrJsonValue string_value = drjson_make_string(nav->jctx, buf.data, buf.size);
+    DrJsonValue string_value = drjson_escape_string_to_value(nav->jctx, buf.data, buf.size);
     membuf_destroy(&buf);
-
     if(string_value.kind == DRJSON_ERROR){
         nav_set_messagef(nav, "Error: Failed to create string value");
         return CMD_ERROR;

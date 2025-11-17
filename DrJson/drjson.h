@@ -393,7 +393,10 @@ DrJsonValue
 drjson_intern_value(DrJsonContext* ctx, DrJsonValue val, _Bool consume);
 
 // Calls drjson_atomize. Make a no_copy atom and then call
-// `drjson_atom_to_value` to avoid dup'ing the string.
+// `drjson_atom_to_value` if you want to avoid dup'ing the string.
+// If you don't know the contents are validly json-escaped, then you
+// should call `drjson_escape_string_to_value()` to handle things like control
+// characters, backslashes, etc.
 DRJSON_API
 DrJsonValue
 drjson_make_string(DrJsonContext* ctx, const char* s, size_t length);
@@ -761,6 +764,16 @@ DRJSON_API
 DRJSON_WARN_UNUSED
 int
 drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t length, DrJsonAtom* outatom);
+
+static inline
+DRJSON_WARN_UNUSED
+DrJsonValue
+drjson_escape_string_to_value(DrJsonContext* ctx, const char* restrict unescaped, size_t length){
+    DrJsonAtom a;
+    int err = drjson_escape_string(ctx, unescaped, length, &a);
+    if(err) return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Unable to escape string");
+    return drjson_atom_to_value(a);
+}
 
 // Unescape a JSON string (convert escape sequences like \n, \t, \", \\ to actual characters)
 // escaped: input string with JSON escape sequences
