@@ -3992,10 +3992,9 @@ TestFunction(TestMoveRelative){
 }
 
 // Test braceless format preservation
-// mkstemp() is POSIX-only, so skip this test on Windows
 TestFunction(TestBraceless){
     TESTBEGIN();
-#ifndef _WIN32
+#ifndef _WIN32 // mkstemp() is POSIX-only, so skip this test on Windows
     DrJsonAllocator a = get_test_allocator();
     DrJsonContext* ctx = drjson_create_ctx(a);
 
@@ -4013,20 +4012,18 @@ TestFunction(TestBraceless){
         // Write to temporary file
         char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
         int fd = mkstemp(tmpfile);
-        TestExpectTrue(fd >= 0);
-        close(fd);
+        TestAssert(fd >= 0);
 
-        int result = test_execute_commandf(&nav, "w %s", tmpfile);
+        int result = test_execute_commandf(&nav, "write %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify it's braceless (no outer braces)
-        FILE* fp = fopen(tmpfile, "r");
-        TestExpectTrue(fp != NULL);
 
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
+        ssize_t bytes_read = read(fd, buffer, sizeof buffer-1);
+        TestAssert(bytes_read >= 0);
         buffer[bytes_read] = '\0';
-        fclose(fp);
+        close(fd);
         unlink(tmpfile);
 
         // Check exact braceless output (pretty-printed)
@@ -4050,20 +4047,18 @@ TestFunction(TestBraceless){
         // Write to temporary file
         char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
         int fd = mkstemp(tmpfile);
-        TestExpectTrue(fd >= 0);
-        close(fd);
+        TestAssert(fd >= 0);
 
-        int result = test_execute_commandf(&nav, "w %s", tmpfile);
+        int result = test_execute_commandf(&nav, "write %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify it has braces
-        FILE* fp = fopen(tmpfile, "r");
-        TestExpectTrue(fp != NULL);
 
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
+        ssize_t bytes_read = read(fd, buffer, sizeof buffer-1);
+        TestAssert(bytes_read >= 0);
         buffer[bytes_read] = '\0';
-        fclose(fp);
+        close(fd);
         unlink(tmpfile);
 
         // Check exact output with braces (pretty-printed)
@@ -4154,19 +4149,17 @@ TestFunction(TestBracelessWriteFlags){
     {
         char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
         int fd = mkstemp(tmpfile);
-        TestExpectTrue(fd >= 0);
-        close(fd);
+        TestAssert(fd >= 0);
 
-        int result = test_execute_commandf(&nav, "w --braceless %s", tmpfile);
+        int result = test_execute_commandf(&nav, "write --braceless %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify braceless
-        FILE* fp = fopen(tmpfile, "r");
-        TestExpectTrue(fp != NULL);
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
+        ssize_t bytes_read = read(fd, buffer, sizeof buffer-1);
+        TestAssert(bytes_read > 0);
         buffer[bytes_read] = '\0';
-        fclose(fp);
+        close(fd);
         unlink(tmpfile);
 
         StringView actual = {.length = bytes_read, .text = buffer};
@@ -4179,19 +4172,17 @@ TestFunction(TestBracelessWriteFlags){
 
         char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
         int fd = mkstemp(tmpfile);
-        TestExpectTrue(fd >= 0);
-        close(fd);
+        TestAssert(fd >= 0);
 
-        int result = test_execute_commandf(&nav, "w --no-braceless %s", tmpfile);
+        int result = test_execute_commandf(&nav, "write --no-braceless %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify has braces
-        FILE* fp = fopen(tmpfile, "r");
-        TestExpectTrue(fp != NULL);
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
+        ssize_t bytes_read = read(fd, buffer, sizeof buffer-1);
+        TestAssert(bytes_read > 0);
         buffer[bytes_read] = '\0';
-        fclose(fp);
+        close(fd);
         unlink(tmpfile);
 
         StringView actual = {.length = bytes_read, .text = buffer};
@@ -4204,19 +4195,17 @@ TestFunction(TestBracelessWriteFlags){
 
         char tmpfile[] = "/tmp/drjson_tui_test_XXXXXX";
         int fd = mkstemp(tmpfile);
-        TestExpectTrue(fd >= 0);
-        close(fd);
+        TestAssert(fd >= 0);
 
-        int result = test_execute_commandf(&nav, "w %s", tmpfile);
+        int result = test_execute_commandf(&nav, "write %s", tmpfile);
         TestExpectEquals(result, CMD_OK);
 
         // Read back and verify braceless (default behavior)
-        FILE* fp = fopen(tmpfile, "r");
-        TestExpectTrue(fp != NULL);
         char buffer[1024];
-        size_t bytes_read = fread(buffer, 1, sizeof buffer-1, fp);
+        ssize_t bytes_read = read(fd, buffer, sizeof buffer-1);
+        TestAssert(bytes_read > 0);
         buffer[bytes_read] = '\0';
-        fclose(fp);
+        close(fd);
         unlink(tmpfile);
 
         StringView actual = {.length = bytes_read, .text = buffer};

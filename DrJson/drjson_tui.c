@@ -2190,35 +2190,29 @@ static CommandHandler cmd_help, cmd_write, cmd_quit, cmd_open, cmd_pwd, cmd_cd, 
 static size_t nav_build_json_path(JsonNav* nav, char* buf, size_t buf_size);
 
 static const Command commands[] = {
-    {SV("help"),  SV(":help"), SV("  Show help"),         cmd_help},
-    {SV("h"),     SV(":h"), SV("  Show help"),         cmd_help},
-    {SV("open"),  SV(":open [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("o"),     SV(":o [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("edit"),  SV(":edit [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("e"),     SV(":e [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
-    {SV("reload"), SV(":reload"), SV("  Reload file from disk (preserves braceless)"), cmd_reload},
-    {SV("e!"),    SV(":e!"), SV("  Reload file from disk (preserves braceless)"), cmd_reload},
-    {SV("save"),  SV(":save [--braceless|--no-braceless] <file>"), SV("  Save JSON to <file>"), cmd_write},
-    {SV("w"),     SV(":w [--braceless|--no-braceless] <file>"), SV("  Save JSON to <file>"), cmd_write},
-    {SV("quit"),  SV(":quit"), SV("  Quit"),              cmd_quit},
-    {SV("q"),     SV(":q"), SV("  Quit"),              cmd_quit},
-    {SV("exit"),  SV(":exit"), SV("  Quit"),              cmd_quit},
-    {SV("wq"),    SV(":wq"), SV("  Write and quit"),      cmd_wq},
-    {SV("pwd"),   SV(":pwd"), SV("  Print working directory"), cmd_pwd},
-    {SV("cd"),    SV(":cd <dir>"), SV("  Change directory"), cmd_cd},
-    {SV("yank"),  SV(":yank"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
-    {SV("y"),     SV(":y"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
-    {SV("paste"), SV(":paste"), SV("  Paste from clipboard"), cmd_paste},
-    {SV("p"),     SV(":p"), SV("  Paste from clipboard"), cmd_paste},
-    {SV("query"), SV(":query <path>"), SV("  Navigate to path (e.g., foo.bar[0].baz)"), cmd_query},
-    {SV("path"), SV(":path"), SV("  Yank (copy) current item's JSON path to clipboard"), cmd_path},
-    {SV("focus"), SV(":focus"), SV("  Focus on the current array or object"), cmd_focus},
+    {SV("help"),    SV(":help"), SV("  Show help"),         cmd_help},
+    {SV("open"),    SV(":open [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("edit"),    SV(":edit [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("e"),       SV(":e [--braceless] <file>"), SV("  Open JSON at <file>"), cmd_open},
+    {SV("reload"),  SV(":reload"), SV("  Reload file from disk"), cmd_reload},
+    {SV("save"),    SV(":save [--braceless|--no-braceless] <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("write"),   SV(":write [--braceless|--no-braceless] <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("quit"),    SV(":quit"), SV("  Quit"),              cmd_quit},
+    {SV("q"),       SV(":q"), SV("  Quit"),              cmd_quit},
+    {SV("exit"),    SV(":exit"), SV("  Quit"),              cmd_quit},
+    {SV("x"),       SV(":x"), SV("  Write and quit"),      cmd_wq},
+    {SV("wq"),      SV(":wq"), SV("  Write and quit"),      cmd_wq},
+    {SV("pwd"),     SV(":pwd"), SV("  Print working directory"), cmd_pwd},
+    {SV("cd"),      SV(":cd <dir>"), SV("  Change directory"), cmd_cd},
+    {SV("yank"),    SV(":yank"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
+    {SV("paste"),   SV(":paste"), SV("  Paste from clipboard"), cmd_paste},
+    {SV("query"),   SV(":query <path>"), SV("  Navigate to path (e.g., foo.bar[0].baz)"), cmd_query},
+    {SV("path"),    SV(":path"), SV("  Yank (copy) current item's JSON path to clipboard"), cmd_path},
+    {SV("focus"),   SV(":focus"), SV("  Focus on the current array or object"), cmd_focus},
     {SV("unfocus"), SV(":unfocus"), SV("  Return to the previous (less focused) view"), cmd_unfocus},
-    {SV("sort"), SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
-    {SV("filter"), SV(":filter <query>"), SV("  Filter array/object based on a query"), cmd_filter},
-    {SV("f"), SV(":f <query>"), SV("  Alias for :filter"), cmd_filter},
-    {SV("move"), SV(":move <index>"), SV("  Move current item to <index>"), cmd_move},
-    {SV("m"), SV(":m <index>"), SV("  Move current item to <index>"), cmd_move},
+    {SV("sort"),    SV(":sort [<query>] [keys|values] [asc|desc]"), SV("Sort array or object. Can sort by query."), cmd_sort},
+    {SV("filter"),  SV(":filter <query>"), SV("  Filter array/object based on a query"), cmd_filter},
+    {SV("move"),    SV(":move <index>"), SV("  Move current item to <index>"), cmd_move},
 };
 
 static
@@ -5950,7 +5944,7 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
             int y = screenh - 2 - visible_items + i;
             if(y < 1) break; // Don't overwrite status line
 
-            drt_move(drt, 0, y);
+            drt_move(drt, nav->saved_prefix_len, y);
             drt_push_state(drt);
 
             // Highlight selected item with bold and underline
@@ -6014,6 +6008,10 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
             drt_set_style(drt, DRT_STYLE_ITALIC);
             drt_set_8bit_color(drt, 7);
             drt_puts(drt, cmd->signature.text, cmd->signature.length);
+            if((size_t)screenw >= cmd->signature.length + 3 + cmd->short_help.length){
+                drt_puts(drt, "  |", 3);
+                drt_puts(drt, cmd->short_help.text, cmd->short_help.length);
+            }
             drt_pop_state(drt);
             drt_clear_to_end_of_row(drt);
         }
