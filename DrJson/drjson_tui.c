@@ -2551,8 +2551,8 @@ int
 cmd_open(JsonNav* nav, CmdArgs* args){
     // Get optional --braceless flag
     _Bool use_braceless = 0;
-    int err = cmd_get_arg_bool(args, SV("--braceless"), &use_braceless);
-    if(err != CMD_ARG_ERROR_NONE && err != CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    int err = cmd_get_arg_bool_optional(args, SV("--braceless"), &use_braceless);
+    if(err != CMD_ARG_ERROR_NONE){
         nav_set_messagef(nav, "Error parsing --braceless flag");
         return CMD_ERROR;
     }
@@ -2560,12 +2560,8 @@ cmd_open(JsonNav* nav, CmdArgs* args){
     // Get required file argument
     StringView filepath_sv = {0};
     err = cmd_get_arg_string(args, SV("file"), &filepath_sv);
-    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    if(err){
         nav_set_messagef(nav, "Error: No filename provided");
-        return CMD_ERROR;
-    }
-    if(err != CMD_ARG_ERROR_NONE){
-        nav_set_messagef(nav, "Error parsing filename");
         return CMD_ERROR;
     }
 
@@ -2598,15 +2594,15 @@ cmd_write(JsonNav* nav, CmdArgs* args){
     _Bool braceless_specified = 0;
 
     _Bool flag_braceless = 0;
-    int err = cmd_get_arg_bool(args, SV("--braceless"), &flag_braceless);
-    if(err == CMD_ARG_ERROR_NONE && flag_braceless){
+    int err = cmd_get_arg_bool_optional(args, SV("--braceless"), &flag_braceless);
+    if(!err && flag_braceless){
         use_braceless = 1;
         braceless_specified = 1;
     }
 
     _Bool flag_no_braceless = 0;
-    err = cmd_get_arg_bool(args, SV("--no-braceless"), &flag_no_braceless);
-    if(err == CMD_ARG_ERROR_NONE && flag_no_braceless){
+    err = cmd_get_arg_bool_optional(args, SV("--no-braceless"), &flag_no_braceless);
+    if(!err && flag_no_braceless){
         use_braceless = 0;
         braceless_specified = 1;
     }
@@ -2614,12 +2610,8 @@ cmd_write(JsonNav* nav, CmdArgs* args){
     // Get required file argument
     StringView filepath_sv = {0};
     err = cmd_get_arg_string(args, SV("file"), &filepath_sv);
-    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    if(err){
         nav_set_messagef(nav, "Error: No filename provided");
-        return CMD_ERROR;
-    }
-    if(err != CMD_ARG_ERROR_NONE){
-        nav_set_messagef(nav, "Error parsing filename");
         return CMD_ERROR;
     }
 
@@ -2795,17 +2787,9 @@ int
 cmd_cd(JsonNav* nav, CmdArgs* args){
     char dirpath[1024];
 
-    // Get dir argument (defaults to "~" if not provided)
     StringView dir_sv = {0};
     int err = cmd_get_arg_string(args, SV("dir"), &dir_sv);
-    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
-        // No argument - change to home directory
-        dir_sv = SV("~");
-    }
-    else if(err != CMD_ARG_ERROR_NONE){
-        nav_set_messagef(nav, "Error parsing directory");
-        return CMD_ERROR;
-    }
+    if(err) return CMD_ERROR;
 
     // Expand ~ and copy directory path to null-terminated buffer
     if(expand_tilde_to_buffer(dir_sv.text, dir_sv.length, dirpath, sizeof dirpath) != 0){
@@ -3492,7 +3476,7 @@ cmd_query(JsonNav* nav, CmdArgs* args){
     // Get required path argument
     StringView path_sv = {0};
     int err = cmd_get_arg_string(args, SV("path"), &path_sv);
-    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    if(err){
         nav_set_messagef(nav, "Error: No query path provided");
         return CMD_ERROR;
     }
@@ -3598,16 +3582,16 @@ int
 cmd_search(JsonNav* nav, CmdArgs* args){
     // Get optional --values-only flag
     _Bool values_only = 0;
-    int err = cmd_get_arg_bool(args, SV("--values-only"), &values_only);
-    if(err != CMD_ARG_ERROR_NONE && err != CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    int err = cmd_get_arg_bool_optional(args, SV("--values-only"), &values_only);
+    if(err){
         nav_set_messagef(nav, "Error parsing --values-only flag");
         return CMD_ERROR;
     }
 
     // Get optional --query flag
     _Bool use_query = 0;
-    err = cmd_get_arg_bool(args, SV("--query"), &use_query);
-    if(err != CMD_ARG_ERROR_NONE && err != CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    err = cmd_get_arg_bool_optional(args, SV("--query"), &use_query);
+    if(err){
         nav_set_messagef(nav, "Error parsing --query flag");
         return CMD_ERROR;
     }
@@ -3615,12 +3599,8 @@ cmd_search(JsonNav* nav, CmdArgs* args){
     // Get required pattern argument
     StringView pattern_sv = {0};
     err = cmd_get_arg_string(args, SV("pattern"), &pattern_sv);
-    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    if(err){
         nav_set_messagef(nav, "Error: No search pattern provided");
-        return CMD_ERROR;
-    }
-    if(err != CMD_ARG_ERROR_NONE){
-        nav_set_messagef(nav, "Error parsing pattern");
         return CMD_ERROR;
     }
 
@@ -4389,12 +4369,8 @@ cmd_filter(JsonNav* nav, CmdArgs* args){
     // Get required query argument
     StringView query_sv = {0};
     int err = cmd_get_arg_string(args, SV("query"), &query_sv);
-    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    if(err){
         nav_set_messagef(nav, "Error: :filter requires a query.");
-        return CMD_ERROR;
-    }
-    if(err != CMD_ARG_ERROR_NONE){
-        nav_set_messagef(nav, "Error parsing query");
         return CMD_ERROR;
     }
 
@@ -4486,17 +4462,13 @@ cmd_flatten(JsonNav* nav, CmdArgs* args){
 
     // Parse optional depth argument (default: 1)
     int64_t depth = 1;
-    int err = cmd_get_arg_integer(args, SV("depth"), &depth);
-    if(err == CMD_ARG_ERROR_NONE){
-        if(depth < -1){
-            nav_set_messagef(nav, "Error: Invalid depth (use positive number or -1 for infinite).");
-            return CMD_ERROR;
-        }
-    }
-    else if(err != CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    int err = cmd_get_arg_integer_optional(args, SV("depth"), &depth);
+    if(err){
         nav_set_messagef(nav, "Error: Invalid depth (use positive number or -1 for infinite).");
         return CMD_ERROR;
     }
+    if(depth < -1)
+        depth = -1;
 
     NavItem* item = &nav->items[nav->cursor_pos];
     DrJsonValue val = item->value;
@@ -4664,12 +4636,8 @@ cmd_move(JsonNav* nav, CmdArgs* args){
     // Get required index argument
     int64_t target_index = 0;
     int err = cmd_get_arg_integer(args, SV("index"), &target_index);
-    if(err == CMD_ARG_ERROR_MISSING || err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL){
+    if(err){
         nav_set_messagef(nav, "Error: :move requires an index.");
-        return CMD_ERROR;
-    }
-    if(err != CMD_ARG_ERROR_NONE){
-        nav_set_messagef(nav, "Error: Invalid index.");
         return CMD_ERROR;
     }
 

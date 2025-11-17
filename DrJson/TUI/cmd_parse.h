@@ -158,6 +158,18 @@ int
 cmd_get_arg_bool(CmdArgs* args, StringView name, _Bool* out);
 
 //
+// Like `cmd_get_arg_string`, but returns no error if missing but optional.
+//
+CMD_PARSE_WARN_UNUSED
+static inline
+int
+cmd_get_arg_bool_optional(CmdArgs* args, StringView name, _Bool* out){
+    int err = cmd_get_arg_bool(args, name, out);
+    if(err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL) err = CMD_ARG_ERROR_NONE;
+    return err;
+}
+
+//
 // Retrieves a string or path of the given name.
 // Returns one of the CMD_ARG_ERROR_* error codes.
 //
@@ -165,6 +177,18 @@ CMD_PARSE_WARN_UNUSED
 static
 int
 cmd_get_arg_string(CmdArgs* args, StringView name, StringView* out);
+
+//
+// Like `cmd_get_arg_string`, but returns no error if missing but optional.
+//
+CMD_PARSE_WARN_UNUSED
+static inline
+int
+cmd_get_arg_string_optional(CmdArgs* args, StringView name, StringView* out){
+    int err = cmd_get_arg_string(args, name, out);
+    if(err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL) err = CMD_ARG_ERROR_NONE;
+    return err;
+}
 
 //
 // Retrieves an integer of the given name.
@@ -175,6 +199,18 @@ CMD_PARSE_WARN_UNUSED
 static
 int
 cmd_get_arg_integer(CmdArgs* args, StringView name, int64_t* out);
+
+//
+// Like `cmd_get_arg_integer`, but returns no error if missing but optional.
+//
+CMD_PARSE_WARN_UNUSED
+static inline
+int
+cmd_get_arg_integer_optional(CmdArgs* args, StringView name, int64_t* out){
+    int err = cmd_get_arg_integer(args, name, out);
+    if(err == CMD_ARG_ERROR_MISSING_BUT_OPTIONAL) err = CMD_ARG_ERROR_NONE;
+    return err;
+}
 
 
 //
