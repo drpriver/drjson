@@ -247,6 +247,7 @@ struct JsonNav {
     LineEditorHistory search_history; // Search history
     enum SearchMode search_mode;    // Current search mode
     _Bool search_input_active;      // True when actively typing search
+    _Bool search_values_only;       // If true, only search values (not keys)
 
     // For SEARCH_QUERY mode: parsed /?path pattern
     DrJsonPath search_query_path;   // Parsed query path (e.g., "metadata.author.name")
@@ -720,6 +721,7 @@ nav_reinit(JsonNav* nav){
     // Clear search state but keep buffers
     nav->search_mode = SEARCH_INACTIVE;
     nav->search_input_active = 0;
+    nav->search_values_only = 0;
 
     nav->in_completion_menu = 0;
     nav->tab_count = 0;
@@ -1518,8 +1520,8 @@ nav_value_matches_query(JsonNav* nav, DrJsonValue val, DrJsonAtom key, const cha
     }
 
     // For SEARCH_RECURSIVE mode: match key OR value (original behavior)
-    // Check key if present
-    if(key.bits != 0){
+    // Check key if present (unless values-only mode is enabled)
+    if(key.bits != 0 && !nav->search_values_only){
         const char* key_str = NULL;
         size_t key_len = 0;
         DrJsonValue key_val = drjson_atom_to_value(key);
@@ -5394,6 +5396,8 @@ static const StringView HELP_LINES[] = {
     SV("  Note: Keys don't need quotes unless they start with \" or '"),
     SV(""),
     SV("In Search Mode:"),
+    SV("  v           Toggle values-only search (when buffer empty)"),
+    SV("              Values-only: skips matching object keys"),
     SV("  Enter       Execute search"),
     SV("  ESC/Ctrl-C  Cancel search"),
     SV("  ↑/Ctrl-P    Previous search (history)"),
@@ -5992,8 +5996,20 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
     // Render status line at top
     drt_push_state(drt);
     if(nav->search_input_active){
-        const char* prompt = (nav->search_mode == SEARCH_QUERY) ? " Query Search: " : " Search: ";
-        int prompt_len = (nav->search_mode == SEARCH_QUERY) ? 15 : 9;
+        const char* prompt;
+        int prompt_len;
+        if(nav->search_mode == SEARCH_QUERY){
+            prompt = " Query Search: ";
+            prompt_len = 15;
+        }
+        else if(nav->search_values_only){
+            prompt = " Search (values): ";
+            prompt_len = 18;
+        }
+        else {
+            prompt = " Search: ";
+            prompt_len = 9;
+        }
         drt_puts(drt, prompt, prompt_len);
         int start_x = prompt_len;
         le_render(drt, &nav->search_buffer);
@@ -6002,7 +6018,16 @@ nav_render(JsonNav* nav, Drt* drt, int screenw, int screenh, LineEditor* count_b
         show_cursor = 1;
     }
     else if(nav->search_buffer.length > 0){
-        const char* search_label = (nav->search_mode == SEARCH_QUERY) ? "Query Search" : "Search";
+        const char* search_label;
+        if(nav->search_mode == SEARCH_QUERY){
+            search_label = "Query Search";
+        }
+        else if(nav->search_values_only){
+            search_label = "Search (values)";
+        }
+        else {
+            search_label = "Search";
+        }
         drt_printf(drt, " %s — %zu items — %s: %.*s ",
                    nav->filename[0] ? nav->filename : "DrJson TUI",
                    nav->item_count,
@@ -6778,6 +6803,15 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                     }
                     // Otherwise, treat as regular character input
                     break;
+                case 'v':
+                case 'V':
+                    // If buffer is empty, toggle values-only search
+                    if(nav.search_buffer.length == 0){
+                        nav.search_values_only = !nav.search_values_only;
+                        continue;
+                    }
+                    // Otherwise, treat as regular character input
+                    break;
                 case ENTER:
                 case CTRL_J:{
                     // Add to history before searching
@@ -7477,6 +7511,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                 // Enter search mode (always recursive)
                 nav.search_mode = SEARCH_RECURSIVE;
                 nav.search_input_active = 1;
+                nav.search_values_only = 0;
                 le_clear(&nav.search_buffer);
                 break;
 

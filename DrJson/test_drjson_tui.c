@@ -71,6 +71,7 @@
     X(TestLiteralParsing) \
     X(TestQueryCommand) \
     X(TestLineNumberCommand) \
+    X(TestValuesOnlySearch) \
     X(TestFocusUnfocusCommands) \
     X(TestNavJumpToNthChild) \
     X(TestFocusStackOperations) \
@@ -2214,6 +2215,87 @@ TestFunction(TestLineNumberCommand){
     // Test very large number (overflow)
     result = nav_execute_command(&nav, "99999999999999999999999999999", 29);
     TestExpectEquals(result, CMD_ERROR);
+
+    // Cleanup
+    nav_free(&nav);
+    drjson_ctx_free_all(ctx);
+    assert_all_freed();
+    TESTEND();
+}
+
+// Test values-only search mode
+TestFunction(TestValuesOnlySearch){
+    TESTBEGIN();
+
+    DrJsonAllocator a = get_test_allocator();
+    DrJsonContext* ctx = drjson_create_ctx(a);
+    TestAssert(ctx != NULL);
+
+    // JSON with "test" appearing as both a key and a value
+    LongString json = LS("{\"test\": \"other\", \"name\": \"test\", \"data\": {\"test\": \"value\"}}");
+    DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
+    TestExpectEquals((int)root.kind, DRJSON_OBJECT);
+
+    JsonNav nav = {
+        .jctx = ctx,
+        .root = root,
+        .allocator = a,
+    };
+
+    // Expand root to see all items
+    uint64_t root_id = nav_get_container_id(root);
+    bs_add(&nav.expanded, root_id, &a);
+    nav_rebuild(&nav);
+
+    // Also expand nested object
+    DrJsonValue data_obj = drjson_object_get_item(ctx, root, "data", 4);
+    if(nav_is_container(data_obj)){
+        uint64_t data_id = nav_get_container_id(data_obj);
+        bs_add(&nav.expanded, data_id, &a);
+        nav_rebuild(&nav);
+    }
+
+    // Set up search for "test"
+    nav.search_mode = SEARCH_RECURSIVE;
+    le_init(&nav.search_buffer, 256);
+    le_write(&nav.search_buffer, "test", 4);
+
+    // Parse numeric search (should fail, it's a string)
+    nav.search_numeric.is_numeric = 0;
+
+    // Set up pattern
+    size_t pattern_len = 4;
+    if(pattern_len < sizeof nav.search_pattern){
+        memcpy(nav.search_pattern, "test", pattern_len);
+        nav.search_pattern_len = pattern_len;
+    }
+
+    // Test 1: Normal search (searches both keys and values)
+    nav.search_values_only = 0;
+
+    size_t matches_all = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav_value_matches_query(&nav, nav.items[i].value, nav.items[i].key, "test", 4)){
+            matches_all++;
+        }
+    }
+
+    // Should find "test" as key twice (top-level and nested) and as value once
+    TestExpectEquals(matches_all, 3); // At least the key matches
+
+    // Test 2: Values-only search (skips keys)
+    nav.search_values_only = 1;
+
+    size_t matches_values = 0;
+    for(size_t i = 0; i < nav.item_count; i++){
+        if(nav_value_matches_query(&nav, nav.items[i].value, nav.items[i].key, "test", 4)){
+            matches_values++;
+        }
+    }
+
+    // Should find "test" only as value (in "name": "test")
+    TestExpectTrue(matches_values < matches_all); // Should be fewer matches than normal search
+    TestExpectEquals(matches_values, 1); // Should still find the value match
 
     // Cleanup
     nav_free(&nav);
