@@ -108,6 +108,7 @@ enum {ITEMS_PER_ROW=16};
 
 static const char* LOGFILE = NULL;
 static FILE* LOGFILE_FP = NULL;
+static const char* STATE_FILE_PATH = NULL;
 static inline
 void
 __attribute__((format(printf,1, 2)))
@@ -426,6 +427,92 @@ read_file(const char* filepath, LongString* out){
 finally:
     fclose(fp);
     return status;
+}
+
+//------------------------------------------------------------
+// State Persistence Helpers
+//------------------------------------------------------------
+
+// Get platform-specific path to state file
+static inline
+const char*
+get_state_file_path(void){
+    // Allow override via --state-file flag
+    if(STATE_FILE_PATH) return STATE_FILE_PATH;
+
+    static char path[1024];
+    static _Bool initialized = 0;
+    if(initialized) return path;
+
+    #ifdef __linux__
+        const char* xdg = getenv("XDG_STATE_HOME");
+        if(xdg && xdg[0]){
+            snprintf(path, sizeof path, "%s/drj/state.drjson", xdg);
+        }
+        else {
+            const char* home = getenv("HOME");
+            if(home && home[0]){
+                snprintf(path, sizeof path, "%s/.local/state/drj/state.drjson", home);
+            }
+            else {
+                path[0] = '\0';
+                return path;
+            }
+        }
+    #elif defined(__APPLE__)
+        const char* home = getenv("HOME");
+        if(home && home[0]){
+            snprintf(path, sizeof path, "%s/Library/Application Support/drj/state.drjson", home);
+        }
+        else {
+            path[0] = '\0';
+            return path;
+        }
+    #elif defined(_WIN32)
+        const char* appdata = getenv("LOCALAPPDATA");
+        if(appdata && appdata[0]){
+            snprintf(path, sizeof path, "%s\\drj\\state.drjson", appdata);
+        }
+        else {
+            path[0] = '\0';
+            return path;
+        }
+    #else
+        path[0] = '\0';
+    #endif
+
+    initialized = 1;
+    return path;
+}
+
+// Create directory recursively (like mkdir -p)
+static inline
+int
+mkdir_p(const char* path){
+    char tmp[1024];
+    char* p = NULL;
+    size_t len = strlen(path);
+
+    if(len >= sizeof tmp) return -1;
+    snprintf(tmp, sizeof tmp, "%s", path);
+
+    // Handle different path separators
+    for(p = tmp + 1; *p; p++){
+        if(*p == '/' || *p == '\\'){
+            *p = '\0';
+            #ifdef _WIN32
+            mkdir(tmp);
+            #else
+            mkdir(tmp, 0755);
+            #endif
+            *p = '/';
+        }
+    }
+    #ifdef _WIN32
+    return mkdir(tmp);
+    #else
+    return mkdir(tmp, 0755);
+    #endif
 }
 
 //------------------------------------------------------------
@@ -2447,11 +2534,11 @@ static const Command commands[] = {
     {SV("reload"),  SV(":reload"), SV("  Reload file from disk"), cmd_reload},
     {SV("save"),    SV(":save [--braceless|--no-braceless] [--ndjson|--no-ndjson] <file>"), SV("  Save JSON to <file>"), cmd_write},
     {SV("write"),   SV(":write [--braceless|--no-braceless] [--ndjson|--no-ndjson] <file>"), SV("  Save JSON to <file>"), cmd_write},
-    {SV("quit"),    SV(":quit"), SV("  Quit"),              cmd_quit},
-    {SV("q"),       SV(":q"), SV("  Quit"),              cmd_quit},
-    {SV("exit"),    SV(":exit"), SV("  Quit"),              cmd_quit},
-    {SV("x"),       SV(":x"), SV("  Write and quit"),      cmd_wq},
-    {SV("wq"),      SV(":wq"), SV("  Write and quit"),      cmd_wq},
+    {SV("quit"),    SV(":quit [--quick]"), SV("  Quit"), cmd_quit},
+    {SV("q"),       SV(":q [--quick]"), SV("  Quit"), cmd_quit},
+    {SV("exit"),    SV(":exit [--quick]"), SV("  Quit"), cmd_quit},
+    {SV("x"),       SV(":x"), SV("  Write and quit"), cmd_wq},
+    {SV("wq"),      SV(":wq"), SV("  Write and quit"), cmd_wq},
     {SV("pwd"),     SV(":pwd"), SV("  Print working directory"), cmd_pwd},
     {SV("cd"),      SV(":cd <dir>"), SV("  Change directory"), cmd_cd},
     {SV("yank"),    SV(":yank"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
@@ -2486,6 +2573,7 @@ enum {
     CMD_ERROR = -1,
     CMD_OK = 0,
     CMD_QUIT = 1,
+    CMD_QUICK_QUIT = 2,
 };
 
 // Command handlers
@@ -2699,8 +2787,11 @@ static
 int
 cmd_quit(JsonNav* nav, CmdArgs* args){
     (void)nav;
-    (void)args;
-    return CMD_QUIT; // Signal quit
+    _Bool quick = 0;
+    int err;
+    err = cmd_get_arg_bool_optional(args, SV("--quick"), &quick);
+    (void)err;
+    return quick?CMD_QUICK_QUIT : CMD_QUIT;
 }
 
 static
@@ -7100,15 +7191,17 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
     ArgToParse pos_args[] = {
         [0] = {
             .name = SV("filepath"),
-            .min_num = 1,
+            .min_num = 0,  // Optional when using --resume
             .max_num = 1,
             .dest = ARGDEST(&jsonpath),
-            .help = "Json file to parse",
+            .help = "Json file to parse (omit when using --resume)",
         },
     };
 
     _Bool braceless = 0;
     _Bool ndjson = 0;
+    _Bool no_state = 0;
+    _Bool resume = 0;
     ArgToParse kw_args[] = {
         {
             .name = SV("--braceless"),
@@ -7132,6 +7225,22 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
             .altname1 = SV("--logfile"),
             .dest = ARGDEST(&LOGFILE),
             .hidden = 1,
+        },
+        {
+            .name = SV("--state-file"),
+            .dest = ARGDEST(&STATE_FILE_PATH),
+            .help = "Override the state file path (for testing)",
+            .hidden = 1,
+        },
+        {
+            .name = SV("--no-state"),
+            .dest = ARGDEST(&no_state),
+            .help = "Don't load or save editor state (history, last file, etc.)",
+        },
+        {
+            .name = SV("--resume"),
+            .dest = ARGDEST(&resume),
+            .help = "Resume last session (reopen last file at last cursor position)",
         },
     };
     enum {HELP=0, HIDDEN_HELP, VERSION, FISH};
@@ -7191,6 +7300,75 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
         print_argparse_error(&parser, error);
         return error;
     }
+    _Bool load_state = !no_state;
+
+    // Validate --resume usage
+    if(resume && jsonpath.length > 0){
+        fprintf(stderr, "Error: Cannot use --resume with a filepath argument\n");
+        return 1;
+    }
+    if(!resume && jsonpath.length == 0){
+        fprintf(stderr, "Error: No file to open (provide filepath or use --resume)\n");
+        return 1;
+    }
+
+    DrJsonAllocator allocator = drjson_stdc_allocator();
+    DrJsonContext* jctx = drjson_create_ctx(allocator);
+    // Handle --resume: load last file
+    if(resume && !load_state){
+        fprintf(stderr, "Error: --resume requires state loading (don't use --no-state)\n");
+        return 1;
+    }
+    DrJsonValue state = drjson_make_null();
+    if(resume){
+        const char* state_path = get_state_file_path();
+        if(!state_path[0]){
+            fprintf(stderr, "Error: Cannot determine state file path\n");
+            return 1;
+        }
+
+        LongString state_content = {0};
+        int err = read_file(state_path, &state_content);
+        if(err){
+            fprintf(stderr, "Error: No previous session to resume (state file not found)\n");
+            return 1;
+        }
+
+        // Parse state file
+        state = drjson_parse_string(jctx, state_content.text, state_content.length, 0);
+
+        if(state.kind != DRJSON_OBJECT){
+            fprintf(stderr, "Error: Invalid state file format\n");
+            return 1;
+        }
+
+        // Get last file
+        DrJsonValue last_file_val = drjson_checked_query(jctx, state, DRJSON_STRING, "last_file", 9);
+        if(last_file_val.kind == DRJSON_ERROR){
+            fprintf(stderr, "Error: No previous file in state\n");
+            return 1;
+        }
+
+        err = drjson_get_str_and_len(jctx, last_file_val, &jsonpath.text, &jsonpath.length);
+        if(err){
+            fprintf(stderr, "Error: Invalid last_file in state\n");
+            return 1;
+        }
+
+        // Load flags from state if not explicitly set on command line
+        DrJsonValue last_flags = drjson_checked_query(jctx, state, DRJSON_OBJECT, "last_flags", 10);
+        if(last_flags.kind == DRJSON_OBJECT){
+            DrJsonValue braceless_val = drjson_query(jctx, last_flags, "braceless", 9);
+            if(braceless_val.kind == DRJSON_BOOL && !braceless){
+                braceless = braceless_val.boolean;
+            }
+            DrJsonValue ndjson_val = drjson_query(jctx, last_flags, "ndjson", 6);
+            if(ndjson_val.kind == DRJSON_BOOL && !ndjson){
+                ndjson = ndjson_val.boolean;
+            }
+        }
+    }
+
     #ifdef _WIN32
     globals.TS.STDIN = GetStdHandle(STD_INPUT_HANDLE);
     globals.TS.STDOUT = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -7212,8 +7390,6 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
         fprintf(stderr, "Unable to read data from '%s': %s\n", jsonpath.text, strerror(errno));
         return 1;
     }
-    DrJsonAllocator allocator = drjson_stdc_allocator();
-    DrJsonContext* jctx = drjson_create_ctx(allocator);
     DrJsonParseContext ctx = {
         .ctx = jctx,
         .begin = jsonstr.text,
@@ -7241,6 +7417,92 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
     // Count buffer for vim-style numeric prefixes
     LineEditor count_buffer;
     le_init(&count_buffer, 32);
+
+    // Load persistent state (command history, search history, etc.)
+    if(load_state){
+        if(state.kind != DRJSON_OBJECT){
+            const char* state_path = get_state_file_path();
+            if(state_path[0]){
+                LongString state_content = {0};
+                if(read_file(state_path, &state_content) == 0){
+                    state = drjson_parse_string(jctx, state_content.text, state_content.length, 0);
+                    free((void*)state_content.text);
+                }
+            }
+        }
+        if(state.kind == DRJSON_OBJECT){
+            // Load command history
+            DrJsonValue cmd_hist = drjson_query(jctx, state, "command_history", 15);
+            if(cmd_hist.kind == DRJSON_ARRAY){
+                int64_t len = drjson_len(jctx, cmd_hist);
+                for(int64_t i = 0; i < len; i++){
+                    DrJsonValue cmd = drjson_get_by_index(jctx, cmd_hist, i);
+                    int err;
+                    const char* cmd_str;
+                    size_t cmd_len;
+                    char buffer[512];
+                    err = drjson_get_str_and_len(jctx, cmd, &cmd_str, &cmd_len);
+                    if(err) continue;
+                    if(cmd_len >= sizeof buffer) continue;
+                    err = drjson_unescape_string(cmd_str, cmd_len, buffer, &cmd_len);
+                    if(err) continue;
+                    le_history_add(&nav.command_history, buffer, cmd_len);
+                }
+            }
+
+            // Load search history
+            DrJsonValue search_hist = drjson_query(jctx, state, "search_history", 14);
+            if(search_hist.kind == DRJSON_ARRAY){
+                int64_t len = drjson_len(jctx, search_hist);
+                for(int64_t i = 0; i < len; i++){
+                    DrJsonValue search = drjson_get_by_index(jctx, search_hist, i);
+                    const char* search_str;
+                    size_t search_len;
+                    int err;
+                    char buffer[512];
+                    err = drjson_get_str_and_len(jctx, search, &search_str, &search_len);
+                    if(err) continue;
+                    if(search_len >= sizeof buffer) continue;
+                    err = drjson_unescape_string(search_str, search_len, buffer, &search_len);
+                    if(err) continue;
+                    le_history_add(&nav.search_history, buffer, search_len);
+                }
+            }
+            DrJsonValue last_file_val = drjson_checked_query(jctx, state, DRJSON_STRING, "last_file", 9);
+            if(last_file_val.kind == DRJSON_STRING){
+                LongString f;
+                int err;
+                err = drjson_get_str_and_len(jctx, last_file_val, &f.text, &f.length);
+                if(!err){
+                    if(LS_equals(f, jsonpath)){
+                        TermSize sz = get_terminal_size();
+                        drt_clear_screen(&globals.drt);
+                        if(globals.screenh != sz.rows || globals.screenw != sz.columns){
+                            globals.screenh = sz.rows;
+                            globals.screenw = sz.columns;
+                        }
+                        DrJsonPath path;
+                        DrJsonValue resume_cursor = drjson_checked_query(jctx, state, DRJSON_STRING, "last_cursor_path", sizeof "last_cursor_path"-1);
+                        if(resume_cursor.kind == DRJSON_STRING){
+                            LongString path_txt;
+                            err = drjson_get_str_and_len(jctx, resume_cursor, &path_txt.text, &path_txt.length);
+                            if(!err){
+                                err = drjson_path_parse(jctx, path_txt.text, path_txt.length, &path);
+                                if(!err && path.count > 0){
+                                    size_t target_idx = nav_navigate_to_path(&nav, 0, &path);
+                                    if(target_idx != SIZE_MAX){
+                                        nav.cursor_pos = target_idx;
+                                        // Center the cursor in the viewport
+                                        nav_center_cursor(&nav, globals.screenh);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     for(;;){
         if(globals.needs_rescale){
@@ -7448,6 +7710,8 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                     le_clear(&nav.command_buffer);
                     if(cmd_result == CMD_QUIT)
                         goto finally;
+                    else if(cmd_result == CMD_QUICK_QUIT)
+                        return 0;
                 }continue;
                 case TAB:
                     nav_complete_command(&nav);
@@ -8244,6 +8508,74 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
         }
     }
     finally:;
+
+    // Save persistent state before cleanup
+    if(load_state){
+        const char* state_path = get_state_file_path();
+        if(state_path[0]){
+            DrJsonValue state_obj = drjson_make_object(jctx);
+
+            // Version
+            drjson_object_set_item_copy_key(jctx, state_obj, "version", 7, drjson_make_int(1));
+
+            // Command history
+            DrJsonValue cmd_array = drjson_make_array(jctx);
+            for(size_t i = 0; i < nav.command_history.count; i++){
+                const char* cmd = nav.command_history.entries[i];
+                drjson_array_push_item(jctx, cmd_array, drjson_escape_string_to_value(jctx, cmd, strlen(cmd)));
+            }
+            drjson_object_set_item_no_copy_key(jctx, state_obj, "command_history", 15, cmd_array);
+
+            // Search history
+            DrJsonValue search_array = drjson_make_array(jctx);
+            for(size_t i = 0; i < nav.search_history.count; i++){
+                const char* search = nav.search_history.entries[i];
+                drjson_array_push_item(jctx, search_array, drjson_escape_string_to_value(jctx, search, strlen(search)));
+            }
+            drjson_object_set_item_no_copy_key(jctx, state_obj, "search_history", 14, search_array);
+
+            // Last file and cursor position
+            if(nav.filename[0]){
+                drjson_object_set_item_no_copy_key(jctx, state_obj, "last_file", 9, drjson_escape_string_to_value(jctx, nav.filename, strlen(nav.filename)));
+
+                // Build current cursor path
+                char cursor_path[512];
+                size_t path_len = nav_build_json_path(&nav, cursor_path, sizeof cursor_path);
+                if(path_len > 0){
+                    drjson_object_set_item_no_copy_key(jctx, state_obj, "last_cursor_path", 16, drjson_escape_string_to_value(jctx, cursor_path, path_len));
+                }
+
+                // Last flags
+                DrJsonValue flags_obj = drjson_make_object(jctx);
+                drjson_object_set_item_no_copy_key(jctx, flags_obj, "braceless", 9, drjson_make_bool(nav.was_opened_with_braceless));
+                drjson_object_set_item_no_copy_key(jctx, flags_obj, "ndjson", 6, drjson_make_bool(nav.was_opened_with_ndjson));
+                drjson_object_set_item_no_copy_key(jctx, state_obj, "last_flags", 10, flags_obj);
+            }
+
+            // Ensure directory exists
+            char dir_path[1024];
+            snprintf(dir_path, sizeof dir_path, "%s", state_path);
+            char* last_slash = strrchr(dir_path, '/');
+            #ifdef _WIN32
+            if(!last_slash) last_slash = strrchr(dir_path, '\\');
+            #endif
+            if(last_slash){
+                *last_slash = '\0';
+                mkdir_p(dir_path);
+            }
+
+            // Write to temp file then atomically rename
+            char temp_path[1024];
+            snprintf(temp_path, sizeof temp_path, "%s.tmp", state_path);
+            FILE* fp = fopen(temp_path, "wb");
+            if(fp){
+                drjson_print_value_fp(jctx, fp, state_obj, 0, DRJSON_PRETTY_PRINT);
+                fclose(fp);
+                rename(temp_path, state_path);
+            }
+        }
+    }
+
     le_free(&count_buffer);
     nav_free(&nav);
     return 0;
