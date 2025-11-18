@@ -438,6 +438,7 @@ drj_realloc(const DrJsonContext* ctx, void*_Nullable p, size_t old_size, size_t 
     return ctx->allocator.realloc(ctx->allocator.user_pointer, p, old_size, new_size);
 }
 
+DRJSON_WARN_UNUSED
 static inline
 int
 drj_get_str_and_len(const DrJsonContext* ctx, DrJsonValue v, const char*_Nullable*_Nonnull string, size_t* slen){
@@ -1925,8 +1926,10 @@ drjson_deep_eq(const DrJsonContext* ctx, DrJsonValue a, DrJsonValue b){
         case DRJSON_STRING:{
             const char *a_str, *b_str;
             size_t a_len, b_len;
-            drj_get_str_and_len(ctx, a, &a_str, &a_len);
-            drj_get_str_and_len(ctx, b, &b_str, &b_len);
+            int a_err = drj_get_str_and_len(ctx, a, &a_str, &a_len);
+            int b_err = drj_get_str_and_len(ctx, b, &b_str, &b_len);
+            if(a_err) return b_err == a_err;
+            if(b_err) return 0;
             if(a_len != b_len) return 0;
             return memcmp(a_str, b_str, a_len) == 0;
         }
@@ -1986,6 +1989,7 @@ drjson_path_add_index(DrJsonPath* path, int64_t index){
 }
 
 DRJSON_API
+DRJSON_WARN_UNUSED
 int
 drjson_path_parse(const DrJsonContext* ctx, const char* path_str, size_t path_len, DrJsonPath* path){
     const char* remainder = NULL;
@@ -3309,6 +3313,18 @@ drjson_unescape_string(const char* restrict escaped, size_t length, char* restri
 
     *outlength = out_pos;
     return 0;
+}
+
+DRJSON_API
+DRJSON_WARN_UNUSED
+int
+drjson_unescape_string_value(DrJsonContext* ctx, DrJsonValue v, char* restrict buff, size_t buffsize, size_t* restrict outlength){
+    int err;
+    const char* esc; size_t len;
+    err = drj_get_str_and_len(ctx, v, &esc, &len);
+    if(err) return err;
+    if(buffsize < len) return 1;
+    return drjson_unescape_string(esc, len, buff, outlength);
 }
 
 // Normalize user input by doing liberal unescape + strict escape in single pass

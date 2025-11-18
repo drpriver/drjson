@@ -1877,7 +1877,7 @@ TestFunction(TestFlattenCommand){
         DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
         TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, arr, "", a);
         uint64_t root_id = nav_get_container_id(arr);
         bs_add(&nav.expanded, root_id, &a);
@@ -1912,7 +1912,7 @@ TestFunction(TestFlattenCommand){
         DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
         TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, arr, "", a);
         uint64_t root_id = nav_get_container_id(arr);
         bs_add(&nav.expanded, root_id, &a);
@@ -1944,7 +1944,7 @@ TestFunction(TestFlattenCommand){
         DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
         TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, arr, "", a);
         uint64_t root_id = nav_get_container_id(arr);
         bs_add(&nav.expanded, root_id, &a);
@@ -1968,7 +1968,7 @@ TestFunction(TestFlattenCommand){
         DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
         TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, arr, "", a);
         uint64_t root_id = nav_get_container_id(arr);
         bs_add(&nav.expanded, root_id, &a);
@@ -1996,7 +1996,7 @@ TestFunction(TestFlattenCommand){
         DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
         TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, arr, "", a);
         uint64_t root_id = nav_get_container_id(arr);
         bs_add(&nav.expanded, root_id, &a);
@@ -2020,7 +2020,7 @@ TestFunction(TestFlattenCommand){
         DrJsonValue obj = drjson_parse_string(ctx, json.text, json.length, 0);
         TestExpectEquals((int)obj.kind, DRJSON_OBJECT);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, obj, "", a);
         uint64_t root_id = nav_get_container_id(obj);
         bs_add(&nav.expanded, root_id, &a);
@@ -2039,7 +2039,7 @@ TestFunction(TestFlattenCommand){
         DrJsonValue arr = drjson_parse_string(ctx, json.text, json.length, 0);
         TestExpectEquals((int)arr.kind, DRJSON_ARRAY);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, arr, "", a);
 
         // Expand the root array
@@ -2692,7 +2692,7 @@ TestFunction(TestSearchCommand){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav;
+    JsonNav nav = {0};
     nav_init(&nav, ctx, root, "", a);
 
     // Test basic recursive search
@@ -2749,7 +2749,7 @@ TestFunction(TestStringifyCommand){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_ARRAY);
 
-    JsonNav nav;
+    JsonNav nav = {0};
     nav_init(&nav, ctx, root, "", a);
 
     // Expand the root array
@@ -2870,7 +2870,7 @@ TestFunction(TestParseCommand){
     {
         LongString json = LS("[\"42\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -2889,7 +2889,7 @@ TestFunction(TestParseCommand){
     {
         LongString json = LS("[\"true\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -2910,7 +2910,7 @@ TestFunction(TestParseCommand){
     {
         LongString json = LS("[\"null\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -2930,7 +2930,7 @@ TestFunction(TestParseCommand){
     {
         LongString json = LS("[\"{\\\"name\\\":\\\"Alice\\\"}\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -2949,7 +2949,7 @@ TestFunction(TestParseCommand){
     {
         LongString json = LS("[\"[1,2,3]\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -2969,7 +2969,7 @@ TestFunction(TestParseCommand){
     {
         LongString json = LS("[\"invalid\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -2993,7 +2993,7 @@ TestFunction(TestParseCommand){
         // After parse: object with text field (DrJson keeps escapes internally)
         LongString json = LS("[\"{\\\"text\\\":\\\"Line1\\\\\\\\nLine2\\\\\\\\tTabbed\\\"}\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -3033,7 +3033,7 @@ TestFunction(TestParseCommand){
         // After parse: object with emoji field containing UTF-8 encoded emoji
         LongString json = LS("[\"{\\\"emoji\\\":\\\"\\\\\\\\uD83D\\\\\\\\uDE00\\\"}\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -3053,7 +3053,7 @@ TestFunction(TestParseCommand){
     {
         LongString json = LS("[123]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -3070,7 +3070,7 @@ TestFunction(TestParseCommand){
         // String with invalid escape \x (single backslash-x is not valid JSON)
         LongString json = LS("[\"Invalid\\x\"]");
         DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "", a);
         uint64_t root_id = nav_get_container_id(root);
         bs_add(&nav.expanded, root_id, &a);
@@ -3100,7 +3100,7 @@ TestFunction(TestStringifyParseRoundtrip){
     DrJsonValue root = drjson_parse_string(ctx, json.text, json.length, 0);
     TestExpectEquals((int)root.kind, DRJSON_ARRAY);
 
-    JsonNav nav;
+    JsonNav nav = {0};
     nav_init(&nav, ctx, root, "", a);
 
     // Expand the root array
@@ -5086,7 +5086,7 @@ TestFunction(TestBraceless){
         DrJsonValue root = drjson_parse_string(ctx, json, strlen(json), 0);
         TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "test.json", a);
         nav.was_opened_with_braceless = true;  // Mark as opened with --braceless
         nav_rebuild(&nav);
@@ -5121,7 +5121,7 @@ TestFunction(TestBraceless){
         DrJsonValue root = drjson_parse_string(ctx, json, strlen(json), 0);
         TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, root, "test.json", a);
         nav.was_opened_with_braceless = false;  // Not opened with --braceless
         nav_rebuild(&nav);
@@ -5173,7 +5173,7 @@ TestFunction(TestBracelessReload){
     close(fd);
 
     // Load file with braceless
-    JsonNav nav;
+    JsonNav nav = {0};
     nav_init(&nav, ctx, drjson_make_null(), tmpfile, a);
     int err = nav_load_file(&nav, tmpfile, true, false);
     TestExpectEquals(err, CMD_OK);
@@ -5222,7 +5222,7 @@ TestFunction(TestBracelessWriteFlags){
     DrJsonValue root = drjson_parse_string(ctx, json, strlen(json), 0);
     TestExpectEquals((int)root.kind, DRJSON_OBJECT);
 
-    JsonNav nav;
+    JsonNav nav = {0};
     nav_init(&nav, ctx, root, "test.json", a);
     nav.was_opened_with_braceless = false;  // Opened with braces
     nav_rebuild(&nav);
@@ -5319,7 +5319,7 @@ TestFunction(TestBracelessOpen){
 
     // Test 1: Open with --braceless flag
     {
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, drjson_make_null(), "dummy.json", a);
 
         int result = test_execute_commandf(&nav, "open --braceless %s", tmpfile);
@@ -5338,7 +5338,7 @@ TestFunction(TestBracelessOpen){
 
     // Test 2: Open without --braceless flag on braceless file should fail
     {
-        JsonNav nav;
+        JsonNav nav = {0};
         nav_init(&nav, ctx, drjson_make_null(), "dummy.json", a);
 
         int result = test_execute_commandf(&nav, "open %s", tmpfile);

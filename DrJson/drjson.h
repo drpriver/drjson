@@ -312,6 +312,13 @@ drjson_eq(DrJsonValue a, DrJsonValue b){
     }
 }
 
+//
+// This outputs the internal drjson representation of the string, which means
+// that it contains escape sequences instead of control characters and special
+// characters.
+// To get what that string represents, use `drjson_unescape_string_value()`
+// with a buffer you provide instead.
+//
 DRJSON_API
 DRJSON_WARN_UNUSED
 int // returns 1 on error (not an atom)
@@ -794,6 +801,17 @@ DRJSON_API
 DRJSON_WARN_UNUSED
 int
 drjson_unescape_string(const char* restrict escaped, size_t length, char* restrict outstring, size_t* restrict outlength);
+
+
+//
+// Converts a string into its unescaped form (\n converted to newline, etc.)
+//
+// Returns 0 on succcess, 1 on error.
+//
+DRJSON_API
+DRJSON_WARN_UNUSED
+int
+drjson_unescape_string_value(DrJsonContext* ctx, DrJsonValue v, char* restrict buff, size_t buffsize, size_t* restrict outlength);
 
 // Normalize user input from TUI editor (liberal unescape + strict escape in single pass)
 // This handles user input where:

@@ -757,9 +757,15 @@ nav_rebuild_recursive(JsonNav* nav, DrJsonValue val, int depth, DrJsonAtom key, 
     }
 }
 
+// NOTE
+// Expects nav to already be zero-initialized.
 static inline
 void
-nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filename, DrJsonAllocator allocator){
+nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char*_Nullable filename, DrJsonAllocator allocator){
+    nav->jctx = jctx;
+    nav->root = root;
+    nav->allocator = allocator;
+    nav->needs_rebuild = 1;
     *nav = (JsonNav){
         .jctx = jctx,
         .root = root,
@@ -772,9 +778,6 @@ nav_init(JsonNav* nav, DrJsonContext* jctx, DrJsonValue root, const char* filena
         if(len >= sizeof nav->filename) len = sizeof nav->filename - 1;
         memcpy(nav->filename, filename, len);
         nav->filename[len] = '\0';
-    }
-    else {
-        nav->filename[0] = '\0';
     }
     // Expand root document by default if it's a container
     if(nav_is_container(root)){
@@ -3887,25 +3890,16 @@ cmd_parse(JsonNav* nav, CmdArgs* args){
         return CMD_ERROR;
     }
 
-    // Get string content
-    const char* str;
-    size_t str_len;
-    int err = drjson_get_str_and_len(nav->jctx, item->value, &str, &str_len);
-    if(err){
-        nav_set_messagef(nav, "Error: Failed to get string content");
+    int64_t str_len = drjson_len(nav->jctx, item->value);
+    if(str_len <= 0)
         return CMD_ERROR;
-    }
-
-    // Unescape the string (handles \n, \t, \", \\, \uXXXX, etc.)
-    // Allocate buffer for unescaped string (always <= original length)
     char* unescaped = nav->allocator.alloc(nav->allocator.user_pointer, str_len);
     if(!unescaped){
         nav_set_messagef(nav, "Error: Failed to allocate memory for unescaping");
         return CMD_ERROR;
     }
-
     size_t unescaped_len;
-    err = drjson_unescape_string(str, str_len, unescaped, &unescaped_len);
+    int err = drjson_unescape_string_value(nav->jctx, item->value, unescaped, str_len, &unescaped_len);
     if(err){
         nav->allocator.free(nav->allocator.user_pointer, unescaped, str_len);
         nav_set_messagef(nav, "Error: Invalid escape sequences in string");
@@ -7409,7 +7403,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
         return 1;
     }
     // Initialize navigation
-    JsonNav nav;
+    JsonNav nav = {0};
     nav_init(&nav, jctx, document, jsonpath.text, allocator);
     nav.was_opened_with_braceless = braceless;  // Track initial file's braceless state
     nav.was_opened_with_ndjson = ndjson;  // Track initial file's ndjson state
@@ -7437,16 +7431,10 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                 int64_t len = drjson_len(jctx, cmd_hist);
                 for(int64_t i = 0; i < len; i++){
                     DrJsonValue cmd = drjson_get_by_index(jctx, cmd_hist, i);
-                    int err;
-                    const char* cmd_str;
-                    size_t cmd_len;
-                    char buffer[512];
-                    err = drjson_get_str_and_len(jctx, cmd, &cmd_str, &cmd_len);
+                    char buff[512]; size_t len;
+                    int err = drjson_unescape_string_value(jctx, cmd, buff, sizeof buff, &len);
                     if(err) continue;
-                    if(cmd_len >= sizeof buffer) continue;
-                    err = drjson_unescape_string(cmd_str, cmd_len, buffer, &cmd_len);
-                    if(err) continue;
-                    le_history_add(&nav.command_history, buffer, cmd_len);
+                    le_history_add(&nav.command_history, buff, len);
                 }
             }
 
@@ -7456,16 +7444,10 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                 int64_t len = drjson_len(jctx, search_hist);
                 for(int64_t i = 0; i < len; i++){
                     DrJsonValue search = drjson_get_by_index(jctx, search_hist, i);
-                    const char* search_str;
-                    size_t search_len;
-                    int err;
-                    char buffer[512];
-                    err = drjson_get_str_and_len(jctx, search, &search_str, &search_len);
+                    char buff[512]; size_t len;
+                    int err = drjson_unescape_string_value(jctx, search, buff, sizeof buff, &len);
                     if(err) continue;
-                    if(search_len >= sizeof buffer) continue;
-                    err = drjson_unescape_string(search_str, search_len, buffer, &search_len);
-                    if(err) continue;
-                    le_history_add(&nav.search_history, buffer, search_len);
+                    le_history_add(&nav.search_history, buff, len);
                 }
             }
             DrJsonValue last_file_val = drjson_checked_query(jctx, state, DRJSON_STRING, "last_file", 9);

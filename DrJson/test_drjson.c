@@ -261,18 +261,18 @@ TestFunction(TestIntern){
 TestFunction(TestDoubleParsing){
     TESTBEGIN();
     struct {
-        const char* example;
+        StringView example;
         double value;
     }cases[] = {
-#define T(x) {#x, x}
+#define T(x) {SV(#x), x}
     T(12.), T(12.e12), T(12128123.12),
     T(-0.), T(0.), T(12182312837182371.),
     T(.111), T(0.1),T(1.),
     };
     for(size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++){
-        const char* example = cases[i].example;
+        StringView example = cases[i].example;
         DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
-        DrJsonValue v = drjson_parse_string(ctx, example, strlen(example), DRJSON_PARSE_FLAG_NO_COPY_STRINGS);
+        DrJsonValue v = drjson_parse_string(ctx, example.text, example.length, DRJSON_PARSE_FLAG_NO_COPY_STRINGS);
         TestAssertNotEqual((int)v.kind, DRJSON_ERROR);
         TestAssertEquals((int)v.kind, DRJSON_NUMBER);
         TestAssertEquals(v.number, cases[i].value);
@@ -290,9 +290,9 @@ str_eq(const char* a, const char* b){
 
 TestFunction(TestSerialization){
     TESTBEGIN();
-    const char* example = "{foo {bar {bazinga 3}}}";
+    StringView example = SV("{foo {bar {bazinga 3}}}");
     DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
-    DrJsonValue v = drjson_parse_string(ctx, example, strlen(example), 0);
+    DrJsonValue v = drjson_parse_string(ctx, example.text, example.length, 0);
     TestAssertNotEqual((int)v.kind, DRJSON_ERROR);
     char buff[512];
     size_t printed;
@@ -317,9 +317,9 @@ TestFunction(TestSerialization){
 
 TestFunction(TestPrettyPrint){
     TESTBEGIN();
-    const char* example = "{foo 0x3}";
+    StringView example = SV("{foo 0x3}");
     DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
-    DrJsonValue v = drjson_parse_string(ctx, example, strlen(example), 0);
+    DrJsonValue v = drjson_parse_string(ctx, example.text, example.length, 0);
     TestAssertNotEqual((int)v.kind, DRJSON_ERROR);
     char buff[512];
     size_t printed;
@@ -412,37 +412,37 @@ TestFunction(TestTrailingContent){
 
     // Test 1: Parse with trailing content without flag should succeed
     {
-        const char* json = "\"hello\" \"world\"";
-        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), 0);
+        StringView json = SV("\"hello\" \"world\"");
+        DrJsonValue result = drjson_parse_string(ctx, json.text, json.length, 0);
         TestAssertEquals((int)result.kind, DRJSON_STRING);
     }
 
     // Test 2: Parse with trailing content with flag should error
     {
-        const char* json = "\"hello\" \"world\"";
-        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
+        StringView json = SV("\"hello\" \"world\"");
+        DrJsonValue result = drjson_parse_string(ctx, json.text, json.length, DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
         TestAssertEquals((int)result.kind, DRJSON_ERROR);
         TestAssertEquals(result.error_code, DRJSON_ERROR_TRAILING_CONTENT);
     }
 
     // Test 3: Parse without trailing content with flag should succeed
     {
-        const char* json = "{\"name\": \"Alice\"}";
-        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
+        StringView json = SV("{\"name\": \"Alice\"}");
+        DrJsonValue result = drjson_parse_string(ctx, json.text, json.length, DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
         TestAssertEquals((int)result.kind, DRJSON_OBJECT);
     }
 
     // Test 4: Parse with trailing whitespace with flag should succeed
     {
-        const char* json = "{\"name\": \"Alice\"}   \n  ";
-        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
+        StringView json = SV("{\"name\": \"Alice\"}   \n  ");
+        DrJsonValue result = drjson_parse_string(ctx, json.text, json.length, DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
         TestAssertEquals((int)result.kind, DRJSON_OBJECT);
     }
 
     // Test 5: Array with trailing comma/content should error
     {
-        const char* json = "[1, 2, 3], 4";
-        DrJsonValue result = drjson_parse_string(ctx, json, strlen(json), DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
+        StringView json = SV("[1, 2, 3], 4");
+        DrJsonValue result = drjson_parse_string(ctx, json.text, json.length, DRJSON_PARSE_FLAG_ERROR_ON_TRAILING);
         TestAssertEquals((int)result.kind, DRJSON_ERROR);
         TestAssertEquals(result.error_code, DRJSON_ERROR_TRAILING_CONTENT);
     }
@@ -490,8 +490,8 @@ TestFunction(TestUnescape){
 
     // Test 1: Simple escape sequences
     {
-        const char* input = "Hello\\nWorld\\t!";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("Hello\\nWorld\\t!");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
         TestAssertEquals((int)out_len, 13); // 11 chars + newline + tab
         TestAssertEquals(output[5], '\n');
@@ -500,17 +500,17 @@ TestFunction(TestUnescape){
 
     // Test 2: Quote and backslash escapes
     {
-        const char* input = "Say \\\"Hello\\\" with\\\\backslash";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("Say \\\"Hello\\\" with\\\\backslash");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        const char* expected = "Say \"Hello\" with\\backslash";
-        TestExpectEquals2(str_eq, output, expected);
+        StringView expected = SV("Say \"Hello\" with\\backslash");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), expected);
     }
 
     // Test 3: All basic escape sequences
     {
-        const char* input = "\\b\\f\\n\\r\\t\\\"\\\\\\/";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("\\b\\f\\n\\r\\t\\\"\\\\\\/");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
         TestAssertEquals((int)out_len, 8);
         TestAssertEquals(output[0], '\b');
@@ -525,18 +525,17 @@ TestFunction(TestUnescape){
 
     // Test 4: Unicode escape (Basic Multilingual Plane)
     {
-        const char* input = "\\u0041\\u0042\\u0043"; // ABC
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("\\u0041\\u0042\\u0043"); // ABC
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
         TestAssertEquals((int)out_len, 3);
-        output[out_len] = '\0'; // null terminate for comparison
-        TestExpectEquals2(str_eq, output, "ABC");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("ABC"));
     }
 
     // Test 5: Unicode escape (non-ASCII)
     {
-        const char* input = "\\u00A9"; // © copyright symbol
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("\\u00A9"); // © copyright symbol
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
         // UTF-8 encoding of U+00A9 is 0xC2 0xA9
         TestAssertEquals((int)out_len, 2);
@@ -546,8 +545,8 @@ TestFunction(TestUnescape){
 
     // Test 6: UTF-16 surrogate pair (emoji)
     {
-        const char* input = "\\uD83D\\uDE00"; // 😀 grinning face
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("\\uD83D\\uDE00"); // 😀 grinning face
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
         // UTF-8 encoding of U+1F600 is 0xF0 0x9F 0x98 0x80
         TestAssertEquals((int)out_len, 4);
@@ -559,63 +558,61 @@ TestFunction(TestUnescape){
 
     // Test 7: The problematic JSON object string from our use case
     {
-        const char* input = "{\\\"name\\\":\\\"Alice\\\"}";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("{\\\"name\\\":\\\"Alice\\\"}");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        output[out_len] = '\0'; // null terminate for comparison
-        TestExpectEquals2(str_eq, output, "{\"name\":\"Alice\"}");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("{\"name\":\"Alice\"}"));
     }
 
     // Test 8: No escapes (SIMD/SWAR fast path)
     {
-        const char* input = "NoEscapesHereJustPlainText1234567890ABCDEFGHIJKLMNOP";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("NoEscapesHereJustPlainText1234567890ABCDEFGHIJKLMNOP");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, (int)strlen(input));
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, input);
+        TestAssertEquals((int)out_len, (int)input.length);
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), input);
     }
 
     // Test 9: Error cases - trailing backslash
     {
-        const char* input = "Hello\\";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("Hello\\");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 1); // Should return error
     }
 
     // Test 10: Error cases - invalid escape
     {
-        const char* input = "Hello\\x";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("Hello\\x");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 1); // Should return error
     }
 
     // Test 11: Error cases - incomplete unicode escape
     {
-        const char* input = "\\u00";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("\\u00");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 1); // Should return error
     }
 
     // Test 12: Error cases - invalid hex digit
     {
-        const char* input = "\\u00GG";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("\\u00GG");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 1); // Should return error
     }
 
     // Test 13: Empty string
     {
-        const char* input = "";
-        err = drjson_unescape_string(input, 0, output, &out_len);
+        StringView input = SV("");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
         TestAssertEquals((int)out_len, 0);
     }
 
     // Test 14: Mixed content with escape in the middle (triggers SIMD then scalar)
     {
-        const char* input = "0123456789ABCDEF\\n0123456789ABCDEF";
-        err = drjson_unescape_string(input, strlen(input), output, &out_len);
+        StringView input = SV("0123456789ABCDEF\\n0123456789ABCDEF");
+        err = drjson_unescape_string(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
         TestAssertEquals(output[16], '\n');
         TestAssertEquals((int)out_len, 33); // 32 chars + 1 newline
@@ -633,143 +630,114 @@ TestFunction(TestNormalizeInput){
 
     // Test 1: Valid escape sequence - should pass through
     {
-        const char* input = "foo\\nbar";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\\nbar");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 8);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\nbar");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\nbar"));
     }
 
     // Test 2: Invalid escape sequence - backslash should be escaped
     {
-        const char* input = "foo\\xbar";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\\xbar");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 9); // foo\\xbar = 9 chars
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\\\xbar");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\\\xbar"));
     }
 
     // Test 3: Unescaped quote - should be escaped
     {
-        const char* input = "foo\"bar";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\"bar");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 8); // foo\"bar = 8 chars
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\\"bar");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\\"bar"));
     }
 
     // Test 4: Valid escaped quote - should pass through
     {
-        const char* input = "foo\\\"bar";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\\\"bar");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 8);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\\"bar");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\\"bar"));
     }
 
     // Test 5: Valid escaped backslash - should pass through
     {
-        const char* input = "foo\\\\bar";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\\\\bar");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 8);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\\\bar");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\\\bar"));
     }
 
     // Test 6: All valid escape sequences
     {
-        const char* input = "\\n\\t\\r\\b\\f\\\"\\\\\\/";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("\\n\\t\\r\\b\\f\\\"\\\\\\/");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 16);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "\\n\\t\\r\\b\\f\\\"\\\\\\/");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("\\n\\t\\r\\b\\f\\\"\\\\\\/"));
     }
 
     // Test 7: Valid unicode escape
     {
-        const char* input = "foo\\u1234bar";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\\u1234bar");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 12);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\u1234bar");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\u1234bar"));
     }
 
     // Test 8: Invalid unicode escape (not enough digits)
     {
-        const char* input = "foo\\u12gz";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\\u12gz");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        // Backslash should be escaped: foo\\u12gz
-        TestAssertEquals((int)out_len, 10);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\\\u12gz");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\\\u12gz"));
     }
 
     // Test 9: Invalid unicode escape (non-hex digit immediately)
     {
-        const char* input = "foo\\uXYZW";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\\uXYZW");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        // Backslash should be escaped: foo\\uXYZW
-        TestAssertEquals((int)out_len, 10);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\\\uXYZW");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\\\uXYZW"));
     }
 
     // Test 10: Trailing backslash - should be escaped
     {
-        const char* input = "foo\\";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("foo\\");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 5); // foo\\ = 5 chars
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "foo\\\\");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("foo\\\\"));
     }
 
     // Test 11: Empty string
     {
-        const char* input = "";
-        err = drjson_normalize_user_input(input, 0, output, &out_len);
+        StringView input = SV("");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 0);
+        TestAssertEquals(out_len, 0);
     }
 
     // Test 12: Only normal characters
     {
-        const char* input = "HelloWorld123";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("HelloWorld123");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 13);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "HelloWorld123");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("HelloWorld123"));
     }
 
     // Test 13: Multiple quotes
     {
-        const char* input = "a\"b\"c\"d";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("a\"b\"c\"d");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 10); // a\"b\"c\"d = 10 chars
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "a\\\"b\\\"c\\\"d");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("a\\\"b\\\"c\\\"d"));
     }
 
     // Test 14: Mixed valid and invalid escapes
     {
-        const char* input = "valid\\nnext\\xinvalid";
-        err = drjson_normalize_user_input(input, strlen(input), output, &out_len);
+        StringView input = SV("valid\\nnext\\xinvalid");
+        err = drjson_normalize_user_input(input.text, input.length, output, &out_len);
         TestAssertEquals(err, 0);
-        // valid\nnext\\xinvalid
-        TestAssertEquals((int)out_len, 21);
-        output[out_len] = '\0';
-        TestExpectEquals2(str_eq, output, "valid\\nnext\\\\xinvalid");
+        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("valid\\nnext\\\\xinvalid"));
     }
 
     assert_all_freed();
@@ -2318,8 +2286,8 @@ TestFunction(TestNDJSONRoundTrip){
     DrJsonContext* ctx = drjson_create_ctx(get_test_allocator());
 
     // Test data with nested arrays to ensure proper handling
-    const char* input = "{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"age\":25,\"hobbies\":[\"golf\",\"surfing\"]}\n{\"name\":\"Charlie\",\"age\":35}";
-    DrJsonValue parsed = drjson_parse_string(ctx, input, strlen(input), DRJSON_PARSE_FLAG_NDJSON);
+    StringView input = SV("{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"age\":25,\"hobbies\":[\"golf\",\"surfing\"]}\n{\"name\":\"Charlie\",\"age\":35}");
+    DrJsonValue parsed = drjson_parse_string(ctx, input.text, input.length, DRJSON_PARSE_FLAG_NDJSON);
     TestAssertEquals(parsed.kind, DRJSON_ARRAY);
     int64_t array_len = drjson_len(ctx, parsed);
     TestAssertEquals(array_len, 3);
@@ -2416,8 +2384,8 @@ TestFunction(TestNDJSONRoundTrip){
 
     // Test 5: NDJSON with non-object values (arrays, strings, numbers, etc.)
     {
-        const char* mixed_input = "42\n\"hello\"\ntrue\nnull\n[1,2,3]\n{\"key\":\"value\"}";
-        DrJsonValue mixed_parsed = drjson_parse_string(ctx, mixed_input, strlen(mixed_input), DRJSON_PARSE_FLAG_NDJSON);
+        StringView mixed_input = SV("42\n\"hello\"\ntrue\nnull\n[1,2,3]\n{\"key\":\"value\"}");
+        DrJsonValue mixed_parsed = drjson_parse_string(ctx, mixed_input.text, mixed_input.length, DRJSON_PARSE_FLAG_NDJSON);
         TestAssertEquals(mixed_parsed.kind, DRJSON_ARRAY);
         TestAssertEquals(drjson_len(ctx, mixed_parsed), 6);
 
