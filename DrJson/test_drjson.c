@@ -484,138 +484,120 @@ TestFunction(TestEscape){
 TestFunction(TestUnescape){
     TESTBEGIN();
 
+    struct {
+        StringView input, expected;
+        _Bool error;
+    } test_cases[] = {
+        // Test 1: Simple escape sequences
+        {
+            .input = SV("Hello\\nWorld\\t!"),
+            .expected = SV("Hello\nWorld\t!")
+        },
+        // Test 2: Quote and backslash escapes
+        {
+            .input = SV("Say \\\"Hello\\\" with\\\\backslash"),
+            .expected = SV("Say \"Hello\" with\\backslash")
+        },
+        // Test 3: All basic escape sequences
+        {
+            .input = SV("\\b\\f\\n\\r\\t\\\"\\\\\\/"),
+            .expected = SV("\b\f\n\r\t\"\\/")
+        },
+        {
+        // Test 4: Unicode escape (Basic Multilingual Plane)
+            .input = SV("\\u0041\\u0042\\u0043"), // ABC
+            .expected = SV("ABC"),
+        },
+        {
+        // Test 5: Unicode escape (non-ASCII)
+            .input = SV("\\u00A9"), // © copyright symbol
+            .expected = SV("\u00A9"), // © copyright symbol
+        },
+        {
+        // Test 6: UTF-16 surrogate pair (emoji)
+            .input = SV("\\uD83D\\uDE00"), // 😀 grinning face
+            .expected = SV("😀")
+        },
+        {
+        // Test 7: The problematic JSON object string from our use case
+            .input = SV("{\\\"name\\\":\\\"Alice\\\"}"),
+            .expected = SV("{\"name\":\"Alice\"}"),
+        },
+        // Test 8: No escapes (SIMD/SWAR fast path)
+        {
+            .input = SV("NoEscapesHereJustPlainText1234567890ABCDEFGHIJKLMNOP"),
+            .expected = SV("NoEscapesHereJustPlainText1234567890ABCDEFGHIJKLMNOP"),
+        },
+        // Test 9: Error cases - trailing backslash
+        {
+            .input = SV("Hello\\"),
+            .error = 1,
+        },
+
+        // Test 10: Error cases - invalid escape
+        {
+            .input = SV("Hello\\x"),
+            .error = 1,
+        },
+
+        // Test 11: Error cases - incomplete unicode escape
+        {
+            .input = SV("\\u00"),
+            .error = 1,
+        },
+
+        // Test 12: Error cases - invalid hex digit
+        {
+            .input = SV("\\u00GG"),
+            .error = 1,
+        },
+        // Test 13: Empty string
+        {
+            .input = SV(""),
+            .expected = SV(""),
+        },
+        // Test 14: Mixed content with escape in the middle (SIMD + scalar)
+        {
+            .input = SV("0123456789ABCDEF\\n0123456789ABCDEF"),
+            .expected = SV("0123456789ABCDEF\n0123456789ABCDEF"),
+        },
+        // Test 15: Mixed content with escape on the edge of a simd chunk
+        {
+            .input = SV("0123456789ABCDE\\n0123456789ABCDEF"),
+            .expected = SV("0123456789ABCDE\n0123456789ABCDEF"),
+        },
+        {
+            .input = SV("0123456789ABCD\\\\n0123456789ABCDEF"),
+            .expected = SV("0123456789ABCD\\n0123456789ABCDEF"),
+        },
+        {
+            .input = SV("0123456789ABCDE\\\\n0123456789ABCDEF"),
+            .expected = SV("0123456789ABCDE\\n0123456789ABCDEF"),
+        },
+        {
+            .input = SV("0123456789ABCDE\\"),
+            .error = 1,
+        },
+    };
+
     char output[256];
     size_t out_len;
     int err;
-
-    // Test 1: Simple escape sequences
-    {
-        StringView input = SV("Hello\\nWorld\\t!");
+    for(size_t i = 0; i < sizeof test_cases / sizeof test_cases[0]; i++){
+        StringView input = test_cases[i].input;
+        StringView expected = test_cases[i].expected;
         err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 13); // 11 chars + newline + tab
-        TestAssertEquals(output[5], '\n');
-        TestAssertEquals(output[11], '\t');
-    }
-
-    // Test 2: Quote and backslash escapes
-    {
-        StringView input = SV("Say \\\"Hello\\\" with\\\\backslash");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        StringView expected = SV("Say \"Hello\" with\\backslash");
-        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), expected);
-    }
-
-    // Test 3: All basic escape sequences
-    {
-        StringView input = SV("\\b\\f\\n\\r\\t\\\"\\\\\\/");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 8);
-        TestAssertEquals(output[0], '\b');
-        TestAssertEquals(output[1], '\f');
-        TestAssertEquals(output[2], '\n');
-        TestAssertEquals(output[3], '\r');
-        TestAssertEquals(output[4], '\t');
-        TestAssertEquals(output[5], '"');
-        TestAssertEquals(output[6], '\\');
-        TestAssertEquals(output[7], '/');
-    }
-
-    // Test 4: Unicode escape (Basic Multilingual Plane)
-    {
-        StringView input = SV("\\u0041\\u0042\\u0043"); // ABC
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 3);
-        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("ABC"));
-    }
-
-    // Test 5: Unicode escape (non-ASCII)
-    {
-        StringView input = SV("\\u00A9"); // © copyright symbol
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        // UTF-8 encoding of U+00A9 is 0xC2 0xA9
-        TestAssertEquals((int)out_len, 2);
-        TestAssertEquals((unsigned char)output[0], 0xC2);
-        TestAssertEquals((unsigned char)output[1], 0xA9);
-    }
-
-    // Test 6: UTF-16 surrogate pair (emoji)
-    {
-        StringView input = SV("\\uD83D\\uDE00"); // 😀 grinning face
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        // UTF-8 encoding of U+1F600 is 0xF0 0x9F 0x98 0x80
-        TestAssertEquals((int)out_len, 4);
-        TestAssertEquals((unsigned char)output[0], 0xF0);
-        TestAssertEquals((unsigned char)output[1], 0x9F);
-        TestAssertEquals((unsigned char)output[2], 0x98);
-        TestAssertEquals((unsigned char)output[3], 0x80);
-    }
-
-    // Test 7: The problematic JSON object string from our use case
-    {
-        StringView input = SV("{\\\"name\\\":\\\"Alice\\\"}");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), SV("{\"name\":\"Alice\"}"));
-    }
-
-    // Test 8: No escapes (SIMD/SWAR fast path)
-    {
-        StringView input = SV("NoEscapesHereJustPlainText1234567890ABCDEFGHIJKLMNOP");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, (int)input.length);
-        TestExpectEquals2(SV_equals, ((StringView){out_len, output}), input);
-    }
-
-    // Test 9: Error cases - trailing backslash
-    {
-        StringView input = SV("Hello\\");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 1); // Should return error
-    }
-
-    // Test 10: Error cases - invalid escape
-    {
-        StringView input = SV("Hello\\x");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 1); // Should return error
-    }
-
-    // Test 11: Error cases - incomplete unicode escape
-    {
-        StringView input = SV("\\u00");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 1); // Should return error
-    }
-
-    // Test 12: Error cases - invalid hex digit
-    {
-        StringView input = SV("\\u00GG");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 1); // Should return error
-    }
-
-    // Test 13: Empty string
-    {
-        StringView input = SV("");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        TestAssertEquals((int)out_len, 0);
-    }
-
-    // Test 14: Mixed content with escape in the middle (triggers SIMD then scalar)
-    {
-        StringView input = SV("0123456789ABCDEF\\n0123456789ABCDEF");
-        err = drjson_unescape_string(input.text, input.length, output, &out_len);
-        TestAssertEquals(err, 0);
-        TestAssertEquals(output[16], '\n');
-        TestAssertEquals((int)out_len, 33); // 32 chars + 1 newline
+        if(test_cases[i].error){
+            TestExpectEquals(err, 1);
+        }
+        else{
+            if(err){
+                TestPrintValue("input", input);
+                TestPrintValue("expected", expected);
+            }
+            TestAssertEquals(err, 0);
+            TestExpectEquals2(SV_equals, ((StringView){out_len, output}), expected);
+        }
     }
 
     assert_all_freed();

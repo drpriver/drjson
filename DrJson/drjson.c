@@ -3177,8 +3177,110 @@ drjson_unescape_string(const char* restrict escaped, size_t length, char* restri
             out_pos += DRJ_SIMD_WIDTH;
         }
         else {
-            // Found backslash(es), handle byte by byte
-            break;
+            // Found backslash(es), process this chunk byte by byte
+            // Copy bytes up to and including escape sequences, then continue SIMD
+            size_t chunk_start = in_pos;
+            size_t chunk_end = chunk_start + DRJ_SIMD_WIDTH;
+
+            while(in_pos < chunk_end){
+                char c = escaped[in_pos++];
+
+                if(c != '\\'){
+                    outstring[out_pos++] = c;
+                    continue;
+                }
+
+                // Handle escape sequence
+                if(in_pos >= length) return 1; // Trailing backslash
+
+                char escape = escaped[in_pos++];
+                switch(escape){
+                    case '"':  outstring[out_pos++] = '"'; break;
+                    case '\\': outstring[out_pos++] = '\\'; break;
+                    case '/':  outstring[out_pos++] = '/'; break;
+                    case 'b':  outstring[out_pos++] = '\b'; break;
+                    case 'f':  outstring[out_pos++] = '\f'; break;
+                    case 'n':  outstring[out_pos++] = '\n'; break;
+                    case 'r':  outstring[out_pos++] = '\r'; break;
+                    case 't':  outstring[out_pos++] = '\t'; break;
+                    case 'u': {
+                        // Unicode escape: \uXXXX
+                        if(in_pos + 4 > length) return 1;
+
+                        // Parse 4 hex digits
+                        uint32_t codepoint = 0;
+                        for(int i = 0; i < 4; i++){
+                            char hex = escaped[in_pos++];
+                            uint32_t digit;
+                            if(hex >= '0' && hex <= '9')
+                                digit = hex - '0';
+                            else if(hex >= 'a' && hex <= 'f')
+                                digit = hex - 'a' + 10;
+                            else if(hex >= 'A' && hex <= 'F')
+                                digit = hex - 'A' + 10;
+                            else
+                                return 1; // Invalid hex digit
+                            codepoint = (codepoint << 4) | digit;
+                        }
+
+                        // Handle UTF-16 surrogate pairs
+                        if(codepoint >= 0xD800 && codepoint <= 0xDBFF){
+                            // High surrogate, expect low surrogate
+                            if(in_pos + 6 > length || escaped[in_pos] != '\\' || escaped[in_pos+1] != 'u')
+                                return 1;
+                            in_pos += 2;
+
+                            uint32_t low_surrogate = 0;
+                            for(int i = 0; i < 4; i++){
+                                char hex = escaped[in_pos++];
+                                uint32_t digit;
+                                if(hex >= '0' && hex <= '9')
+                                    digit = hex - '0';
+                                else if(hex >= 'a' && hex <= 'f')
+                                    digit = hex - 'a' + 10;
+                                else if(hex >= 'A' && hex <= 'F')
+                                    digit = hex - 'A' + 10;
+                                else
+                                    return 1;
+                                low_surrogate = (low_surrogate << 4) | digit;
+                            }
+
+                            if(low_surrogate < 0xDC00 || low_surrogate > 0xDFFF)
+                                return 1; // Invalid low surrogate
+
+                            // Combine surrogates into codepoint
+                            codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low_surrogate - 0xDC00);
+                        }
+
+                        // Encode as UTF-8
+                        if(codepoint <= 0x7F){
+                            outstring[out_pos++] = (char)codepoint;
+                        }
+                        else if(codepoint <= 0x7FF){
+                            outstring[out_pos++] = (char)(0xC0 | (codepoint >> 6));
+                            outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                        }
+                        else if(codepoint <= 0xFFFF){
+                            outstring[out_pos++] = (char)(0xE0 | (codepoint >> 12));
+                            outstring[out_pos++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                            outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                        }
+                        else if(codepoint <= 0x10FFFF){
+                            outstring[out_pos++] = (char)(0xF0 | (codepoint >> 18));
+                            outstring[out_pos++] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+                            outstring[out_pos++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                            outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                        }
+                        else {
+                            return 1; // Invalid codepoint
+                        }
+                        break;
+                    }
+                    default:
+                        return 1; // Invalid escape sequence
+                }
+            }
+            // Continue with SIMD for next chunk
         }
     }
     #endif
@@ -3204,14 +3306,115 @@ drjson_unescape_string(const char* restrict escaped, size_t length, char* restri
             out_pos += 8;
         }
         else {
-            // Found backslash, handle byte by byte
-            break;
+            // Found backslash, process this chunk byte by byte then continue SWAR
+            size_t chunk_start = in_pos;
+            size_t chunk_end = chunk_start + 8;
+
+            while(in_pos < chunk_end){
+                char c = escaped[in_pos++];
+
+                if(c != '\\'){
+                    outstring[out_pos++] = c;
+                    continue;
+                }
+
+                // Handle escape sequence
+                if(in_pos >= length) return 1; // Trailing backslash
+
+                char escape = escaped[in_pos++];
+                switch(escape){
+                    case '"':  outstring[out_pos++] = '"'; break;
+                    case '\\': outstring[out_pos++] = '\\'; break;
+                    case '/':  outstring[out_pos++] = '/'; break;
+                    case 'b':  outstring[out_pos++] = '\b'; break;
+                    case 'f':  outstring[out_pos++] = '\f'; break;
+                    case 'n':  outstring[out_pos++] = '\n'; break;
+                    case 'r':  outstring[out_pos++] = '\r'; break;
+                    case 't':  outstring[out_pos++] = '\t'; break;
+                    case 'u': {
+                        // Unicode escape: \uXXXX
+                        if(in_pos + 4 > length) return 1;
+
+                        // Parse 4 hex digits
+                        uint32_t codepoint = 0;
+                        for(int i = 0; i < 4; i++){
+                            char hex = escaped[in_pos++];
+                            uint32_t digit;
+                            if(hex >= '0' && hex <= '9')
+                                digit = hex - '0';
+                            else if(hex >= 'a' && hex <= 'f')
+                                digit = hex - 'a' + 10;
+                            else if(hex >= 'A' && hex <= 'F')
+                                digit = hex - 'A' + 10;
+                            else
+                                return 1; // Invalid hex digit
+                            codepoint = (codepoint << 4) | digit;
+                        }
+
+                        // Handle UTF-16 surrogate pairs
+                        if(codepoint >= 0xD800 && codepoint <= 0xDBFF){
+                            // High surrogate, expect low surrogate
+                            if(in_pos + 6 > length || escaped[in_pos] != '\\' || escaped[in_pos+1] != 'u')
+                                return 1;
+                            in_pos += 2;
+
+                            uint32_t low_surrogate = 0;
+                            for(int i = 0; i < 4; i++){
+                                char hex = escaped[in_pos++];
+                                uint32_t digit;
+                                if(hex >= '0' && hex <= '9')
+                                    digit = hex - '0';
+                                else if(hex >= 'a' && hex <= 'f')
+                                    digit = hex - 'a' + 10;
+                                else if(hex >= 'A' && hex <= 'F')
+                                    digit = hex - 'A' + 10;
+                                else
+                                    return 1;
+                                low_surrogate = (low_surrogate << 4) | digit;
+                            }
+
+                            if(low_surrogate < 0xDC00 || low_surrogate > 0xDFFF)
+                                return 1; // Invalid low surrogate
+
+                            // Combine surrogates into codepoint
+                            codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low_surrogate - 0xDC00);
+                        }
+
+                        // Encode as UTF-8
+                        if(codepoint <= 0x7F){
+                            outstring[out_pos++] = (char)codepoint;
+                        }
+                        else if(codepoint <= 0x7FF){
+                            outstring[out_pos++] = (char)(0xC0 | (codepoint >> 6));
+                            outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                        }
+                        else if(codepoint <= 0xFFFF){
+                            outstring[out_pos++] = (char)(0xE0 | (codepoint >> 12));
+                            outstring[out_pos++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                            outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                        }
+                        else if(codepoint <= 0x10FFFF){
+                            outstring[out_pos++] = (char)(0xF0 | (codepoint >> 18));
+                            outstring[out_pos++] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+                            outstring[out_pos++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                            outstring[out_pos++] = (char)(0x80 | (codepoint & 0x3F));
+                        }
+                        else {
+                            return 1; // Invalid codepoint
+                        }
+                        break;
+                    }
+                    default:
+                        return 1; // Invalid escape sequence
+                }
+            }
+            // Continue with SWAR for next chunk
         }
     }
     #endif
 #endif
 
-    // Scalar path: process remaining bytes or bytes with backslashes
+    // Scalar path: process remaining bytes
     while(in_pos < length){
         char c = escaped[in_pos++];
 
