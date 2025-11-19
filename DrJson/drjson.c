@@ -3153,10 +3153,9 @@ drjson_unescape_string(const char* restrict escaped, size_t length, char* restri
     size_t in_pos = 0;
     size_t out_pos = 0;
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(__wasm_simd128__)
+#if DRJ_HAVE_SIMD
     // SIMD path: scan for backslashes in 16-byte chunks
 
-    #if DRJ_HAVE_SIMD
     // Process 16 bytes at a time looking for backslashes
     while(in_pos + DRJ_SIMD_WIDTH <= length){
         #if defined(__SSE2__) || (defined(_M_X64) && !defined(__clang__))
@@ -3176,14 +3175,21 @@ drjson_unescape_string(const char* restrict escaped, size_t length, char* restri
                 if(((uint8_t*)mask_parts)[i])
                     mask |= (1 << i);
             }
+        #elif defined(__wasm_simd128__)
+            v128_t chunk = wasm_v128_load((const v128_t*)(escaped + in_pos));
+            v128_t backslash = wasm_i8x16_splat('\\');
+            v128_t cmp = wasm_i8x16_eq(chunk, backslash);
+            int mask = wasm_i8x16_bitmask(cmp);
         #endif
 
         if(mask == 0){
             // No backslashes in this chunk, copy directly
             #if defined(__SSE2__) || (defined(_M_X64) && !defined(__clang__))
                 _mm_storeu_si128((__m128i*)(outstring + out_pos), chunk);
-            #else
+            #elif defined(__ARM_NEON) || defined(__aarch64__)
                 vst1q_u8((uint8_t*)(outstring + out_pos), chunk);
+            #elif defined(__wasm_simd128__)
+                wasm_v128_store((v128_t*)(outstring + out_pos), chunk);
             #endif
             in_pos += DRJ_SIMD_WIDTH;
             out_pos += DRJ_SIMD_WIDTH;
@@ -3295,10 +3301,8 @@ drjson_unescape_string(const char* restrict escaped, size_t length, char* restri
             // Continue with SIMD for next chunk
         }
     }
-    #endif
-#else
+#elif defined(__LP64__) || defined(_WIN64)
     // SWAR path: scan for backslashes in 8-byte chunks using bit tricks
-    #if defined(__LP64__) || defined(_WIN64)
     while(in_pos + 8 <= length){
         uint64_t chunk;
         drj_memcpy(&chunk, escaped + in_pos, 8);
@@ -3423,7 +3427,6 @@ drjson_unescape_string(const char* restrict escaped, size_t length, char* restri
             // Continue with SWAR for next chunk
         }
     }
-    #endif
 #endif
 
     // Scalar path: process remaining bytes
