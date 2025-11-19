@@ -94,6 +94,42 @@ PyObject*_Nullable
 exception_from_error(DrJsonValue v);
 
 static
+void*_Nullable
+pydrj_malloc(void*_Nullable unused, size_t len){
+    (void)unused;
+    return PyMem_RawMalloc(len);
+}
+
+static
+void
+pydrj_free(void*_Nullable unused, const void*_Nullable p, size_t len){
+    (void)unused;
+    (void)len;
+    PyMem_RawFree((void*)p);
+}
+static
+void*_Nullable
+pydrj_realloc(void*_Nullable unused, void*_Nullable p, size_t oldsz, size_t newsz){
+    (void)unused;
+    (void)oldsz;
+    if(!newsz){
+        if(p) PyMem_RawFree(p);
+        return NULL;
+    }
+    if(!p) return PyMem_RawMalloc(newsz);
+    return PyMem_RawRealloc(p, newsz);
+}
+static
+DrJsonAllocator
+pydrj_allocator(void){
+    return (DrJsonAllocator){
+        .alloc = pydrj_malloc,
+        .realloc = pydrj_realloc,
+        .free = pydrj_free,
+    };
+}
+
+static
 PyObject* py_drjson_kinds[] = {
     [DRJSON_ERROR] = NULL,
     [DRJSON_NUMBER] = NULL,
@@ -364,7 +400,7 @@ DrjPyCtx_new(PyTypeObject* type, PyObject* args, PyObject* kwargs){
     DrjPyCtx* self = (DrjPyCtx*)type->tp_alloc(type, 0);
     if(!self) return NULL;
     self->ctx = (DrJsonContext){
-        .allocator = drjson_stdc_allocator(),
+        .allocator = pydrj_allocator(),
     };
     return (PyObject*)self;
 }
@@ -525,7 +561,7 @@ python_to_drj(DrJsonContext* ctx, PyObject* arg, int depth){
         return drjson_make_bool(0);
     if(PyUnicode_Check(arg)){
         StringView sv = pystring_borrow_stringview(arg);
-        DrJsonValue val = drjson_make_string(ctx, sv.text, sv.length);
+        DrJsonValue val = drjson_escape_string_to_value(ctx, sv.text, sv.length);
         return val;
     }
     if(PyLong_Check(arg)){
@@ -569,7 +605,7 @@ python_to_drj(DrJsonContext* ctx, PyObject* arg, int depth){
             StringView k = pystring_borrow_stringview(key);
             DrJsonValue v = python_to_drj(ctx, value, depth);
             if(v.kind == DRJSON_ERROR) return v;
-            if(drjson_object_set_item_copy_key(ctx, val, k.text, k.length, v))
+            if(drjson_object_set_item_escape_key(ctx, val, k.text, k.length, v))
                 return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to set object item");
         }
         return val;
@@ -1127,7 +1163,7 @@ DrjVal_ass_subscript(PyObject* s, PyObject* key, PyObject* v){
             return -1;
         }
         StringView sv = pystring_borrow_stringview(key);
-        int err = drjson_object_set_item_copy_key(&self->ctx->ctx, self->value, sv.text, sv.length, val);
+        int err = drjson_object_set_item_escape_key(&self->ctx->ctx, self->value, sv.text, sv.length, val);
         if(err){
             PyErr_SetString(PyExc_Exception, "error when setting (oom?)");
             return -1;
@@ -1240,10 +1276,22 @@ drj_to_python(DrJsonContext* ctx, DrJsonValue v){
         case DRJSON_UINTEGER:
             return PyLong_FromUnsignedLongLong(v.uinteger);
         case DRJSON_STRING:{
-            const char* string = ""; size_t len = 0;
-            int err = drjson_get_str_and_len(ctx, v, &string, &len);
-            (void)err;
-            return PyUnicode_FromStringAndSize(string, len);
+            size_t len = drjson_len(ctx, v);
+            char* tmp = PyMem_RawMalloc(len);
+            if(!tmp){
+                PyErr_SetString(PyExc_MemoryError, "OOM allocating temp buffer");
+                return NULL;
+            }
+            size_t slen;
+            int err = drjson_unescape_string_value(ctx, v, tmp, len, &slen);
+            if(err){
+                PyMem_RawFree(tmp);
+                PyErr_SetString(PyExc_Exception, "Error unescaping string");
+                return NULL;
+            }
+            PyObject* result = PyUnicode_FromStringAndSize(tmp, slen);
+            PyMem_RawFree(tmp);
+            return result;
         }break;
         case DRJSON_ARRAY_VIEW:
         case DRJSON_OBJECT_KEYS:
@@ -1302,7 +1350,7 @@ pydrj_parse(PyObject* mod, PyObject* args, PyObject* kwargs){
     DrjPyCtx* self = (DrjPyCtx*)type->tp_alloc(type, 0);
     if(!self) return NULL;
     self->ctx = (DrJsonContext){
-        .allocator = drjson_stdc_allocator(),
+        .allocator = pydrj_allocator(),
     };
     PyObject* ret = DrjPyCtx_parse((PyObject*)self, args, kwargs);
     Py_DECREF(self);
@@ -1317,7 +1365,7 @@ pydrj_load(PyObject* mod, PyObject* args, PyObject* kwargs){
     DrjPyCtx* self = (DrjPyCtx*)type->tp_alloc(type, 0);
     if(!self) return NULL;
     self->ctx = (DrJsonContext){
-        .allocator = drjson_stdc_allocator(),
+        .allocator = pydrj_allocator(),
     };
     PyObject* ret = DrjPyCtx_load((PyObject*)self, args, kwargs);
     Py_DECREF(self);
