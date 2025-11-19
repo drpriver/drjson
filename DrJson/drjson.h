@@ -522,6 +522,12 @@ DRJSON_API
 DrJsonValue
 drjson_object_get_item_atom(const DrJsonContext* ctx, DrJsonValue object, DrJsonAtom key);
 
+//
+// Escapes the characters in the key before atomizing.
+DRJSON_API
+int // 0 on success
+drjson_object_set_item_escape_key(DrJsonContext* ctx, DrJsonValue object, const char* restrict key, size_t keylen, DrJsonValue item);
+
 DRJSON_API
 int // 0 on success
 drjson_object_set_item_copy_key(DrJsonContext* ctx, DrJsonValue object, const char* key, size_t keylen, DrJsonValue item);

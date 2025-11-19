@@ -30,6 +30,10 @@ typedef long long ssize_t;
         #define DRJ_HAVE_SIMD 1
         #define DRJ_SIMD_WIDTH 16
         #include <arm_neon.h>
+    #elif defined(__wasm_simd128__)
+        #define DRJ_HAVE_SIMD 1
+        #define DRJ_SIMD_WIDTH 16
+        #include <wasm_simd128.h>
     #else
         #define DRJ_HAVE_SIMD 0
     #endif
@@ -1577,6 +1581,14 @@ drjson_object_set_item_atom(DrJsonContext* ctx, DrJsonValue object, DrJsonAtom a
     return drjson_object_set_item(ctx, object, atom, item);
 }
 
+DRJSON_API
+int // 0 on success
+drjson_object_set_item_escape_key(DrJsonContext* ctx, DrJsonValue object, const char* restrict key, size_t keylen, DrJsonValue item){
+    DrJsonAtom atom;
+    int err = drjson_escape_string(ctx, key, keylen, &atom);
+    if(err) return err;
+    return drjson_object_set_item(ctx, object, atom, item);
+}
 DRJSON_API
 int // 0 on success, 1 if key not found or error
 drjson_object_delete_item_atom(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom atom){
@@ -3141,7 +3153,7 @@ drjson_unescape_string(const char* restrict escaped, size_t length, char* restri
     size_t in_pos = 0;
     size_t out_pos = 0;
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(__wasm_simd128__)
     // SIMD path: scan for backslashes in 16-byte chunks
 
     #if DRJ_HAVE_SIMD
