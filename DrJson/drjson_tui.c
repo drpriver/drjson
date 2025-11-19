@@ -8498,7 +8498,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
             DrJsonValue state_obj = drjson_make_object(jctx);
 
             // Version
-            drjson_object_set_item_copy_key(jctx, state_obj, "version", 7, drjson_make_int(1));
+            drjson_object_set_item_no_copy_key(jctx, state_obj, "version", 7, drjson_make_int(1));
 
             // Command history
             DrJsonValue cmd_array = drjson_make_array(jctx);
