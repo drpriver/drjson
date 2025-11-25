@@ -11,7 +11,7 @@
 #include <fcntl.h>
 #endif
 
-// static inline void __attribute__((format(printf,1, 2))) LOG(const char* fmt, ...);
+static inline void __attribute__((format(printf,1, 2))) LOG(const char* fmt, ...);
 static
 void
 enable_raw(TermState* ts){
