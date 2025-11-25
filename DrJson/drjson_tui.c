@@ -501,7 +501,7 @@ mkdir_p(const char* path){
         if(*p == '/' || *p == '\\'){
             *p = '\0';
             #ifdef _WIN32
-            mkdir(tmp);
+            CreateDirectoryA(tmp, NULL);
             #else
             mkdir(tmp, 0755);
             #endif
@@ -509,7 +509,7 @@ mkdir_p(const char* path){
         }
     }
     #ifdef _WIN32
-    return mkdir(tmp);
+    return CreateDirectoryA(tmp, NULL) ? 0 : -1;
     #else
     return mkdir(tmp, 0755);
     #endif
@@ -7270,7 +7270,11 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
         .early_out.count = arrlen(early_args),
         .keyword.args = kw_args,
         .keyword.count = arrlen(kw_args),
+        #ifdef _WIN32
+        .styling.plain = (GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_CHAR),
+        #else
         .styling.plain = !isatty(fileno(stdout)),
+        #endif
     };
     int columns = get_terminal_size().columns;
     switch(check_for_early_out_args(&parser, &args)){
