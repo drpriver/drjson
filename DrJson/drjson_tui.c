@@ -2535,13 +2535,14 @@ static const Command commands[] = {
     {SV("edit"),    SV(":edit [--braceless] [--ndjson] <file>"), SV("  Open JSON at <file>"), cmd_open},
     {SV("e"),       SV(":e [--braceless] [--ndjson] <file>"), SV("  Open JSON at <file>"), cmd_open},
     {SV("reload"),  SV(":reload"), SV("  Reload file from disk"), cmd_reload},
-    {SV("save"),    SV(":save [--braceless|--no-braceless] [--ndjson|--no-ndjson] <file>"), SV("  Save JSON to <file>"), cmd_write},
-    {SV("write"),   SV(":write [--braceless|--no-braceless] [--ndjson|--no-ndjson] <file>"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("save"),    SV(":save [--braceless|--no-braceless] [--ndjson|--no-ndjson] [<file>]"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("write"),   SV(":write [--braceless|--no-braceless] [--ndjson|--no-ndjson] [<file>]"), SV("  Save JSON to <file>"), cmd_write},
+    {SV("w"),       SV(":w [--braceless|--no-braceless] [--ndjson|--no-ndjson] [<file>]"), SV("  Save JSON to <file>"), cmd_write},
     {SV("quit"),    SV(":quit [--quick]"), SV("  Quit"), cmd_quit},
     {SV("q"),       SV(":q [--quick]"), SV("  Quit"), cmd_quit},
     {SV("exit"),    SV(":exit [--quick]"), SV("  Quit"), cmd_quit},
-    {SV("x"),       SV(":x"), SV("  Write and quit"), cmd_wq},
-    {SV("wq"),      SV(":wq"), SV("  Write and quit"), cmd_wq},
+    {SV("x"),       SV(":x [--braceless|--no-braceless] [--ndjson|--no-ndjson] [<file>]"), SV("  Write and quit"), cmd_wq},
+    {SV("wq"),      SV(":wq [--braceless|--no-braceless] [--ndjson|--no-ndjson] [<file>]"), SV("  Write and quit"), cmd_wq},
     {SV("pwd"),     SV(":pwd"), SV("  Print working directory"), cmd_pwd},
     {SV("cd"),      SV(":cd <dir>"), SV("  Change directory"), cmd_cd},
     {SV("yank"),    SV(":yank"), SV("  Yank (copy) current value to clipboard"), cmd_yank},
@@ -2728,8 +2729,8 @@ cmd_write(JsonNav* nav, CmdArgs* args){
     }
 
     // Get required file argument
-    StringView filepath_sv = {0};
-    err = cmd_get_arg_string(args, SV("file"), &filepath_sv);
+    StringView filepath_sv = {strlen(nav->filename), nav->filename};
+    err = cmd_get_arg_string_optional(args, SV("file"), &filepath_sv);
     if(err){
         nav_set_messagef(nav, "Error: No filename provided");
         return CMD_ERROR;
