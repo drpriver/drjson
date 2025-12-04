@@ -629,7 +629,8 @@ TestFunction(TestPathBuilding){
     size_t len = nav_build_json_path(&nav, path_buf, sizeof path_buf);
 
     // Should produce something (even if just empty or root)
-    TestExpectTrue(len >= 0);
+    (void)len;
+    // TestExpectTrue(len >= 0);
 
     // Cleanup
     nav_free(&nav);
@@ -2297,7 +2298,7 @@ TestFunction(TestQueryCommand){
     int result = nav_execute_command(&nav, "query user", 10);
     if(result == CMD_OK){
         // Cursor should have moved
-        TestExpectTrue(nav.cursor_pos >= 0);
+        // TestExpectTrue(nav.cursor_pos >= 0);
     }
 
     // Query to array element
@@ -3378,12 +3379,12 @@ TestFunction(TestNavJumpToNthChild){
         nav_jump_to_nth_child(&nav, 2);
 
         // Cursor should have moved or stayed at 0
-        TestExpectTrue(nav.cursor_pos >= 0);
+        // TestExpectTrue(nav.cursor_pos >= 0);
 
         // Jump to 7th child (index 6)
         nav.cursor_pos = 0;
         nav_jump_to_nth_child(&nav, 6);
-        TestExpectTrue(nav.cursor_pos >= 0);
+        // TestExpectTrue(nav.cursor_pos >= 0);
     }
 
     // Cleanup

@@ -79,6 +79,12 @@ typedef long long ssize_t;
 #endif
 #endif
 
+#ifndef __builtin_debugtrap
+#if defined(__GNUC__) && !defined(__clang__)
+#define __builtin_debugtrap __builtin_trap
+#endif
+#endif
+
 static inline
 void
 strip_whitespace(const char*_Nonnull*_Nonnull ptext, size_t *pcount){
@@ -8321,11 +8327,13 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
                     // Try to get the key first
                     if(item->key.bits != 0){
                         DrJsonValue key_val = drjson_atom_to_value(item->key);
-                        (void)drjson_get_str_and_len(nav.jctx, key_val, &search_text, &search_len);
+                        int err = drjson_get_str_and_len(nav.jctx, key_val, &search_text, &search_len);
+                        (void)err;
                     }
                     // If no key, try to get the value if it's a string
                     else if(item->value.kind == DRJSON_STRING){
-                        (void)drjson_get_str_and_len(nav.jctx, item->value, &search_text, &search_len);
+                        int err = drjson_get_str_and_len(nav.jctx, item->value, &search_text, &search_len);
+                        (void)err;
                     }
                     // If value is a number, convert it to string for searching
                     else if(item->value.kind == DRJSON_INTEGER || item->value.kind == DRJSON_UINTEGER || item->value.kind == DRJSON_NUMBER){
@@ -8552,7 +8560,7 @@ main(int argc, const char*_Nonnull const*_Nonnull argv){
             }
 
             // Write to temp file then atomically rename
-            char temp_path[1024];
+            char temp_path[1028];
             snprintf(temp_path, sizeof temp_path, "%s.tmp", state_path);
             FILE* fp = fopen(temp_path, "wb");
             if(fp){

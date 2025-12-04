@@ -1625,7 +1625,7 @@ drjson_object_delete_item_atom(DrJsonContext* ctx, DrJsonValue o, DrJsonAtom ato
 
     // Step 1: Shift pairs array to remove the deleted pair
     // This preserves insertion order
-    if(found_pair_idx < object->count - 1)
+    if(found_pair_idx < object->count - 1u)
         memmove(&pairs[found_pair_idx], &pairs[found_pair_idx + 1], (object->count - found_pair_idx - 1) * sizeof * pairs);
     object->count--;
 
